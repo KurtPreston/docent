@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kurt/slakkr-ai/internal/recipes"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 )
 
@@ -25,6 +27,13 @@ func TestSetupValidateAndStartDayDryRun(t *testing.T) {
 	}
 	if err := app.Run(context.Background(), []string{"validate", "--userdata", userdataDir}); err != nil {
 		t.Fatalf("validate: %v", err)
+	}
+	ignoreContent, err := os.ReadFile(filepath.Join(userdataDir, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ignoreContent), ".env") {
+		t.Fatalf("userdata .gitignore should exclude .env, got %q", ignoreContent)
 	}
 	store := userdata.NewStore(userdataDir)
 	projects := userdata.ProjectsFile{Projects: []userdata.Project{{ID: "slakkr-ai", Name: "Slakkr AI"}}}
@@ -54,6 +63,65 @@ func TestSetupValidateAndStartDayDryRun(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "AI Plan") || !strings.Contains(string(content), "build-mvp") {
 		t.Fatalf("daybook did not contain plan:\n%s", content)
+	}
+}
+
+func TestPromptDirectiveWritesSecretsToUserdataEnv(t *testing.T) {
+	root := workspaceTempDir(t)
+	prompter := StdioPrompter{
+		In:  strings.NewReader("Inklingsmesh Gitea\nhttp://gitea.inklingsmesh/\nsecret-token\ninklingsmesh\n"),
+		Out: &bytes.Buffer{},
+	}
+	recipe := recipes.Recipe{
+		ID:        "gitea-repository-discovery",
+		Name:      "Gitea Repository Discovery",
+		Collector: "gitea",
+		RequiredConfig: []recipes.ConfigField{
+			{Name: "base_url", Required: true},
+			{Name: "token", Required: true, Secret: true},
+		},
+		RequiredTarget: []recipes.TargetField{
+			{Name: "owner", Required: true},
+		},
+	}
+	directive, err := promptDirective(prompter, recipe, root)
+	if err != nil {
+		t.Fatalf("prompt directive: %v", err)
+	}
+	if directive.Config["token"] != "" {
+		t.Fatalf("secret token should not be stored in directive config")
+	}
+	if directive.ID != "inklingsmesh-gitea" {
+		t.Fatalf("directive id = %q, want generated id", directive.ID)
+	}
+	if directive.CredentialRefs["token"] != "SLAKKR_INKLINGSMESH_GITEA_TOKEN" {
+		t.Fatalf("unexpected credential ref: %#v", directive.CredentialRefs)
+	}
+	envContent, err := os.ReadFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envContent), `SLAKKR_INKLINGSMESH_GITEA_TOKEN="secret-token"`) {
+		t.Fatalf("env did not contain token: %q", envContent)
+	}
+}
+
+func TestPromptDirectiveSkipsBlankRequiredTarget(t *testing.T) {
+	prompter := StdioPrompter{
+		In:  strings.NewReader("\n\n\n"),
+		Out: &bytes.Buffer{},
+	}
+	recipe := recipes.Recipe{
+		ID:        "github-pull-requests",
+		Name:      "GitHub Repository Pull Request Updates",
+		Collector: "github",
+		RequiredTarget: []recipes.TargetField{
+			{Name: "repo", Required: true},
+		},
+	}
+	_, err := promptDirective(prompter, recipe, t.TempDir())
+	if !errors.Is(err, errSkippedDirective) {
+		t.Fatalf("expected skipped directive error, got %v", err)
 	}
 }
 

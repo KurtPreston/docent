@@ -39,7 +39,9 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry.Register("manual", ManualCollector{Clock: clock})
 	registry.Register("local-git", LocalGitCollector{Clock: clock})
 	registry.Register("github", GitHubCollector{Clock: clock})
+	registry.Register("github-activity", PlaceholderCollector{Clock: clock, Source: "github-activity"})
 	registry.Register("github-enterprise", GitHubCollector{Clock: clock})
+	registry.Register("gitea", PlaceholderCollector{Clock: clock, Source: "gitea"})
 	registry.Register("jira", PlaceholderCollector{Clock: clock, Source: "jira"})
 	registry.Register("slack", PlaceholderCollector{Clock: clock, Source: "slack"})
 	return registry

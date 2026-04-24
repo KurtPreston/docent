@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,8 +105,12 @@ func (a *App) setup(ctx context.Context, args []string) error {
 			if !enable {
 				continue
 			}
-			directive, err := promptDirective(prompter, recipe)
+			directive, err := promptDirective(prompter, recipe, *userdataDir)
 			if err != nil {
+				if errors.Is(err, errSkippedDirective) {
+					fmt.Fprintf(a.Out, "Skipped recipe %s: %v\n", recipe.ID, err)
+					continue
+				}
 				return err
 			}
 			if err := addDirective(store, directive); err != nil {
@@ -118,41 +125,146 @@ func (a *App) setup(ctx context.Context, args []string) error {
 	return nil
 }
 
-func promptDirective(prompter Prompter, recipe recipes.Recipe) (userdata.Directive, error) {
-	id, err := prompter.Ask("Directive id", recipe.ID)
+var errSkippedDirective = errors.New("skipped directive")
+
+type skippedDirectiveError struct {
+	reason string
+}
+
+func (e skippedDirectiveError) Error() string {
+	return e.reason
+}
+
+func (e skippedDirectiveError) Is(target error) bool {
+	return target == errSkippedDirective
+}
+
+func promptDirective(prompter Prompter, recipe recipes.Recipe, userdataDir string) (userdata.Directive, error) {
+	name, err := prompter.Ask(namePrompt(recipe), recipe.Name)
 	if err != nil {
 		return userdata.Directive{}, err
 	}
-	name, err := prompter.Ask("Directive name", recipe.Name)
-	if err != nil {
-		return userdata.Directive{}, err
+	id := slugID(name)
+	if name == recipe.Name {
+		id = recipe.ID
 	}
 	config := map[string]string{}
+	credentialRefs := map[string]string{}
 	for _, field := range recipe.RequiredConfig {
 		if field.Secret {
+			envName := envNameForSecret(id, field.Name)
+			value, err := prompter.Ask(fieldPrompt("Secret", field.Name, field.Description)+"; saved to userdata/.env as "+envName, "")
+			if err != nil {
+				return userdata.Directive{}, err
+			}
+			if field.Required && value == "" {
+				return userdata.Directive{}, skippedDirectiveError{reason: "required secret " + field.Name + " was blank"}
+			}
+			if value != "" {
+				if err := upsertEnvValue(filepath.Join(userdataDir, ".env"), envName, value); err != nil {
+					return userdata.Directive{}, err
+				}
+			}
+			credentialRefs[field.Name] = envName
 			continue
 		}
-		value, err := prompter.Ask("Config "+field.Name, recipe.Defaults.Config[field.Name])
+		value, err := prompter.Ask(fieldPrompt("Config", field.Name, field.Description), recipe.Defaults.Config[field.Name])
 		if err != nil {
 			return userdata.Directive{}, err
+		}
+		if field.Required && value == "" {
+			return userdata.Directive{}, skippedDirectiveError{reason: "required config " + field.Name + " was blank"}
 		}
 		config[field.Name] = value
 	}
 	target := map[string]string{}
 	for _, field := range recipe.RequiredTarget {
-		value, err := prompter.Ask("Target "+field.Name, recipe.Defaults.Target[field.Name])
+		value, err := prompter.Ask(fieldPrompt("Target", field.Name, field.Description), recipe.Defaults.Target[field.Name])
 		if err != nil {
 			return userdata.Directive{}, err
+		}
+		if field.Required && value == "" {
+			return userdata.Directive{}, skippedDirectiveError{reason: "required target " + field.Name + " was blank"}
 		}
 		target[field.Name] = value
 	}
 	return recipe.Instantiate(recipes.InstantiateInput{
-		ID:      id,
-		Name:    name,
-		Config:  config,
-		Target:  target,
-		Enabled: true,
+		ID:             id,
+		Name:           name,
+		Config:         config,
+		Target:         target,
+		CredentialRefs: credentialRefs,
+		Enabled:        true,
 	})
+}
+
+func namePrompt(recipe recipes.Recipe) string {
+	switch recipe.Collector {
+	case "gitea":
+		return "Gitea server name"
+	case "github-activity":
+		return "GitHub account name"
+	default:
+		return "Name for this status check"
+	}
+}
+
+func fieldPrompt(kind, name, description string) string {
+	if description == "" {
+		return kind + " " + name
+	}
+	return fmt.Sprintf("%s %s (%s)", kind, name, description)
+}
+
+var slugPattern = regexp.MustCompile(`[^a-z0-9]+`)
+var envNamePattern = regexp.MustCompile(`[^A-Z0-9]+`)
+
+func slugID(value string) string {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	slug = slugPattern.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	if slug == "" {
+		return "directive"
+	}
+	if slug[0] < 'a' || slug[0] > 'z' {
+		slug = "directive-" + slug
+	}
+	return slug
+}
+
+func envNameForSecret(directiveID, fieldName string) string {
+	raw := strings.ToUpper(directiveID + "_" + fieldName)
+	raw = envNamePattern.ReplaceAllString(raw, "_")
+	raw = strings.Trim(raw, "_")
+	if raw == "" {
+		raw = "SECRET"
+	}
+	return "SLAKKR_" + raw
+}
+
+func upsertEnvValue(path, key, value string) error {
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	line := key + "=" + strconv.Quote(value)
+	var lines []string
+	replaced := false
+	for _, existing := range strings.Split(strings.TrimRight(string(content), "\n"), "\n") {
+		if existing == "" {
+			continue
+		}
+		if strings.HasPrefix(existing, key+"=") {
+			lines = append(lines, line)
+			replaced = true
+			continue
+		}
+		lines = append(lines, existing)
+	}
+	if !replaced {
+		lines = append(lines, line)
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 }
 
 func addDirective(store userdata.Store, directive userdata.Directive) error {

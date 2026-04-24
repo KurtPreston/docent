@@ -26,6 +26,14 @@ The tool writes user-owned data under `userdata/`. That directory is gitignored 
 - `userdata/daybook/YYYY-MM-DD.md` stores daily goals, status snapshots, plans, and reflections.
 - `userdata/status-cache/` is reserved for normalized or raw status snapshots.
 
+A recipe is a reusable template shipped with this repo or a fork. A directive is your local configured instance of a recipe. During setup, the directive id is just the stable key written to `userdata/directives.yaml`; accepting the suggested default is usually right for a first setup.
+
+Targets are the specific thing a directive monitors. For example, the local Git recipe's `path` target is a filesystem path to one checked-out repository, while a Gitea recipe would use server configuration such as a `base_url` plus a target owner or organization.
+
+Secret recipe fields are prompted as secret values during setup. They are written to `userdata/.env` and referenced from directives through `credential_refs`, so tokens are not stored directly in `userdata/directives.yaml`. `userdata/.gitignore` excludes `.env` before setup commits user data.
+
+Setup asks for a human-readable name, then generates the stable directive id. If a recipe asks for a required field you do not want to provide yet, leave it blank and setup will skip that recipe while continuing with the rest.
+
 ## Commands
 
 - `setup` initializes `userdata`, discovers recipes, and can interactively instantiate directives.

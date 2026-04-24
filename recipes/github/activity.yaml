@@ -1,0 +1,21 @@
+id: github-activity
+name: GitHub Activity
+description: Template for checking activity for a GitHub account, such as assigned issues, review requests, and authored PRs.
+collector: github-activity
+required_config:
+  - name: base_url
+    description: GitHub base URL. Use https://github.com for public GitHub.
+    required: false
+  - name: token
+    description: GitHub personal access token.
+    required: true
+    secret: true
+defaults:
+  schedule: every-status-check
+  config:
+    base_url: https://github.com
+  summary_prompt: Summarize assigned issues, review requests, authored PRs, mentions, and likely next actions.
+required_target:
+  - name: username
+    description: GitHub username whose activity should be checked.
+    required: true

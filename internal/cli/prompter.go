@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"strings"
@@ -47,16 +46,39 @@ func (p StdioPrompter) Ask(prompt, defaultValue string) (string, error) {
 	} else {
 		fmt.Fprintf(out, "%s: ", prompt)
 	}
-	scanner := bufio.NewScanner(in)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
+	line, err := readLine(in)
+	if err != nil {
+		if err != io.EOF {
 			return "", err
+		}
+		if line != "" {
+			value := strings.TrimSpace(line)
+			if value != "" {
+				return value, nil
+			}
 		}
 		return defaultValue, nil
 	}
-	value := strings.TrimSpace(scanner.Text())
+	value := strings.TrimSpace(line)
 	if value == "" {
 		return defaultValue, nil
 	}
 	return value, nil
+}
+
+func readLine(in io.Reader) (string, error) {
+	var buf strings.Builder
+	var one [1]byte
+	for {
+		n, err := in.Read(one[:])
+		if n > 0 {
+			if one[0] == '\n' {
+				return buf.String(), nil
+			}
+			buf.WriteByte(one[0])
+		}
+		if err != nil {
+			return buf.String(), err
+		}
+	}
 }

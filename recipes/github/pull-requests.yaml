@@ -1,6 +1,6 @@
 id: github-pull-requests
-name: GitHub Pull Request Updates
-description: Use the GitHub CLI to list open pull requests for a repository.
+name: GitHub Repository Pull Request Updates
+description: Use the GitHub CLI to list open pull requests for one specific repository.
 collector: github
 required_config:
   - name: base_url
@@ -10,7 +10,7 @@ defaults:
   schedule: every-status-check
   config:
     base_url: https://github.com
-  summary_prompt: Summarize open PR state, review decisions, draft status, and likely next actions.
+  summary_prompt: Summarize open PR state, review decisions, draft status, and likely next actions for this repository.
 required_target:
   - name: repo
     description: Repository in owner/name form.
