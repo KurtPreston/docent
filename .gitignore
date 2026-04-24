@@ -1,0 +1,5 @@
+userdata/
+.slakkr-ai/
+.cache/
+dist/
+*.test

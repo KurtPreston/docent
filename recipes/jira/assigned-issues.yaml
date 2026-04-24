@@ -1,0 +1,18 @@
+id: jira-assigned-issues
+name: JIRA Assigned Issues
+description: Template for checking assigned or recently updated JIRA issues.
+collector: jira
+required_config:
+  - name: base_url
+    description: JIRA base URL.
+    required: true
+  - name: query
+    description: JQL query for relevant issues.
+    required: true
+defaults:
+  schedule: every-status-check
+  summary_prompt: Summarize assigned tickets, blockers, priority changes, and tickets needing follow-up.
+examples:
+  - name: Assigned to me
+    config:
+      query: assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC

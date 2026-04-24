@@ -1,0 +1,15 @@
+id: local-git-repository-status
+name: Local Git Repository Status
+description: Check a local Git working tree for branch, latest commit, remote, and uncommitted changes.
+collector: local-git
+required_target:
+  - name: path
+    description: Path to the local Git repository.
+    required: true
+defaults:
+  schedule: every-status-check
+  summary_prompt: Summarize branch, latest commit, remote divergence, and whether local changes need attention.
+examples:
+  - name: Current repository
+    target:
+      path: .

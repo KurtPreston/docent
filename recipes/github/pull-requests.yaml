@@ -1,0 +1,21 @@
+id: github-pull-requests
+name: GitHub Pull Request Updates
+description: Use the GitHub CLI to list open pull requests for a repository.
+collector: github
+required_config:
+  - name: base_url
+    description: GitHub base URL. Use https://github.com for public GitHub.
+    required: false
+defaults:
+  schedule: every-status-check
+  config:
+    base_url: https://github.com
+  summary_prompt: Summarize open PR state, review decisions, draft status, and likely next actions.
+required_target:
+  - name: repo
+    description: Repository in owner/name form.
+    required: true
+examples:
+  - name: slakkr-ai
+    target:
+      repo: owner/slakkr-ai

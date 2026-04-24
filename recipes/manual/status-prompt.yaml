@@ -1,0 +1,11 @@
+id: manual-status-prompt
+name: Manual Status Prompt
+description: Ask the user for status when no API or local collector exists yet.
+collector: manual
+required_target:
+  - name: prompt
+    description: Question to ask or include in the daybook.
+    required: true
+defaults:
+  schedule: every-status-check
+  summary_prompt: Include the manual prompt in the daily status review.
