@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/ai"
@@ -79,5 +80,6 @@ func BuildPlanningInput(ctx context.Context, d Deps, userdataDir string, date ti
 		Statuses: statuses,
 		Daybook:  entry.Content,
 		Mode:     mode,
+		DebugDir: filepath.Join(userdataDir, "status-cache", "ai-debug"),
 	}, entry, nil
 }

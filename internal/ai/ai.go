@@ -25,6 +25,7 @@ type PlanningInput struct {
 	Statuses []collectors.StatusItem `json:"statuses"`
 	Daybook  string                  `json:"daybook,omitempty"`
 	Mode     string                  `json:"mode"`
+	DebugDir string                  `json:"-"`
 }
 
 type PlanningOutput struct {
@@ -197,14 +198,100 @@ func ParsePlanningOutput(raw []byte) (PlanningOutput, error) {
 	if start < 0 || end < start {
 		return PlanningOutput{}, fmt.Errorf("AI output did not contain a JSON object")
 	}
-	var output PlanningOutput
-	if err := json.Unmarshal(raw[start:end+1], &output); err != nil {
+	var wire struct {
+		Summary              string                `json:"summary"`
+		PrimaryFocus         json.RawMessage       `json:"primary_focus,omitempty"`
+		SecondaryFocus       json.RawMessage       `json:"secondary_focus,omitempty"`
+		FollowUps            []string              `json:"follow_ups,omitempty"`
+		Deferrals            []string              `json:"deferrals,omitempty"`
+		NonGoals             []string              `json:"non_goals,omitempty"`
+		FocusBlocks          []FocusBlock          `json:"focus_blocks,omitempty"`
+		DelegationCandidates []DelegationCandidate `json:"delegation_candidates,omitempty"`
+		Questions            []string              `json:"questions,omitempty"`
+		ProposedTaskChanges  []ProposedTaskChange  `json:"proposed_task_changes,omitempty"`
+	}
+	if err := json.Unmarshal(raw[start:end+1], &wire); err != nil {
 		return PlanningOutput{}, err
+	}
+	primary, err := parseOptionalFocusBlock(wire.PrimaryFocus)
+	if err != nil {
+		return PlanningOutput{}, fmt.Errorf("parse primary_focus: %w", err)
+	}
+	secondary, err := parseFocusBlockList(wire.SecondaryFocus)
+	if err != nil {
+		return PlanningOutput{}, fmt.Errorf("parse secondary_focus: %w", err)
+	}
+	output := PlanningOutput{
+		Summary:              wire.Summary,
+		PrimaryFocus:         primary,
+		SecondaryFocus:       secondary,
+		FollowUps:            wire.FollowUps,
+		Deferrals:            wire.Deferrals,
+		NonGoals:             wire.NonGoals,
+		FocusBlocks:          wire.FocusBlocks,
+		DelegationCandidates: wire.DelegationCandidates,
+		Questions:            wire.Questions,
+		ProposedTaskChanges:  wire.ProposedTaskChanges,
 	}
 	if output.Summary == "" {
 		return PlanningOutput{}, fmt.Errorf("AI output summary is required")
 	}
 	return output, nil
+}
+
+func parseOptionalFocusBlock(raw json.RawMessage) (*FocusBlock, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var title string
+		if err := json.Unmarshal(trimmed, &title); err != nil {
+			return nil, err
+		}
+		title = strings.TrimSpace(title)
+		if title == "" {
+			return nil, nil
+		}
+		return &FocusBlock{Title: title}, nil
+	}
+	var block FocusBlock
+	if err := json.Unmarshal(trimmed, &block); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(block.Title) == "" {
+		return nil, nil
+	}
+	return &block, nil
+}
+
+func parseFocusBlockList(raw json.RawMessage) ([]FocusBlock, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var asArray []json.RawMessage
+	if err := json.Unmarshal(trimmed, &asArray); err == nil {
+		out := make([]FocusBlock, 0, len(asArray))
+		for _, item := range asArray {
+			block, err := parseOptionalFocusBlock(item)
+			if err != nil {
+				return nil, err
+			}
+			if block != nil {
+				out = append(out, *block)
+			}
+		}
+		return out, nil
+	}
+	block, err := parseOptionalFocusBlock(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+	return []FocusBlock{*block}, nil
 }
 
 func summarize(input PlanningInput) string {

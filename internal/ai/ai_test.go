@@ -46,3 +46,29 @@ func TestParsePlanningOutputExtractsJSONObject(t *testing.T) {
 		t.Fatalf("unexpected output: %#v", output)
 	}
 }
+
+func TestParsePlanningOutputAcceptsStringPrimaryFocus(t *testing.T) {
+	output, err := ParsePlanningOutput([]byte("{\"summary\":\"ok\",\"primary_focus\":\"Ship collector fixes\"}"))
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if output.PrimaryFocus == nil || output.PrimaryFocus.Title != "Ship collector fixes" {
+		t.Fatalf("unexpected primary focus: %#v", output.PrimaryFocus)
+	}
+}
+
+func TestParsePlanningOutputAcceptsStringSecondaryFocusList(t *testing.T) {
+	output, err := ParsePlanningOutput([]byte("{\"summary\":\"ok\",\"secondary_focus\":[\"Cleanup tasks\",{\"title\":\"Review PRs\",\"reason\":\"requested\"}]}"))
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if len(output.SecondaryFocus) != 2 {
+		t.Fatalf("unexpected secondary focus count: %#v", output.SecondaryFocus)
+	}
+	if output.SecondaryFocus[0].Title != "Cleanup tasks" {
+		t.Fatalf("unexpected first secondary focus: %#v", output.SecondaryFocus[0])
+	}
+	if output.SecondaryFocus[1].Title != "Review PRs" {
+		t.Fatalf("unexpected second secondary focus: %#v", output.SecondaryFocus[1])
+	}
+}
