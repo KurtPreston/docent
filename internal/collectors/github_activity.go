@@ -39,12 +39,15 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		env = append(env, "GITHUB_TOKEN="+token)
 	}
 	var items []StatusItem
-	appendSearch := func(kind, q string) error {
-		args := []string{"search", kind, "--limit", "12", "--json", "title,url", "--"}
+	// Use gh's qualifier flags instead of a single search string. Combining
+	// review-requested:user with is:open in the free-text query makes GitHub
+	// quote the qualifier incorrectly and the search fails.
+	appendSearch := func(kind, q string, qualifiers ...string) error {
+		args := []string{"search", kind, "--limit", "12", "--json", "title,url"}
+		args = append(args, qualifiers...)
 		if host != "" && host != "github.com" {
 			args = append([]string{"--hostname", host}, args...)
 		}
-		args = append(args, q)
 		cmd := exec.CommandContext(ctx, "gh", args...)
 		cmd.Env = env
 		out, err := cmd.Output()
@@ -78,13 +81,13 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		}
 		return nil
 	}
-	if err := appendSearch("prs", fmt.Sprintf("review-requested:%s is:open", user)); err != nil {
+	if err := appendSearch("prs", fmt.Sprintf("review-requested:%s is:open", user), "--review-requested", user, "--state", "open"); err != nil {
 		return nil, err
 	}
-	if err := appendSearch("prs", fmt.Sprintf("author:%s is:pr is:open", user)); err != nil {
+	if err := appendSearch("prs", fmt.Sprintf("author:%s is:pr is:open", user), "--author", user, "--state", "open"); err != nil {
 		return nil, err
 	}
-	if err := appendSearch("issues", fmt.Sprintf("assignee:%s is:issue is:open", user)); err != nil {
+	if err := appendSearch("issues", fmt.Sprintf("assignee:%s is:issue is:open", user), "--assignee", user, "--state", "open"); err != nil {
 		return nil, err
 	}
 	if len(items) == 0 {
