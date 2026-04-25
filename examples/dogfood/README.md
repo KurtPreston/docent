@@ -6,4 +6,4 @@ Paths assume the slakkr-ai repo lives at `/Users/kurt/Code/slakkr-ai`; adjust `p
 
 For Gitea, set `SLAKKR_SLAKKR_GITEA_TOKEN` (or the env name from your directive) in `userdata/.env`.
 
-For Ollama planning, set `ai.provider: ollama` in `userdata/config.yaml` (see main README after you merge config).
+Optional: copy `config.yaml` from this folder to merge Ollama settings into `userdata/config.yaml`.
