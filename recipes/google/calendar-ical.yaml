@@ -1,0 +1,12 @@
+id: google-calendar-ical
+name: Google Calendar (iCal feed)
+description: Fetch upcoming events from a secret iCal URL (Google Calendar export).
+collector: google-calendar
+required_config:
+  - name: ical_url
+    description: iCal feed URL from Google Calendar settings (Integrate calendar).
+    required: true
+    secret: true
+defaults:
+  schedule: every-status-check
+  summary_prompt: Summarize upcoming calendar events that affect focus time today.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,6 +80,23 @@ func (c LocalGitCollector) collectOne(ctx context.Context, directive userdata.Di
 	}
 	recent, _ := gitOutput(ctx, abs, "log", "-1", "--pretty=format:%h %s")
 	remote, _ := gitOutput(ctx, abs, "remote", "get-url", "origin")
+	upstream, upstreamErr := gitOutput(ctx, abs, "rev-parse", "--abbrev-ref", "@{u}")
+	upstream = strings.TrimSpace(upstream)
+	ahead, behind := "", ""
+	if upstreamErr == nil && upstream != "" && !strings.HasPrefix(strings.ToLower(upstream), "fatal") {
+		counts, err := gitOutput(ctx, abs, "rev-list", "--left-right", "--count", "@{u}...HEAD")
+		if err == nil {
+			parts := strings.Fields(strings.TrimSpace(counts))
+			if len(parts) == 2 {
+				behind = parts[0]
+				ahead = parts[1]
+			}
+		}
+	}
+	stashN := "0"
+	if sl, err := gitOutput(ctx, abs, "stash", "list"); err == nil && strings.TrimSpace(sl) != "" {
+		stashN = strconv.Itoa(len(strings.Split(strings.TrimSpace(sl), "\n")))
+	}
 	summary := "Working tree clean"
 	severity := "info"
 	if strings.TrimSpace(status) != "" {
@@ -86,11 +104,27 @@ func (c LocalGitCollector) collectOne(ctx context.Context, directive userdata.Di
 		summary = fmt.Sprintf("Working tree has %d changed file(s)", len(lines))
 		severity = "warning"
 	}
+	if ahead != "" && behind != "" && (ahead != "0" || behind != "0") {
+		summary += fmt.Sprintf("; ahead %s, behind %s vs upstream", ahead, behind)
+		if severity == "info" {
+			severity = "warning"
+		}
+	}
+	if stashN != "0" {
+		summary += fmt.Sprintf("; %s stash(es)", stashN)
+		if severity == "info" {
+			severity = "warning"
+		}
+	}
 	fields := map[string]string{
 		"path":          abs,
 		"branch":        strings.TrimSpace(branch),
 		"latest_commit": strings.TrimSpace(recent),
 		"remote":        strings.TrimSpace(remote),
+		"upstream":      upstream,
+		"ahead":         ahead,
+		"behind":        behind,
+		"stash_count":   stashN,
 	}
 	return StatusItem{
 		DirectiveID: directive.ID,
