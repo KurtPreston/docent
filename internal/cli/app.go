@@ -16,12 +16,13 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/kurt/slakkr-ai/internal/ai"
-	"github.com/kurt/slakkr-ai/internal/attention"
 	"github.com/kurt/slakkr-ai/internal/collectors"
 	"github.com/kurt/slakkr-ai/internal/daybook"
-	"github.com/kurt/slakkr-ai/internal/statuscache"
 	"github.com/kurt/slakkr-ai/internal/recipes"
 	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/internal/web"
+	"github.com/kurt/slakkr-ai/internal/workflow"
+	"gopkg.in/yaml.v3"
 )
 
 type App struct {
@@ -70,13 +71,19 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.validate(args[1:])
 	case "list-recipes":
 		return a.listRecipes(args[1:])
+	case "serve":
+		return a.serve(ctx, args[1:])
+	case "delegation":
+		return a.delegation(ctx, args[1:])
+	case "plan":
+		return a.planCmd(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
 func (a *App) usage() error {
-	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|validate|list-recipes> [flags]")
+	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|validate|list-recipes|serve|delegation|plan> [flags]")
 	return nil
 }
 
@@ -852,10 +859,17 @@ func (a *App) startDay(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := a.AI.ProposeDayPlan(ctx, input)
+	store := userdata.NewStore(*userdataDir)
+	cfg, err := store.LoadConfig()
 	if err != nil {
 		return err
 	}
+	provider := ai.SelectProvider(cfg.AI, a.AI)
+	output, err := provider.ProposeDayPlan(ctx, input)
+	if err != nil {
+		return err
+	}
+	ai.NormalizePlanningOutput(&output)
 	if err := daybook.AppendStatus(entry, input.Statuses); err != nil {
 		return err
 	}
@@ -864,6 +878,10 @@ func (a *App) startDay(ctx context.Context, args []string) error {
 		return err
 	}
 	if err := daybook.AppendPlan(entry, output); err != nil {
+		return err
+	}
+	planFile := workflow.DailyPlanFromOutput(input.Date, output, a.Now())
+	if err := store.SaveDailyPlan(planFile); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.Out, "Updated %s with %d status item(s).\n", entry.Path, len(input.Statuses))
@@ -901,7 +919,13 @@ func (a *App) endDay(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := a.AI.ReflectEndOfDay(ctx, input)
+	store := userdata.NewStore(*userdataDir)
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	provider := ai.SelectProvider(cfg.AI, a.AI)
+	output, err := provider.ReflectEndOfDay(ctx, input)
 	if err != nil {
 		return err
 	}
@@ -915,7 +939,6 @@ func (a *App) endDay(ctx context.Context, args []string) error {
 	if err := daybook.AppendReflection(entry, output); err != nil {
 		return err
 	}
-	store := userdata.NewStore(*userdataDir)
 	if err := store.CommitAll(ctx, "Update slakkr daybook for "+input.Date.Format("2006-01-02")); err != nil {
 		fmt.Fprintf(a.Err, "warning: could not commit userdata: %v\n", err)
 	}
@@ -928,55 +951,156 @@ func (a *App) planningInput(ctx context.Context, userdataDir, dateString, mode s
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err
 	}
-	store := userdata.NewStore(userdataDir)
-	projects, err := store.LoadProjects()
-	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
-	}
-	tasks, err := store.LoadTasks(projects)
-	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
-	}
-	directives, err := store.LoadDirectives(projects)
-	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
-	}
-	cfg, err := store.LoadConfig()
-	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
-	}
-	hostID, err := userdata.CurrentHostID()
-	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
-	}
-	collectOpts := &collectors.CollectOpts{
-		HostID:         hostID,
-		UserdataDir:    userdataDir,
-		Projects:       projects,
-		Config:         cfg,
+	return workflow.BuildPlanningInput(ctx, workflow.Deps{
+		Registry:       a.Registry,
+		Now:            a.Now,
 		ExpandRepoPath: expandRepoPath,
+	}, userdataDir, date, mode)
+}
+
+func (a *App) serve(ctx context.Context, args []string) error {
+	_ = ctx
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	addr := fs.String("addr", "127.0.0.1:8765", "listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-	statuses, err := a.Registry.Collect(ctx, directives.Directives, collectOpts)
+	srv := web.Server{
+		UserdataDir: *userdataDir,
+		Deps: workflow.Deps{
+			Registry:       a.Registry,
+			Now:            a.Now,
+			ExpandRepoPath: expandRepoPath,
+		},
+	}
+	fmt.Fprintf(a.Out, "Listening on http://%s (userdata=%s)\n", *addr, *userdataDir)
+	return srv.ListenAndServe(*addr)
+}
+
+func (a *App) delegation(ctx context.Context, args []string) error {
+	_ = ctx
+	if len(args) < 1 {
+		return fmt.Errorf("usage: delegation <list|add> [flags]")
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("delegation_list", flag.ContinueOnError)
+		fs.SetOutput(a.Err)
+		userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		store := userdata.NewStore(*userdataDir)
+		projects, err := store.LoadProjects()
+		if err != nil {
+			return err
+		}
+		tasks, err := store.LoadTasks(projects)
+		if err != nil {
+			return err
+		}
+		del, err := store.LoadDelegations(tasks)
+		if err != nil {
+			return err
+		}
+		for _, e := range del.Delegations {
+			fmt.Fprintf(a.Out, "%s\t%s\t%s\t%s\n", e.ID, e.State, e.TaskID, e.Title)
+		}
+		return nil
+	case "add":
+		fs := flag.NewFlagSet("delegation_add", flag.ContinueOnError)
+		fs.SetOutput(a.Err)
+		userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+		id := fs.String("id", "", "delegation id (generated if empty)")
+		title := fs.String("title", "", "title")
+		state := fs.String("state", string(userdata.AgentWorkCandidate), "state")
+		taskID := fs.String("task-id", "", "optional task id")
+		prompt := fs.String("prompt", "", "prompt for the agent")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *title == "" {
+			return fmt.Errorf("--title is required")
+		}
+		st := userdata.AgentWorkState(*state)
+		if !validAgentDelegationState(st) {
+			return fmt.Errorf("invalid --state %q", *state)
+		}
+		genID := *id
+		if genID == "" {
+			genID = fmt.Sprintf("ag-%d", a.Now().Unix())
+		}
+		store := userdata.NewStore(*userdataDir)
+		projects, err := store.LoadProjects()
+		if err != nil {
+			return err
+		}
+		tasks, err := store.LoadTasks(projects)
+		if err != nil {
+			return err
+		}
+		entry := userdata.AgentWorkEntry{
+			ID:        genID,
+			TaskID:    *taskID,
+			State:     st,
+			Title:     *title,
+			Prompt:    *prompt,
+			CreatedAt: userdata.YAMLDateTime{Time: a.Now().UTC()},
+		}
+		del, err := store.LoadDelegations(tasks)
+		if err != nil {
+			return err
+		}
+		del.Delegations = append(del.Delegations, entry)
+		return store.SaveDelegations(tasks, del)
+	default:
+		return fmt.Errorf("unknown delegation subcommand %q", args[0])
+	}
+}
+
+func validAgentDelegationState(s userdata.AgentWorkState) bool {
+	switch s {
+	case userdata.AgentWorkCandidate, userdata.AgentWorkReady, userdata.AgentWorkActive,
+		userdata.AgentWorkNeedsReview, userdata.AgentWorkAccepted, userdata.AgentWorkRejected, userdata.AgentWorkSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) planCmd(ctx context.Context, args []string) error {
+	_ = ctx
+	if len(args) < 1 || args[0] != "show" {
+		fmt.Fprintln(a.Err, "usage: plan show [--userdata dir] [--date YYYY-MM-DD]")
+		return nil
+	}
+	fs := flag.NewFlagSet("plan_show", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	dateStr := fs.String("date", a.Now().Format("2006-01-02"), "plan date")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	date, err := time.Parse("2006-01-02", *dateStr)
 	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
+		return err
 	}
-	statuses, err = statuscache.Annotate(userdataDir, statuses, a.Now())
+	store := userdata.NewStore(*userdataDir)
+	plan, err := store.LoadDailyPlan(date)
 	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
+		return err
 	}
-	attention.Classify(statuses)
-	entry, err := daybook.LoadOrCreate(userdataDir, date)
+	if plan.Date == "" {
+		return fmt.Errorf("no plan file for %s (run start_day)", *dateStr)
+	}
+	raw, err := yaml.Marshal(plan)
 	if err != nil {
-		return ai.PlanningInput{}, daybook.Entry{}, err
+		return err
 	}
-	return ai.PlanningInput{
-		Date:     date,
-		Projects: projects.Projects,
-		Tasks:    tasks.Tasks,
-		Statuses: statuses,
-		Daybook:  entry.Content,
-		Mode:     mode,
-	}, entry, nil
+	fmt.Fprint(a.Out, string(raw))
+	return nil
 }
 
 func (a *App) validate(args []string) error {

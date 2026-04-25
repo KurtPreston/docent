@@ -67,7 +67,51 @@ func AppendPlan(entry Entry, output ai.PlanningOutput) error {
 	buf.WriteString(strings.TrimRight(entry.Content, "\n"))
 	buf.WriteString("\n\n## AI Plan\n\n")
 	buf.WriteString(output.Summary)
-	buf.WriteString("\n\n### Focus Blocks\n\n")
+	if output.PrimaryFocus != nil {
+		buf.WriteString("\n\n### Primary focus\n\n")
+		label := output.PrimaryFocus.Title
+		if output.PrimaryFocus.TaskID != "" {
+			label = "`" + output.PrimaryFocus.TaskID + "` " + label
+		}
+		buf.WriteString("- " + label)
+		if output.PrimaryFocus.Reason != "" {
+			buf.WriteString(": " + output.PrimaryFocus.Reason)
+		}
+		buf.WriteByte('\n')
+	}
+	if len(output.SecondaryFocus) > 0 {
+		buf.WriteString("\n### Secondary focus\n\n")
+		for _, block := range output.SecondaryFocus {
+			label := block.Title
+			if block.TaskID != "" {
+				label = "`" + block.TaskID + "` " + label
+			}
+			buf.WriteString("- " + label)
+			if block.Reason != "" {
+				buf.WriteString(": " + block.Reason)
+			}
+			buf.WriteByte('\n')
+		}
+	}
+	if len(output.FollowUps) > 0 {
+		buf.WriteString("\n### Follow-ups\n\n")
+		for _, line := range output.FollowUps {
+			buf.WriteString("- " + line + "\n")
+		}
+	}
+	if len(output.Deferrals) > 0 {
+		buf.WriteString("\n### Deferrals\n\n")
+		for _, line := range output.Deferrals {
+			buf.WriteString("- " + line + "\n")
+		}
+	}
+	if len(output.NonGoals) > 0 {
+		buf.WriteString("\n### Not today\n\n")
+		for _, line := range output.NonGoals {
+			buf.WriteString("- " + line + "\n")
+		}
+	}
+	buf.WriteString("\n### Focus Blocks\n\n")
 	if len(output.FocusBlocks) == 0 {
 		buf.WriteString("- No focus blocks proposed.\n")
 	}
