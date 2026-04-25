@@ -10,21 +10,25 @@ import (
 )
 
 type StatusItem struct {
-	DirectiveID string            `json:"directive_id"`
-	ProjectID   string            `json:"project_id,omitempty"`
-	Source      string            `json:"source"`
-	Kind        string            `json:"kind"`
-	Title       string            `json:"title"`
-	Summary     string            `json:"summary"`
-	URL         string            `json:"url,omitempty"`
-	Severity    string            `json:"severity,omitempty"`
-	ObservedAt  time.Time         `json:"observed_at"`
-	Fields      map[string]string `json:"fields,omitempty"`
+	DirectiveID    string            `json:"directive_id"`
+	ProjectID      string            `json:"project_id,omitempty"`
+	Source         string            `json:"source"`
+	Kind           string            `json:"kind"`
+	Title          string            `json:"title"`
+	Summary        string            `json:"summary"`
+	URL            string            `json:"url,omitempty"`
+	Severity       string            `json:"severity,omitempty"`
+	ObservedAt     time.Time         `json:"observed_at"`
+	Fields         map[string]string `json:"fields,omitempty"`
+	StableID       string            `json:"stable_id,omitempty"`
+	AttentionClass string            `json:"attention_class,omitempty"`
+	ChangeState    string            `json:"change_state,omitempty"`
 }
 
 // CollectOpts carries host-scoped resolution data for collectors that need it (for example local-git).
 type CollectOpts struct {
 	HostID         string
+	UserdataDir    string
 	Projects       userdata.ProjectsFile
 	Config         userdata.ConfigFile
 	ExpandRepoPath func(string) string

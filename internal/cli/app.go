@@ -16,8 +16,10 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/kurt/slakkr-ai/internal/ai"
+	"github.com/kurt/slakkr-ai/internal/attention"
 	"github.com/kurt/slakkr-ai/internal/collectors"
 	"github.com/kurt/slakkr-ai/internal/daybook"
+	"github.com/kurt/slakkr-ai/internal/statuscache"
 	"github.com/kurt/slakkr-ai/internal/recipes"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 )
@@ -949,6 +951,7 @@ func (a *App) planningInput(ctx context.Context, userdataDir, dateString, mode s
 	}
 	collectOpts := &collectors.CollectOpts{
 		HostID:         hostID,
+		UserdataDir:    userdataDir,
 		Projects:       projects,
 		Config:         cfg,
 		ExpandRepoPath: expandRepoPath,
@@ -957,6 +960,11 @@ func (a *App) planningInput(ctx context.Context, userdataDir, dateString, mode s
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err
 	}
+	statuses, err = statuscache.Annotate(userdataDir, statuses, a.Now())
+	if err != nil {
+		return ai.PlanningInput{}, daybook.Entry{}, err
+	}
+	attention.Classify(statuses)
 	entry, err := daybook.LoadOrCreate(userdataDir, date)
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err

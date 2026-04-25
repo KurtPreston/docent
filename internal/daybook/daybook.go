@@ -48,7 +48,11 @@ func AppendStatus(entry Entry, statuses []collectors.StatusItem) error {
 		buf.WriteString("- No status updates were collected.\n")
 	} else {
 		for _, status := range statuses {
-			buf.WriteString(fmt.Sprintf("- `%s` %s: %s", status.Source, status.Title, status.Summary))
+			var tag string
+			if status.AttentionClass != "" || status.ChangeState != "" {
+				tag = fmt.Sprintf("[%s/%s] ", status.AttentionClass, status.ChangeState)
+			}
+			buf.WriteString(fmt.Sprintf("- `%s` %s%s: %s", status.Source, tag, status.Title, status.Summary))
 			if status.URL != "" {
 				buf.WriteString(" (" + status.URL + ")")
 			}
