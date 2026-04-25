@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/recipes"
-	"github.com/kurt/slakkr-ai/internal/userdata"
 )
 
 func TestSetupValidateAndStartDayDryRun(t *testing.T) {
@@ -35,24 +34,11 @@ func TestSetupValidateAndStartDayDryRun(t *testing.T) {
 	if !strings.Contains(string(ignoreContent), ".env") {
 		t.Fatalf("userdata .gitignore should exclude .env, got %q", ignoreContent)
 	}
-	store := userdata.NewStore(userdataDir)
-	projects := userdata.ProjectsFile{Projects: []userdata.Project{{ID: "slakkr-ai", Name: "Slakkr AI"}}}
-	if err := store.SaveProjects(projects); err != nil {
-		t.Fatal(err)
+	if err := app.Run(context.Background(), []string{"add_project", "--userdata", userdataDir, "--name", "Slakkr AI", "--description", "Personal project ops"}); err != nil {
+		t.Fatalf("add_project: %v", err)
 	}
-	if err := store.SaveTasks(projects, userdata.TasksFile{Tasks: []userdata.Task{{
-		ID:        "build-mvp",
-		ProjectID: "slakkr-ai",
-		Name:      "Build MVP",
-		Status:    userdata.TaskStatusReady,
-		Priority:  userdata.PriorityHigh,
-		Delegation: userdata.Delegation{
-			State:           userdata.DelegationCandidate,
-			Reason:          "Well-scoped CLI work",
-			SuggestedPrompt: "Implement the next CLI command and run tests.",
-		},
-	}}}); err != nil {
-		t.Fatal(err)
+	if err := app.Run(context.Background(), []string{"add_task", "--userdata", userdataDir, "--project", "slakkr-ai", "--name", "Build MVP", "--priority", "high", "--next-action", "Implement the next CLI command and run tests."}); err != nil {
+		t.Fatalf("add_task: %v", err)
 	}
 	if err := app.Run(context.Background(), []string{"start_day", "--userdata", userdataDir, "--date", "2026-04-24"}); err != nil {
 		t.Fatalf("start_day: %v", err)
@@ -63,6 +49,24 @@ func TestSetupValidateAndStartDayDryRun(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "AI Plan") || !strings.Contains(string(content), "build-mvp") {
 		t.Fatalf("daybook did not contain plan:\n%s", content)
+	}
+}
+
+func TestSetupCanPromptForUserdataRemote(t *testing.T) {
+	root := workspaceTempDir(t)
+	userdataDir := filepath.Join(root, "userdata")
+	var out bytes.Buffer
+	app := New(&out, &bytes.Buffer{}, strings.NewReader("y\ngit@example.com:kurt/slakkr-userdata.git\n"))
+	git := &recordingGit{}
+	app.Git = git
+	if err := app.Run(context.Background(), []string{"setup", "--userdata", userdataDir, "--recipes", filepath.Join("..", "..", "testdata", "empty-recipes")}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if git.remoteURL != "git@example.com:kurt/slakkr-userdata.git" {
+		t.Fatalf("remote URL = %q", git.remoteURL)
+	}
+	if !strings.Contains(out.String(), "scripts/add_project") || !strings.Contains(out.String(), "scripts/add_task") {
+		t.Fatalf("setup should suggest next modeling commands, got:\n%s", out.String())
 	}
 }
 
@@ -136,6 +140,23 @@ func (noopGit) CommitAll(context.Context, string, string) error {
 }
 
 func (noopGit) AddRemote(context.Context, string, string, string) error {
+	return nil
+}
+
+type recordingGit struct {
+	remoteURL string
+}
+
+func (g *recordingGit) Init(context.Context, string) error {
+	return nil
+}
+
+func (g *recordingGit) CommitAll(context.Context, string, string) error {
+	return nil
+}
+
+func (g *recordingGit) AddRemote(_ context.Context, _ string, _ string, remoteURL string) error {
+	g.remoteURL = remoteURL
 	return nil
 }
 

@@ -50,6 +50,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "setup":
 		return a.setup(ctx, args[1:])
+	case "add_project":
+		return a.addProject(ctx, args[1:])
+	case "add_task":
+		return a.addTask(ctx, args[1:])
 	case "start_day":
 		return a.startDay(ctx, args[1:])
 	case "update_status":
@@ -66,7 +70,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 }
 
 func (a *App) usage() error {
-	fmt.Fprintln(a.Out, "Usage: slakkr <setup|start_day|update_status|end_day|validate|list-recipes> [flags]")
+	fmt.Fprintln(a.Out, "Usage: slakkr <setup|add_project|add_task|start_day|update_status|end_day|validate|list-recipes> [flags]")
 	return nil
 }
 
@@ -85,6 +89,20 @@ func (a *App) setup(ctx context.Context, args []string) error {
 	if err := store.Ensure(ctx); err != nil {
 		return err
 	}
+	prompter := StdioPrompter{In: a.In, Out: a.Out}
+	if *remote == "" && !*nonInteractive {
+		addRemote, err := prompter.Confirm("Add a git remote for userdata persistence?", false)
+		if err != nil {
+			return err
+		}
+		if addRemote {
+			remoteURL, err := prompter.Ask("Userdata git remote URL", "")
+			if err != nil {
+				return err
+			}
+			*remote = remoteURL
+		}
+	}
 	if *remote != "" {
 		if err := store.AddRemote(ctx, "origin", *remote); err != nil {
 			return err
@@ -95,7 +113,6 @@ func (a *App) setup(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Fprintf(a.Out, "Initialized %s and found %d recipe(s).\n", *userdataDir, len(loaded))
-	prompter := StdioPrompter{In: a.In, Out: a.Out}
 	if !*nonInteractive && len(loaded) > 0 {
 		for _, recipe := range loaded {
 			enable, err := prompter.Confirm("Enable recipe "+recipe.ID+"?", false)
@@ -119,8 +136,29 @@ func (a *App) setup(ctx context.Context, args []string) error {
 			fmt.Fprintf(a.Out, "Saved directive %s.\n", directive.ID)
 		}
 	}
+	if err := a.printSetupNextSteps(store); err != nil {
+		return err
+	}
 	if err := store.CommitAll(ctx, "Initialize slakkr userdata"); err != nil {
 		fmt.Fprintf(a.Err, "warning: could not commit userdata: %v\n", err)
+	}
+	return nil
+}
+
+func (a *App) printSetupNextSteps(store userdata.Store) error {
+	projects, err := store.LoadProjects()
+	if err != nil {
+		return err
+	}
+	tasks, err := store.LoadTasks(projects)
+	if err != nil {
+		return err
+	}
+	if len(projects.Projects) == 0 {
+		fmt.Fprintln(a.Out, "No projects configured yet. Next: scripts/add_project")
+	}
+	if len(tasks.Tasks) == 0 {
+		fmt.Fprintln(a.Out, "No tasks configured yet. Next: scripts/add_task")
 	}
 	return nil
 }
@@ -284,6 +322,193 @@ func addDirective(store userdata.Store, directive userdata.Directive) error {
 	}
 	directives.Directives = append(directives.Directives, directive)
 	return store.SaveDirectives(projects, directives)
+}
+
+func (a *App) addProject(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("add_project", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	id := fs.String("id", "", "project id")
+	name := fs.String("name", "", "project name")
+	description := fs.String("description", "", "project description")
+	repoPath := fs.String("repo-path", "", "local repository path")
+	repoRemote := fs.String("repo-remote", "", "repository remote URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	prompter := StdioPrompter{In: a.In, Out: a.Out}
+	if *name == "" {
+		value, err := prompter.Ask("Project name", "")
+		if err != nil {
+			return err
+		}
+		*name = value
+	}
+	if *name == "" {
+		return skippedDirectiveError{reason: "project name was blank"}
+	}
+	if *id == "" {
+		*id = slugID(*name)
+	}
+	if *description == "" {
+		value, err := prompter.Ask("Project description", "")
+		if err != nil {
+			return err
+		}
+		*description = value
+	}
+	if *repoPath == "" {
+		value, err := prompter.Ask("Local repo path (optional)", "")
+		if err != nil {
+			return err
+		}
+		*repoPath = value
+	}
+	if *repoRemote == "" {
+		value, err := prompter.Ask("Repo remote URL (optional)", "")
+		if err != nil {
+			return err
+		}
+		*repoRemote = value
+	}
+	store := userdata.NewStore(*userdataDir)
+	store.GitClient = a.Git
+	if err := store.Ensure(ctx); err != nil {
+		return err
+	}
+	projects, err := store.LoadProjects()
+	if err != nil {
+		return err
+	}
+	project := userdata.Project{
+		ID:          *id,
+		Name:        *name,
+		Description: *description,
+	}
+	if *repoPath != "" || *repoRemote != "" {
+		project.Repos = []userdata.Repo{{
+			ID:     slugID(*name),
+			Name:   *name,
+			Path:   *repoPath,
+			Remote: *repoRemote,
+		}}
+	}
+	upsertProject(&projects, project)
+	if err := store.SaveProjects(projects); err != nil {
+		return err
+	}
+	if err := store.CommitAll(ctx, "Add slakkr project "+project.ID); err != nil {
+		fmt.Fprintf(a.Err, "warning: could not commit userdata: %v\n", err)
+	}
+	fmt.Fprintf(a.Out, "Saved project %s.\n", project.ID)
+	return nil
+}
+
+func (a *App) addTask(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("add_task", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	id := fs.String("id", "", "task id")
+	projectID := fs.String("project", "", "project id")
+	name := fs.String("name", "", "task name")
+	description := fs.String("description", "", "task description")
+	status := fs.String("status", string(userdata.TaskStatusReady), "task status")
+	priority := fs.String("priority", string(userdata.PriorityMedium), "task priority")
+	nextAction := fs.String("next-action", "", "next action")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	store := userdata.NewStore(*userdataDir)
+	store.GitClient = a.Git
+	if err := store.Ensure(ctx); err != nil {
+		return err
+	}
+	projects, err := store.LoadProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects.Projects) == 0 {
+		return fmt.Errorf("no projects configured yet; run scripts/add_project first")
+	}
+	prompter := StdioPrompter{In: a.In, Out: a.Out}
+	if *projectID == "" {
+		*projectID = projects.Projects[0].ID
+		value, err := prompter.Ask("Project id", *projectID)
+		if err != nil {
+			return err
+		}
+		*projectID = value
+	}
+	if *name == "" {
+		value, err := prompter.Ask("Task name", "")
+		if err != nil {
+			return err
+		}
+		*name = value
+	}
+	if *name == "" {
+		return fmt.Errorf("task name is required")
+	}
+	if *id == "" {
+		*id = slugID(*name)
+	}
+	if *description == "" {
+		value, err := prompter.Ask("Task description", "")
+		if err != nil {
+			return err
+		}
+		*description = value
+	}
+	if *nextAction == "" {
+		value, err := prompter.Ask("Next action", "")
+		if err != nil {
+			return err
+		}
+		*nextAction = value
+	}
+	tasks, err := store.LoadTasks(projects)
+	if err != nil {
+		return err
+	}
+	task := userdata.Task{
+		ID:          *id,
+		ProjectID:   *projectID,
+		Name:        *name,
+		Description: *description,
+		Status:      userdata.TaskStatus(*status),
+		Priority:    userdata.Priority(*priority),
+		NextAction:  *nextAction,
+		UpdatedAt:   userdata.YAMLDateTime{Time: a.Now()},
+	}
+	upsertTask(&tasks, task)
+	if err := store.SaveTasks(projects, tasks); err != nil {
+		return err
+	}
+	if err := store.CommitAll(ctx, "Add slakkr task "+task.ID); err != nil {
+		fmt.Fprintf(a.Err, "warning: could not commit userdata: %v\n", err)
+	}
+	fmt.Fprintf(a.Out, "Saved task %s.\n", task.ID)
+	return nil
+}
+
+func upsertProject(projects *userdata.ProjectsFile, project userdata.Project) {
+	for i, existing := range projects.Projects {
+		if existing.ID == project.ID {
+			projects.Projects[i] = project
+			return
+		}
+	}
+	projects.Projects = append(projects.Projects, project)
+}
+
+func upsertTask(tasks *userdata.TasksFile, task userdata.Task) {
+	for i, existing := range tasks.Tasks {
+		if existing.ID == task.ID {
+			tasks.Tasks[i] = task
+			return
+		}
+	}
+	tasks.Tasks = append(tasks.Tasks, task)
 }
 
 func (a *App) startDay(ctx context.Context, args []string) error {

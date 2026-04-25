@@ -9,13 +9,15 @@ The current implementation is a Go CLI with reusable packages behind the command
 ```sh
 go test ./...
 go run ./cmd/slakkr list-recipes
-go run ./cmd/slakkr setup --yes
+go run ./cmd/slakkr setup
+go run ./cmd/slakkr add_project
+go run ./cmd/slakkr add_task
 go run ./cmd/slakkr start_day
 go run ./cmd/slakkr update_status
 go run ./cmd/slakkr end_day
 ```
 
-The tool writes user-owned data under `userdata/`. That directory is gitignored by this repo and initialized as its own local git repository. Setup can optionally add a remote for `userdata`, but local-only is the default.
+The tool writes user-owned data under `userdata/`. That directory is gitignored by this repo and initialized as its own local git repository. Setup asks whether to add a remote for `userdata`; local-only remains the default.
 
 ## Data Layout
 
@@ -36,7 +38,9 @@ Setup asks for a human-readable name, then generates the stable directive id. If
 
 ## Commands
 
-- `setup` initializes `userdata`, discovers recipes, and can interactively instantiate directives.
+- `setup` initializes `userdata`, asks about remote persistence, discovers recipes, and can interactively instantiate directives.
+- `add_project` adds or updates one project in `userdata/projects.yaml`.
+- `add_task` adds or updates one task in `userdata/tasks.yaml`.
 - `start_day` gathers status, creates today's daybook entry, and proposes focus blocks and delegation candidates.
 - `update_status` gathers status and appends a status snapshot to today's daybook.
 - `end_day` gathers final status, appends reflection prompts, and attempts to commit `userdata`.
@@ -49,6 +53,8 @@ The `scripts/` wrappers match the initial product sketch:
 
 ```sh
 scripts/setup
+scripts/add_project
+scripts/add_task
 scripts/start_day
 scripts/update_status
 scripts/end_day
