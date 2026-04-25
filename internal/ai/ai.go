@@ -29,6 +29,11 @@ type PlanningInput struct {
 
 type PlanningOutput struct {
 	Summary              string                `json:"summary"`
+	PrimaryFocus         *FocusBlock           `json:"primary_focus,omitempty"`
+	SecondaryFocus       []FocusBlock          `json:"secondary_focus,omitempty"`
+	FollowUps            []string              `json:"follow_ups,omitempty"`
+	Deferrals            []string              `json:"deferrals,omitempty"`
+	NonGoals             []string              `json:"non_goals,omitempty"`
 	FocusBlocks          []FocusBlock          `json:"focus_blocks,omitempty"`
 	DelegationCandidates []DelegationCandidate `json:"delegation_candidates,omitempty"`
 	Questions            []string              `json:"questions,omitempty"`
@@ -81,6 +86,30 @@ func (RuleBasedProvider) ProposeDayPlan(_ context.Context, input PlanningInput) 
 	}
 	if len(output.FocusBlocks) == 0 {
 		output.FocusBlocks = append(output.FocusBlocks, FocusBlock{Title: "Review collected status", Reason: "No active tasks are configured yet."})
+	}
+	if len(output.FocusBlocks) > 0 {
+		p := output.FocusBlocks[0]
+		output.PrimaryFocus = &FocusBlock{TaskID: p.TaskID, Title: p.Title, Reason: p.Reason}
+	}
+	if len(output.FocusBlocks) > 1 {
+		for i := 1; i < len(output.FocusBlocks) && i < 3; i++ {
+			b := output.FocusBlocks[i]
+			output.SecondaryFocus = append(output.SecondaryFocus, FocusBlock{TaskID: b.TaskID, Title: b.Title, Reason: b.Reason})
+		}
+	}
+	for _, s := range input.Statuses {
+		if s.AttentionClass == "urgent" || s.AttentionClass == "waiting_on_me" {
+			line := s.Title
+			if s.URL != "" {
+				line += " (" + s.URL + ")"
+			}
+			output.FollowUps = append(output.FollowUps, line)
+		}
+		if s.AttentionClass == "deferrable" || s.AttentionClass == "informational" {
+			if strings.Contains(strings.ToLower(s.Summary), "clean") && s.Source == "local-git" {
+				output.NonGoals = append(output.NonGoals, "Polish clean repo: "+s.Title)
+			}
+		}
 	}
 	output.Questions = []string{"Did priorities change based on the latest status?", "Is anything blocked that should be delegated or dropped?"}
 	return output, nil
@@ -138,10 +167,27 @@ func BuildPrompt(instruction string, input PlanningInput) (string, error) {
 	}
 	var buf bytes.Buffer
 	buf.WriteString(instruction)
-	buf.WriteString("\n\nReturn only JSON with keys: summary, focus_blocks, delegation_candidates, questions, proposed_task_changes.\n")
+	buf.WriteString("\n\nReturn only JSON with keys: summary, primary_focus, secondary_focus, follow_ups, deferrals, non_goals, focus_blocks, delegation_candidates, questions, proposed_task_changes.\n")
 	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
 	buf.Write(payload)
 	return buf.String(), nil
+}
+
+// NormalizePlanningOutput fills primary/secondary structured fields from legacy focus_blocks when missing.
+func NormalizePlanningOutput(out *PlanningOutput) {
+	if out == nil {
+		return
+	}
+	if out.PrimaryFocus == nil && len(out.FocusBlocks) > 0 {
+		b := out.FocusBlocks[0]
+		out.PrimaryFocus = &FocusBlock{TaskID: b.TaskID, Title: b.Title, Reason: b.Reason}
+	}
+	if len(out.SecondaryFocus) == 0 && len(out.FocusBlocks) > 1 {
+		for i := 1; i < len(out.FocusBlocks) && len(out.SecondaryFocus) < 2; i++ {
+			b := out.FocusBlocks[i]
+			out.SecondaryFocus = append(out.SecondaryFocus, FocusBlock{TaskID: b.TaskID, Title: b.Title, Reason: b.Reason})
+		}
+	}
 }
 
 func ParsePlanningOutput(raw []byte) (PlanningOutput, error) {
