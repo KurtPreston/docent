@@ -130,6 +130,11 @@ func (r Recipe) Instantiate(input InstantiateInput) (userdata.Directive, error) 
 			problems = append(problems, "missing target "+field.Name)
 		}
 	}
+	if r.Collector == "local-git" {
+		if strings.TrimSpace(target["project_id"]) == "" || strings.TrimSpace(target["repo_id"]) == "" {
+			problems = append(problems, "local-git requires target project_id and repo_id")
+		}
+	}
 	if len(problems) > 0 {
 		return userdata.Directive{}, fmt.Errorf(strings.Join(problems, "; "))
 	}

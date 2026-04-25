@@ -257,6 +257,26 @@ func fieldPrompt(kind, name, description string) string {
 var slugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 var envNamePattern = regexp.MustCompile(`[^A-Z0-9]+`)
 
+// expandRepoPath turns a user-entered path (including "~/...") into an absolute path for tooling like git.
+func expandRepoPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		path = filepath.Join(home, path[2:])
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return abs
+}
+
 func slugID(value string) string {
 	slug := strings.ToLower(strings.TrimSpace(value))
 	slug = slugPattern.ReplaceAllString(slug, "-")
@@ -364,8 +384,14 @@ func (a *App) addProject(ctx context.Context, args []string) error {
 		}
 		*repoPath = value
 	}
+	remoteDefault := *repoRemote
+	if remoteDefault == "" && a.Git != nil {
+		if origin, err := a.Git.GetRemoteURL(ctx, expandRepoPath(*repoPath), "origin"); err == nil && origin != "" {
+			remoteDefault = origin
+		}
+	}
 	if *repoRemote == "" {
-		value, err := prompter.Ask("Repo remote URL (optional)", "")
+		value, err := prompter.Ask("Repo remote URL (optional)", remoteDefault)
 		if err != nil {
 			return err
 		}
@@ -380,18 +406,31 @@ func (a *App) addProject(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	hostID, err := userdata.CurrentHostID()
+	if err != nil {
+		return err
+	}
 	project := userdata.Project{
 		ID:          *id,
 		Name:        *name,
 		Description: *description,
 	}
+	repoID := slugID(*name)
 	if *repoPath != "" || *repoRemote != "" {
+		absPath := expandRepoPath(*repoPath)
+		var pathsByHost map[string][]string
+		if absPath != "" {
+			pathsByHost = map[string][]string{hostID: {absPath}}
+		}
 		project.Repos = []userdata.Repo{{
-			ID:     slugID(*name),
-			Name:   *name,
-			Path:   *repoPath,
-			Remote: *repoRemote,
+			ID:          repoID,
+			Name:        *name,
+			Remote:      *repoRemote,
+			PathsByHost: pathsByHost,
 		}}
+	}
+	if idx := projectIndexByID(projects.Projects, project.ID); idx >= 0 && len(project.Repos) > 0 {
+		project = mergeProjectRepos(projects.Projects[idx], project, hostID)
 	}
 	upsertProject(&projects, project)
 	if err := store.SaveProjects(projects); err != nil {
@@ -511,6 +550,77 @@ func upsertTask(tasks *userdata.TasksFile, task userdata.Task) {
 	tasks.Tasks = append(tasks.Tasks, task)
 }
 
+func projectIndexByID(projects []userdata.Project, id string) int {
+	for i, p := range projects {
+		if p.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func mergeProjectRepos(existing, incoming userdata.Project, hostID string) userdata.Project {
+	if len(incoming.Repos) == 0 {
+		incoming.Repos = existing.Repos
+		return incoming
+	}
+	merged := append([]userdata.Repo(nil), existing.Repos...)
+	for _, inc := range incoming.Repos {
+		idx := repoIndexByID(merged, inc.ID)
+		if idx < 0 {
+			merged = append(merged, inc)
+			continue
+		}
+		merged[idx] = mergeRepoForHost(merged[idx], inc, hostID)
+	}
+	incoming.Repos = merged
+	return incoming
+}
+
+func repoIndexByID(repos []userdata.Repo, id string) int {
+	for i, r := range repos {
+		if r.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func mergeRepoForHost(existing, incoming userdata.Repo, hostID string) userdata.Repo {
+	out := existing
+	if strings.TrimSpace(incoming.Remote) != "" {
+		out.Remote = incoming.Remote
+	}
+	if strings.TrimSpace(incoming.Name) != "" {
+		out.Name = incoming.Name
+	}
+	if out.PathsByHost == nil {
+		out.PathsByHost = map[string][]string{}
+	}
+	var add []string
+	if incoming.PathsByHost != nil {
+		add = append(add, incoming.PathsByHost[hostID]...)
+	}
+	if len(add) > 0 {
+		out.PathsByHost[hostID] = dedupeStringKeepOrder(append(out.PathsByHost[hostID], add...))
+	}
+	return out
+}
+
+func dedupeStringKeepOrder(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
+}
+
 func (a *App) startDay(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("start_day", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
@@ -612,7 +722,21 @@ func (a *App) planningInput(ctx context.Context, userdataDir, dateString, mode s
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err
 	}
-	statuses, err := a.Registry.Collect(ctx, directives.Directives)
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		return ai.PlanningInput{}, daybook.Entry{}, err
+	}
+	hostID, err := userdata.CurrentHostID()
+	if err != nil {
+		return ai.PlanningInput{}, daybook.Entry{}, err
+	}
+	collectOpts := &collectors.CollectOpts{
+		HostID:         hostID,
+		Projects:       projects,
+		Config:         cfg,
+		ExpandRepoPath: expandRepoPath,
+	}
+	statuses, err := a.Registry.Collect(ctx, directives.Directives, collectOpts)
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err
 	}

@@ -24,7 +24,7 @@ type ghPR struct {
 	ReviewDecision string `json:"reviewDecision"`
 }
 
-func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive) ([]StatusItem, error) {
+func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
 	repo := directive.Target["repo"]
 	if repo == "" {
 		return nil, fmt.Errorf("target.repo is required")

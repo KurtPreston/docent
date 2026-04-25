@@ -30,7 +30,7 @@ The tool writes user-owned data under `userdata/`. That directory is gitignored 
 
 A recipe is a reusable template shipped with this repo or a fork. A directive is your local configured instance of a recipe. During setup, the directive id is just the stable key written to `userdata/directives.yaml`; accepting the suggested default is usually right for a first setup.
 
-Targets are the specific thing a directive monitors. For example, the local Git recipe's `path` target is a filesystem path to one checked-out repository, while a Gitea recipe would use server configuration such as a `base_url` plus a target owner or organization.
+Targets are the specific thing a directive monitors. The local Git recipe takes `project_id` and `repo_id` and resolves working trees from that repo’s `paths_by_host` in `userdata/projects.yaml` (for the current host; see `SLAKKR_HOST`). A Gitea recipe would use server configuration such as a `base_url` plus a target owner or organization.
 
 Secret recipe fields are prompted as secret values during setup. They are written to `userdata/.env` and referenced from directives through `credential_refs`, so tokens are not stored directly in `userdata/directives.yaml`. `userdata/.gitignore` excludes `.env` before setup commits user data.
 

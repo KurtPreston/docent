@@ -54,3 +54,24 @@ func TestInstantiateRecipeRequiresTargetFields(t *testing.T) {
 		t.Fatal("expected missing target to fail")
 	}
 }
+
+func TestInstantiateLocalGitAllowsProjectRepoRef(t *testing.T) {
+	recipe := Recipe{
+		ID:        "local-git-repository-status",
+		Name:      "Local Git",
+		Collector: "local-git",
+	}
+	d, err := recipe.Instantiate(InstantiateInput{
+		Enabled: true,
+		Target: map[string]string{
+			"project_id": "slakkr-ai",
+			"repo_id":    "slakkr-ai",
+		},
+	})
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	if d.Target["project_id"] != "slakkr-ai" {
+		t.Fatalf("target: %#v", d.Target)
+	}
+}

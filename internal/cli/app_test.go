@@ -70,6 +70,51 @@ func TestSetupCanPromptForUserdataRemote(t *testing.T) {
 	}
 }
 
+type stubOriginGit struct{}
+
+func (stubOriginGit) Init(context.Context, string) error { return nil }
+
+func (stubOriginGit) CommitAll(context.Context, string, string) error { return nil }
+
+func (stubOriginGit) AddRemote(context.Context, string, string, string) error { return nil }
+
+func (stubOriginGit) GetRemoteURL(_ context.Context, repoDir, remote string) (string, error) {
+	if remote == "origin" && strings.Contains(repoDir, "sample-repo") {
+		return "https://git.example/project/repo.git", nil
+	}
+	return "", nil
+}
+
+func TestAddProjectUsesGitOriginAsRemoteDefault(t *testing.T) {
+	root := workspaceTempDir(t)
+	userdataDir := filepath.Join(root, "userdata")
+	repoDir := filepath.Join(root, "sample-repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	app := New(&out, &bytes.Buffer{}, strings.NewReader("\n"))
+	app.Git = stubOriginGit{}
+	args := []string{
+		"add_project",
+		"--userdata", userdataDir,
+		"--name", "Sample",
+		"--description", "Test project",
+		"--repo-path", repoDir,
+	}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatalf("add_project: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(userdataDir, "projects.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "https://git.example/project/repo.git") {
+		t.Fatalf("projects.yaml should contain origin URL, got:\n%s", content)
+	}
+}
+
 func TestPromptDirectiveWritesSecretsToUserdataEnv(t *testing.T) {
 	root := workspaceTempDir(t)
 	prompter := StdioPrompter{
@@ -143,6 +188,10 @@ func (noopGit) AddRemote(context.Context, string, string, string) error {
 	return nil
 }
 
+func (noopGit) GetRemoteURL(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
 type recordingGit struct {
 	remoteURL string
 }
@@ -158,6 +207,10 @@ func (g *recordingGit) CommitAll(context.Context, string, string) error {
 func (g *recordingGit) AddRemote(_ context.Context, _ string, _ string, remoteURL string) error {
 	g.remoteURL = remoteURL
 	return nil
+}
+
+func (*recordingGit) GetRemoteURL(context.Context, string, string) (string, error) {
+	return "", nil
 }
 
 func workspaceTempDir(t *testing.T) string {

@@ -22,7 +22,7 @@ func TestManualCollectorProducesStatusItem(t *testing.T) {
 		Target: map[string]string{
 			"prompt": "What changed?",
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("collect manual: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestManualCollectorProducesStatusItem(t *testing.T) {
 	}
 }
 
-func TestLocalGitCollectorReportsDirtyRepo(t *testing.T) {
+func TestLocalGitCollectorResolvesProjectRepoPaths(t *testing.T) {
 	dir := workspaceTempDir(t)
 	fakeGit := filepath.Join(dir, "git")
 	if runtime.GOOS == "windows" {
@@ -42,16 +42,32 @@ func TestLocalGitCollectorReportsDirtyRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	host := "test-machine"
 	collector := LocalGitCollector{Clock: time.Now}
+	opts := &CollectOpts{
+		HostID: host,
+		Projects: userdata.ProjectsFile{Projects: []userdata.Project{{
+			ID:   "p1",
+			Name: "Project One",
+			Repos: []userdata.Repo{{
+				ID: "main",
+				PathsByHost: map[string][]string{
+					host: {dir},
+				},
+			}},
+		}}},
+	}
 	items, err := collector.Collect(context.Background(), userdata.Directive{
-		ID:        "repo",
-		Name:      "Repo",
-		Collector: "local-git",
-		Enabled:   true,
+		ID:          "repo",
+		Name:        "Repo",
+		Collector:   "local-git",
+		Enabled:     true,
+		ProjectID:   "p1",
 		Target: map[string]string{
-			"path": dir,
+			"project_id": "p1",
+			"repo_id":    "main",
 		},
-	})
+	}, opts)
 	if err != nil {
 		t.Fatalf("collect git: %v", err)
 	}

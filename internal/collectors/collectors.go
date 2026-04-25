@@ -22,8 +22,16 @@ type StatusItem struct {
 	Fields      map[string]string `json:"fields,omitempty"`
 }
 
+// CollectOpts carries host-scoped resolution data for collectors that need it (for example local-git).
+type CollectOpts struct {
+	HostID         string
+	Projects       userdata.ProjectsFile
+	Config         userdata.ConfigFile
+	ExpandRepoPath func(string) string
+}
+
 type Collector interface {
-	Collect(ctx context.Context, directive userdata.Directive) ([]StatusItem, error)
+	Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
 }
 
 type Registry struct {
@@ -60,7 +68,7 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive) ([]StatusItem, error) {
+func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	var all []StatusItem
 	for _, directive := range directives {
 		if !directive.Enabled {
@@ -70,7 +78,7 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive)
 		if !ok {
 			return all, fmt.Errorf("directive %s uses unknown collector %q", directive.ID, directive.Collector)
 		}
-		items, err := collector.Collect(ctx, directive)
+		items, err := collector.Collect(ctx, directive, opts)
 		if err != nil {
 			all = append(all, StatusItem{
 				DirectiveID: directive.ID,
@@ -93,7 +101,7 @@ type ManualCollector struct {
 	Clock func() time.Time
 }
 
-func (c ManualCollector) Collect(_ context.Context, directive userdata.Directive) ([]StatusItem, error) {
+func (c ManualCollector) Collect(_ context.Context, directive userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
 	prompt := directive.Target["prompt"]
 	if prompt == "" {
 		prompt = "Manual status requested"
@@ -114,7 +122,7 @@ type PlaceholderCollector struct {
 	Source string
 }
 
-func (c PlaceholderCollector) Collect(_ context.Context, directive userdata.Directive) ([]StatusItem, error) {
+func (c PlaceholderCollector) Collect(_ context.Context, directive userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
 	return []StatusItem{{
 		DirectiveID: directive.ID,
 		ProjectID:   directive.ProjectID,
