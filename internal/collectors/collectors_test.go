@@ -29,8 +29,66 @@ func TestManualCollectorProducesStatusItem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collect manual: %v", err)
 	}
-	if len(items) != 1 || items[0].Summary != "What changed?" {
+	if len(items) != 1 || items[0].Summary != "What changed?" || items[0].Kind != "manual_prompt" {
 		t.Fatalf("unexpected items: %#v", items)
+	}
+}
+
+func TestManualCollectorWithManualAnswer(t *testing.T) {
+	now := time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC)
+	collector := ManualCollector{Clock: func() time.Time { return now }}
+	opts := &CollectOpts{
+		ManualAnswer: func(_ context.Context, _ userdata.Directive, question string) (string, error) {
+			if question != "Hours?" {
+				t.Fatalf("question = %q", question)
+			}
+			return "about two", nil
+		},
+	}
+	items, err := collector.Collect(context.Background(), userdata.Directive{
+		ID:        "m1",
+		Name:      "Check-in",
+		Collector: "manual",
+		Enabled:   true,
+		Target: map[string]string{
+			"prompt": "Hours?",
+		},
+	}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != "manual_response" {
+		t.Fatalf("unexpected items: %#v", items)
+	}
+	want := "Q: Hours? | A: about two"
+	if items[0].Summary != want {
+		t.Fatalf("summary = %q want %q", items[0].Summary, want)
+	}
+}
+
+func TestRegistryRunsManualCollectorsSequentiallyWhenManualAnswerSet(t *testing.T) {
+	clock := func() time.Time { return time.Unix(0, 0).UTC() }
+	reg := NewRegistry(clock)
+	var order []string
+	opts := &CollectOpts{
+		ManualAnswer: func(_ context.Context, d userdata.Directive, _ string) (string, error) {
+			order = append(order, d.ID)
+			return "ok", nil
+		},
+	}
+	directives := []userdata.Directive{
+		{ID: "a", Name: "A", Collector: "manual", Enabled: true, Target: map[string]string{"prompt": "p1"}},
+		{ID: "b", Name: "B", Collector: "manual", Enabled: true, Target: map[string]string{"prompt": "p2"}},
+	}
+	items, err := reg.Collect(context.Background(), directives, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len=%d items=%#v", len(items), items)
+	}
+	if len(order) != 2 || order[0] != "a" || order[1] != "b" {
+		t.Fatalf("callback order %v", order)
 	}
 }
 

@@ -859,85 +859,48 @@ func (a *App) startDay(ctx context.Context, args []string) error {
 	}
 	progress := newDirectiveProgressTable(a.Out)
 	defer progress.Done()
-	daybookProgress := func(p collectors.DirectiveProgress) { progress.Update(p) }
-	const daybookProgressID = "_slakkr_daybook"
-	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "start_day", progress.Update)
+	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "start_day", progress.Update, a.startDayManualAnswer())
 	if err != nil {
 		return err
 	}
+	progress.Done() // close directive table before streaming or further output
+
 	store := userdata.NewStore(*userdataDir)
 	cfg, err := store.LoadConfig()
 	if err != nil {
 		return err
 	}
 	provider := ai.SelectProvider(cfg.AI, a.AI)
-	daybookProgress(collectors.DirectiveProgress{
-		DirectiveID: daybookProgressID,
-		Description: "Daybook entry",
-		Status:      "running",
-		Detail:      "generating day plan",
-	})
+	_, ollama := provider.(ai.OllamaProvider)
+	if ollama {
+		// Send the live model stream to stderr: many UIs/IDEs line-buffer or merge
+		// stdout differently; stderr also stays separate from the directive table on stdout.
+		fmt.Fprintln(a.Err, "\nOllama day plan (streaming)")
+		fmt.Fprintln(a.Err, strings.Repeat("-", 40))
+		input.OllamaStreamOut = a.Err
+	}
 	output, err := provider.ProposeDayPlan(ctx, input)
+	if ollama {
+		fmt.Fprintln(a.Err, "")
+	}
 	if err != nil {
-		daybookProgress(collectors.DirectiveProgress{
-			DirectiveID: daybookProgressID,
-			Description: "Daybook entry",
-			Status:      "error",
-			Detail:      err.Error(),
-		})
 		return err
 	}
 	ai.NormalizePlanningOutput(&output)
-	daybookProgress(collectors.DirectiveProgress{
-		DirectiveID: daybookProgressID,
-		Description: "Daybook entry",
-		Status:      "running",
-		Detail:      "writing daybook",
-	})
 	if err := daybook.AppendStatus(entry, input.Statuses); err != nil {
-		daybookProgress(collectors.DirectiveProgress{
-			DirectiveID: daybookProgressID,
-			Description: "Daybook entry",
-			Status:      "error",
-			Detail:      err.Error(),
-		})
 		return err
 	}
 	entry, err = daybook.LoadOrCreate(*userdataDir, input.Date)
 	if err != nil {
-		daybookProgress(collectors.DirectiveProgress{
-			DirectiveID: daybookProgressID,
-			Description: "Daybook entry",
-			Status:      "error",
-			Detail:      err.Error(),
-		})
 		return err
 	}
 	if err := daybook.AppendPlan(entry, output); err != nil {
-		daybookProgress(collectors.DirectiveProgress{
-			DirectiveID: daybookProgressID,
-			Description: "Daybook entry",
-			Status:      "error",
-			Detail:      err.Error(),
-		})
 		return err
 	}
 	planFile := workflow.DailyPlanFromOutput(input.Date, output, a.Now())
 	if err := store.SaveDailyPlan(planFile); err != nil {
-		daybookProgress(collectors.DirectiveProgress{
-			DirectiveID: daybookProgressID,
-			Description: "Daybook entry",
-			Status:      "error",
-			Detail:      err.Error(),
-		})
 		return err
 	}
-	daybookProgress(collectors.DirectiveProgress{
-		DirectiveID: daybookProgressID,
-		Description: "Daybook entry",
-		Status:      "done",
-		Detail:      "plan and daybook updated",
-	})
 	fmt.Fprintf(a.Out, "Updated %s with %d status item(s).\n", entry.Path, len(input.Statuses))
 	return nil
 }
@@ -950,7 +913,7 @@ func (a *App) updateStatus(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "update_status", nil)
+	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "update_status", nil, nil)
 	if err != nil {
 		return err
 	}
@@ -969,7 +932,7 @@ func (a *App) endDay(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "end_day", nil)
+	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "end_day", nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1004,17 +967,42 @@ func (a *App) planningInput(
 	ctx context.Context,
 	userdataDir, dateString, mode string,
 	onDirectiveUpdate func(collectors.DirectiveProgress),
+	manualAnswer func(context.Context, userdata.Directive, string) (string, error),
 ) (ai.PlanningInput, daybook.Entry, error) {
 	date, err := time.Parse("2006-01-02", dateString)
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err
 	}
 	return workflow.BuildPlanningInput(ctx, workflow.Deps{
-		Registry:       a.Registry,
-		Now:            a.Now,
-		ExpandRepoPath: expandRepoPath,
+		Registry:          a.Registry,
+		Now:               a.Now,
+		ExpandRepoPath:    expandRepoPath,
 		OnDirectiveUpdate: onDirectiveUpdate,
+		ManualAnswer:      manualAnswer,
 	}, userdataDir, date, mode)
+}
+
+// startDayManualAnswer returns a callback used during start_day to read replies for manual-status directives when stdin is a terminal.
+func (a *App) startDayManualAnswer() func(context.Context, userdata.Directive, string) (string, error) {
+	if !a.stdinIsTerminal() {
+		return nil
+	}
+	prompter := StdioPrompter{In: a.In, Out: a.Out}
+	return func(ctx context.Context, d userdata.Directive, question string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		prompt := fmt.Sprintf("[Manual status: %s]\n%s", d.Name, question)
+		return prompter.Ask(prompt, "")
+	}
+}
+
+func (a *App) stdinIsTerminal() bool {
+	f, ok := a.In.(*os.File)
+	if !ok || f == nil {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
 }
 
 type directiveProgressTable struct {
@@ -1025,6 +1013,7 @@ type directiveProgressTable struct {
 	interactive   bool
 	colorEnabled  bool
 	renderedLines int
+	finished      bool
 }
 
 func newDirectiveProgressTable(out io.Writer) *directiveProgressTable {
@@ -1053,9 +1042,13 @@ func (t *directiveProgressTable) Update(p collectors.DirectiveProgress) {
 func (t *directiveProgressTable) Done() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.finished {
+		return
+	}
 	if len(t.order) == 0 {
 		return
 	}
+	t.finished = true
 	if t.interactive {
 		fmt.Fprintln(t.out)
 		return

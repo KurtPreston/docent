@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,9 @@ type CollectOpts struct {
 	Config         userdata.ConfigFile
 	ExpandRepoPath func(string) string
 	OnDirectiveUpdate func(DirectiveProgress)
+	// ManualAnswer, when set, is called for each manual collector directive so the user can reply (e.g. start_day on a TTY).
+	// Collect runs those directives sequentially after other collectors finish.
+	ManualAnswer func(ctx context.Context, d userdata.Directive, question string) (answer string, err error)
 }
 
 type DirectiveProgress struct {
@@ -83,9 +87,6 @@ func (r *Registry) Names() []string {
 }
 
 func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	type directiveResult struct {
-		items []StatusItem
-	}
 	enabled := make([]userdata.Directive, 0, len(directives))
 	for _, directive := range directives {
 		if !directive.Enabled {
@@ -93,82 +94,121 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive,
 		}
 		enabled = append(enabled, directive)
 	}
-	results := make([]directiveResult, len(enabled))
-	var wg sync.WaitGroup
-	for i, directive := range enabled {
-		collector, ok := r.collectors[directive.Collector]
-		if !ok {
+	for _, directive := range enabled {
+		if _, ok := r.collectors[directive.Collector]; !ok {
 			return nil, fmt.Errorf("directive %s uses unknown collector %q", directive.ID, directive.Collector)
 		}
-		if opts != nil && opts.OnDirectiveUpdate != nil {
-			opts.OnDirectiveUpdate(DirectiveProgress{
-				DirectiveID: directive.ID,
-				Description: directive.Name,
-				Status:      "running",
-				Detail:      "collecting",
-			})
+	}
+	var parallel []userdata.Directive
+	var manualAfter []userdata.Directive
+	if opts != nil && opts.ManualAnswer != nil {
+		for _, directive := range enabled {
+			if directive.Collector == "manual" {
+				manualAfter = append(manualAfter, directive)
+			} else {
+				parallel = append(parallel, directive)
+			}
 		}
+	} else {
+		parallel = enabled
+	}
+	type directiveResult struct {
+		items []StatusItem
+	}
+	results := make([]directiveResult, len(parallel))
+	var wg sync.WaitGroup
+	for i, directive := range parallel {
 		wg.Add(1)
-		go func(index int, d userdata.Directive, c Collector) {
+		go func(index int, d userdata.Directive) {
 			defer wg.Done()
-			items, err := c.Collect(ctx, d, opts)
-			if err != nil {
-				if opts != nil && opts.OnDirectiveUpdate != nil {
-					opts.OnDirectiveUpdate(DirectiveProgress{
-						DirectiveID: d.ID,
-						Description: d.Name,
-						Status:      "error",
-						Detail:      err.Error(),
-					})
-				}
-				items = []StatusItem{{
-					DirectiveID: d.ID,
-					ProjectID:   d.ProjectID,
-					Source:      d.Collector,
-					Kind:        "collector_error",
-					Title:       d.Name,
-					Summary:     err.Error(),
-					Severity:    "error",
-					ObservedAt:  r.clock(),
-				}}
-				results[index] = directiveResult{items: items}
-				return
-			}
-			if opts != nil && opts.OnDirectiveUpdate != nil {
-				opts.OnDirectiveUpdate(DirectiveProgress{
-					DirectiveID: d.ID,
-					Description: d.Name,
-					Status:      "done",
-					Detail:      fmt.Sprintf("%d item(s)", len(items)),
-				})
-			}
-			results[index] = directiveResult{items: items}
-		}(i, directive, collector)
+			results[index].items = r.collectDirective(ctx, d, opts)
+		}(i, directive)
 	}
 	wg.Wait()
 	var all []StatusItem
 	for i := range results {
 		all = append(all, results[i].items...)
 	}
+	for _, d := range manualAfter {
+		all = append(all, r.collectDirective(ctx, d, opts)...)
+	}
 	return all, nil
+}
+
+func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, opts *CollectOpts) []StatusItem {
+	collector := r.collectors[d.Collector]
+	if opts != nil && opts.OnDirectiveUpdate != nil {
+		opts.OnDirectiveUpdate(DirectiveProgress{
+			DirectiveID: d.ID,
+			Description: d.Name,
+			Status:      "running",
+			Detail:      "collecting",
+		})
+	}
+	items, err := collector.Collect(ctx, d, opts)
+	if err != nil {
+		if opts != nil && opts.OnDirectiveUpdate != nil {
+			opts.OnDirectiveUpdate(DirectiveProgress{
+				DirectiveID: d.ID,
+				Description: d.Name,
+				Status:      "error",
+				Detail:      err.Error(),
+			})
+		}
+		return []StatusItem{{
+			DirectiveID: d.ID,
+			ProjectID:   d.ProjectID,
+			Source:      d.Collector,
+			Kind:        "collector_error",
+			Title:       d.Name,
+			Summary:     err.Error(),
+			Severity:    "error",
+			ObservedAt:  r.clock(),
+		}}
+	}
+	if opts != nil && opts.OnDirectiveUpdate != nil {
+		opts.OnDirectiveUpdate(DirectiveProgress{
+			DirectiveID: d.ID,
+			Description: d.Name,
+			Status:      "done",
+			Detail:      fmt.Sprintf("%d item(s)", len(items)),
+		})
+	}
+	return items
 }
 
 type ManualCollector struct {
 	Clock func() time.Time
 }
 
-func (c ManualCollector) Collect(_ context.Context, directive userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+func (c ManualCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	prompt := directive.Target["prompt"]
 	if prompt == "" {
 		prompt = "Manual status requested"
+	}
+	var summary string
+	kind := "manual_prompt"
+	if opts != nil && opts.ManualAnswer != nil {
+		answer, err := opts.ManualAnswer(ctx, directive, prompt)
+		if err != nil {
+			return nil, err
+		}
+		answer = strings.TrimSpace(answer)
+		if answer == "" {
+			answer = "(no answer)"
+		}
+		summary = "Q: " + prompt + " | A: " + answer
+		kind = "manual_response"
+	} else {
+		summary = prompt
 	}
 	return []StatusItem{{
 		DirectiveID: directive.ID,
 		ProjectID:   directive.ProjectID,
 		Source:      "manual",
-		Kind:        "manual_prompt",
+		Kind:        kind,
 		Title:       directive.Name,
-		Summary:     prompt,
+		Summary:     summary,
 		ObservedAt:  c.Clock(),
 	}}, nil
 }

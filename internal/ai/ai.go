@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -26,6 +27,8 @@ type PlanningInput struct {
 	Daybook  string                  `json:"daybook,omitempty"`
 	Mode     string                  `json:"mode"`
 	DebugDir string                  `json:"-"`
+	// OllamaStreamOut receives assistant message deltas as they arrive (Ollama provider only).
+	OllamaStreamOut io.Writer `json:"-"`
 }
 
 type PlanningOutput struct {
@@ -199,16 +202,16 @@ func ParsePlanningOutput(raw []byte) (PlanningOutput, error) {
 		return PlanningOutput{}, fmt.Errorf("AI output did not contain a JSON object")
 	}
 	var wire struct {
-		Summary              string                `json:"summary"`
-		PrimaryFocus         json.RawMessage       `json:"primary_focus,omitempty"`
-		SecondaryFocus       json.RawMessage       `json:"secondary_focus,omitempty"`
-		FollowUps            []string              `json:"follow_ups,omitempty"`
-		Deferrals            []string              `json:"deferrals,omitempty"`
-		NonGoals             []string              `json:"non_goals,omitempty"`
-		FocusBlocks          []FocusBlock          `json:"focus_blocks,omitempty"`
-		DelegationCandidates []DelegationCandidate `json:"delegation_candidates,omitempty"`
-		Questions            []string              `json:"questions,omitempty"`
-		ProposedTaskChanges  []ProposedTaskChange  `json:"proposed_task_changes,omitempty"`
+		Summary              string            `json:"summary"`
+		PrimaryFocus         json.RawMessage   `json:"primary_focus,omitempty"`
+		SecondaryFocus       json.RawMessage   `json:"secondary_focus,omitempty"`
+		FollowUps            []string          `json:"follow_ups,omitempty"`
+		Deferrals            []string          `json:"deferrals,omitempty"`
+		NonGoals             []string          `json:"non_goals,omitempty"`
+		FocusBlocks          []json.RawMessage `json:"focus_blocks,omitempty"`
+		DelegationCandidates []json.RawMessage `json:"delegation_candidates,omitempty"`
+		Questions            []string          `json:"questions,omitempty"`
+		ProposedTaskChanges  []json.RawMessage `json:"proposed_task_changes,omitempty"`
 	}
 	if err := json.Unmarshal(raw[start:end+1], &wire); err != nil {
 		return PlanningOutput{}, err
@@ -221,6 +224,18 @@ func ParsePlanningOutput(raw []byte) (PlanningOutput, error) {
 	if err != nil {
 		return PlanningOutput{}, fmt.Errorf("parse secondary_focus: %w", err)
 	}
+	focusBlocks, err := parseFocusBlockRawList(wire.FocusBlocks)
+	if err != nil {
+		return PlanningOutput{}, fmt.Errorf("parse focus_blocks: %w", err)
+	}
+	delegationCandidates, err := parseDelegationCandidateRawList(wire.DelegationCandidates)
+	if err != nil {
+		return PlanningOutput{}, fmt.Errorf("parse delegation_candidates: %w", err)
+	}
+	proposedTaskChanges, err := parseProposedTaskChangeRawList(wire.ProposedTaskChanges)
+	if err != nil {
+		return PlanningOutput{}, fmt.Errorf("parse proposed_task_changes: %w", err)
+	}
 	output := PlanningOutput{
 		Summary:              wire.Summary,
 		PrimaryFocus:         primary,
@@ -228,10 +243,10 @@ func ParsePlanningOutput(raw []byte) (PlanningOutput, error) {
 		FollowUps:            wire.FollowUps,
 		Deferrals:            wire.Deferrals,
 		NonGoals:             wire.NonGoals,
-		FocusBlocks:          wire.FocusBlocks,
-		DelegationCandidates: wire.DelegationCandidates,
+		FocusBlocks:          focusBlocks,
+		DelegationCandidates: delegationCandidates,
 		Questions:            wire.Questions,
-		ProposedTaskChanges:  wire.ProposedTaskChanges,
+		ProposedTaskChanges:  proposedTaskChanges,
 	}
 	if output.Summary == "" {
 		return PlanningOutput{}, fmt.Errorf("AI output summary is required")
@@ -292,6 +307,132 @@ func parseFocusBlockList(raw json.RawMessage) ([]FocusBlock, error) {
 		return nil, nil
 	}
 	return []FocusBlock{*block}, nil
+}
+
+func parseFocusBlockRawList(rawItems []json.RawMessage) ([]FocusBlock, error) {
+	if len(rawItems) == 0 {
+		return nil, nil
+	}
+	out := make([]FocusBlock, 0, len(rawItems))
+	for _, item := range rawItems {
+		block, err := parseOptionalFocusBlock(item)
+		if err != nil {
+			return nil, err
+		}
+		if block != nil {
+			out = append(out, *block)
+		}
+	}
+	return out, nil
+}
+
+func parseOptionalDelegationCandidate(raw json.RawMessage) (*DelegationCandidate, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var title string
+		if err := json.Unmarshal(trimmed, &title); err != nil {
+			return nil, err
+		}
+		title = strings.TrimSpace(title)
+		if title == "" {
+			return nil, nil
+		}
+		return &DelegationCandidate{Title: title}, nil
+	}
+	var dc DelegationCandidate
+	if err := json.Unmarshal(trimmed, &dc); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(dc.Title) == "" {
+		return nil, nil
+	}
+	return &dc, nil
+}
+
+func parseDelegationCandidateRawList(rawItems []json.RawMessage) ([]DelegationCandidate, error) {
+	if len(rawItems) == 0 {
+		return nil, nil
+	}
+	out := make([]DelegationCandidate, 0, len(rawItems))
+	for _, item := range rawItems {
+		dc, err := parseOptionalDelegationCandidate(item)
+		if err != nil {
+			return nil, err
+		}
+		if dc != nil {
+			out = append(out, *dc)
+		}
+	}
+	return out, nil
+}
+
+// proposedTaskChangeWire matches common model variants (schema + alternate keys).
+type proposedTaskChangeWire struct {
+	TaskID    string `json:"task_id"`
+	Field     string `json:"field"`
+	Value     string `json:"value"`
+	Reason    string `json:"reason"`
+	Change    string `json:"change"`
+	Rationale string `json:"rationale"`
+}
+
+func parseOptionalProposedTaskChange(raw json.RawMessage) (*ProposedTaskChange, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return nil, err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil, nil
+		}
+		return &ProposedTaskChange{Value: s}, nil
+	}
+	var w proposedTaskChangeWire
+	if err := json.Unmarshal(trimmed, &w); err != nil {
+		return nil, err
+	}
+	value := w.Value
+	if value == "" {
+		value = w.Change
+	}
+	reason := w.Reason
+	if reason == "" {
+		reason = w.Rationale
+	}
+	if w.TaskID == "" && w.Field == "" && value == "" && reason == "" {
+		return nil, nil
+	}
+	return &ProposedTaskChange{
+		TaskID: w.TaskID,
+		Field:  w.Field,
+		Value:  value,
+		Reason: reason,
+	}, nil
+}
+
+func parseProposedTaskChangeRawList(rawItems []json.RawMessage) ([]ProposedTaskChange, error) {
+	if len(rawItems) == 0 {
+		return nil, nil
+	}
+	out := make([]ProposedTaskChange, 0, len(rawItems))
+	for _, item := range rawItems {
+		ptc, err := parseOptionalProposedTaskChange(item)
+		if err != nil {
+			return nil, err
+		}
+		if ptc != nil {
+			out = append(out, *ptc)
+		}
+	}
+	return out, nil
 }
 
 func summarize(input PlanningInput) string {

@@ -72,3 +72,61 @@ func TestParsePlanningOutputAcceptsStringSecondaryFocusList(t *testing.T) {
 		t.Fatalf("unexpected second secondary focus: %#v", output.SecondaryFocus[1])
 	}
 }
+
+func TestParsePlanningOutputAcceptsStringFocusBlocksList(t *testing.T) {
+	output, err := ParsePlanningOutput([]byte("{\"summary\":\"ok\",\"focus_blocks\":[\"Cleanup tasks\",{\"title\":\"Review PRs\",\"reason\":\"requested\"}]}"))
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if len(output.FocusBlocks) != 2 {
+		t.Fatalf("unexpected focus blocks count: %#v", output.FocusBlocks)
+	}
+	if output.FocusBlocks[0].Title != "Cleanup tasks" {
+		t.Fatalf("unexpected first focus block: %#v", output.FocusBlocks[0])
+	}
+	if output.FocusBlocks[1].Title != "Review PRs" {
+		t.Fatalf("unexpected second focus block: %#v", output.FocusBlocks[1])
+	}
+}
+
+func TestParsePlanningOutputAcceptsStringDelegationCandidatesList(t *testing.T) {
+	raw := `{"summary":"ok","delegation_candidates":["Triage CI",` +
+		`{"task_id":"t1","title":"Fix build","reason":"blocked","suggested_prompt":"Investigate"}]}`
+	output, err := ParsePlanningOutput([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if len(output.DelegationCandidates) != 2 {
+		t.Fatalf("unexpected delegation_candidates count: %#v", output.DelegationCandidates)
+	}
+	if output.DelegationCandidates[0].Title != "Triage CI" {
+		t.Fatalf("unexpected first delegation: %#v", output.DelegationCandidates[0])
+	}
+	if output.DelegationCandidates[1].Title != "Fix build" || output.DelegationCandidates[1].TaskID != "t1" {
+		t.Fatalf("unexpected second delegation: %#v", output.DelegationCandidates[1])
+	}
+}
+
+func TestParsePlanningOutputAcceptsStringAndAlternateProposedTaskChanges(t *testing.T) {
+	raw := `{"summary":"ok","proposed_task_changes":[` +
+		`"Add sync step to task-1",` +
+		`{"task_id":"t1","field":"status","value":"in_progress","reason":"active"},` +
+		`{"task_id":"t2","change":"Update title","rationale":"clarity"}` +
+		`]}`
+	output, err := ParsePlanningOutput([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse output: %v", err)
+	}
+	if len(output.ProposedTaskChanges) != 3 {
+		t.Fatalf("count = %d, want 3: %#v", len(output.ProposedTaskChanges), output.ProposedTaskChanges)
+	}
+	if output.ProposedTaskChanges[0].Value != "Add sync step to task-1" {
+		t.Fatalf("first: %#v", output.ProposedTaskChanges[0])
+	}
+	if output.ProposedTaskChanges[1].Field != "status" || output.ProposedTaskChanges[1].Value != "in_progress" {
+		t.Fatalf("second: %#v", output.ProposedTaskChanges[1])
+	}
+	if output.ProposedTaskChanges[2].Value != "Update title" || output.ProposedTaskChanges[2].Reason != "clarity" {
+		t.Fatalf("third: %#v", output.ProposedTaskChanges[2])
+	}
+}

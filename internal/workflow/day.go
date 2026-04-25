@@ -15,10 +15,12 @@ import (
 
 // Deps bundles dependencies for gathering planning input (CLI and HTTP API).
 type Deps struct {
-	Registry       *collectors.Registry
-	Now            func() time.Time
-	ExpandRepoPath func(string) string
+	Registry          *collectors.Registry
+	Now               func() time.Time
+	ExpandRepoPath    func(string) string
 	OnDirectiveUpdate func(collectors.DirectiveProgress)
+	// ManualAnswer is forwarded to collectors.CollectOpts for interactive manual directives (CLI start_day on a TTY).
+	ManualAnswer func(ctx context.Context, d userdata.Directive, question string) (answer string, err error)
 }
 
 // BuildPlanningInput loads userdata, runs collectors, applies cache and attention, and loads the daybook entry.
@@ -53,12 +55,13 @@ func BuildPlanningInput(ctx context.Context, d Deps, userdataDir string, date ti
 		expand = func(s string) string { return s }
 	}
 	collectOpts := &collectors.CollectOpts{
-		HostID:         hostID,
-		UserdataDir:    userdataDir,
-		Projects:       projects,
-		Config:         cfg,
-		ExpandRepoPath: expand,
+		HostID:            hostID,
+		UserdataDir:       userdataDir,
+		Projects:          projects,
+		Config:            cfg,
+		ExpandRepoPath:    expand,
 		OnDirectiveUpdate: d.OnDirectiveUpdate,
+		ManualAnswer:      d.ManualAnswer,
 	}
 	statuses, err := d.Registry.Collect(ctx, directives.Directives, collectOpts)
 	if err != nil {

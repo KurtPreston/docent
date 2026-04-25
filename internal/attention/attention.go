@@ -20,7 +20,7 @@ func classifyOne(s collectors.StatusItem) string {
 	if s.Kind == "not_configured" {
 		return "informational"
 	}
-	if s.Kind == "manual_prompt" {
+	if s.Kind == "manual_prompt" || s.Kind == "manual_response" {
 		return "informational"
 	}
 	if strings.Contains(strings.ToLower(s.Summary), "blocked") {

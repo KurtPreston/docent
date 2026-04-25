@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,19 +22,28 @@ type OllamaProvider struct {
 }
 
 type ollamaChatRequest struct {
-	Model    string       `json:"model"`
-	Messages []ollamaMsg  `json:"messages"`
-	Stream   bool         `json:"stream"`
-	Format   string       `json:"format,omitempty"`
+	Model    string      `json:"model"`
+	Messages []ollamaMsg `json:"messages"`
+	Stream   bool        `json:"stream"`
+	Format   string      `json:"format,omitempty"`
 }
 
 type ollamaMsg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role     string `json:"role"`
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 type ollamaChatResponse struct {
 	Message ollamaMsg `json:"message"`
+}
+
+type ollamaChatStreamResponse struct {
+	Message         ollamaMsg `json:"message"`
+	Done            bool      `json:"done"`
+	DoneReason      string    `json:"done_reason,omitempty"`
+	PromptEvalCount int       `json:"prompt_eval_count,omitempty"`
+	EvalCount       int       `json:"eval_count,omitempty"`
 }
 
 func (p OllamaProvider) client() *http.Client {
@@ -61,19 +71,19 @@ func (p OllamaProvider) run(ctx context.Context, instruction string, input Plann
 		Messages: []ollamaMsg{
 			{Role: "user", Content: payload},
 		},
-		Stream: false,
+		Stream: true,
 	})
 	if err != nil {
 		return PlanningOutput{}, err
 	}
 	if input.DebugDir != "" {
 		writeOllamaDebugLog(input.DebugDir, "request", map[string]any{
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-			"base_url":  p.BaseURL,
-			"model":     p.Model,
+			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+			"base_url":    p.BaseURL,
+			"model":       p.Model,
 			"instruction": instruction,
-			"request":   json.RawMessage(body),
-			"prompt":    payload,
+			"request":     json.RawMessage(body),
+			"prompt":      payload,
 		})
 	}
 	url := strings.TrimRight(p.BaseURL, "/") + "/api/chat"
@@ -87,38 +97,66 @@ func (p OllamaProvider) run(ctx context.Context, instruction string, input Plann
 		return PlanningOutput{}, err
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
-	if err != nil {
-		return PlanningOutput{}, err
-	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		var errBody bytes.Buffer
+		_, _ = errBody.ReadFrom(res.Body)
 		if input.DebugDir != "" {
 			writeOllamaDebugLog(input.DebugDir, "error", map[string]any{
 				"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
 				"status":      res.Status,
 				"status_code": res.StatusCode,
-				"response":    strings.TrimSpace(string(raw)),
+				"response":    strings.TrimSpace(errBody.String()),
 			})
 		}
-		return PlanningOutput{}, fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(string(raw)))
+		return PlanningOutput{}, fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(errBody.String()))
 	}
-	var parsed ollamaChatResponse
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		if input.DebugDir != "" {
-			writeOllamaDebugLog(input.DebugDir, "error", map[string]any{
-				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-				"error":     fmt.Sprintf("ollama response parse: %v", err),
-				"response":  strings.TrimSpace(string(raw)),
-			})
+	decoder := json.NewDecoder(res.Body)
+	var content strings.Builder
+	streamChunks := make([]ollamaChatStreamResponse, 0, 128)
+	for {
+		var chunk ollamaChatStreamResponse
+		if err := decoder.Decode(&chunk); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return PlanningOutput{}, err
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if input.DebugDir != "" {
+				writeOllamaDebugLog(input.DebugDir, "error", map[string]any{
+					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+					"error":     fmt.Sprintf("ollama stream parse: %v", err),
+				})
+			}
+			return PlanningOutput{}, fmt.Errorf("ollama stream: %w", err)
 		}
-		return PlanningOutput{}, fmt.Errorf("ollama response: %w", err)
+		streamChunks = append(streamChunks, chunk)
+		// Qwen3 and similar may stream reasoning in `thinking` while `content` stays empty
+		// until the final answer; Ollama chat deltas are in both fields.
+		if chunk.Message.Thinking != "" {
+			if input.OllamaStreamOut != nil {
+				_, _ = io.WriteString(input.OllamaStreamOut, chunk.Message.Thinking)
+			}
+		}
+		if chunk.Message.Content != "" {
+			content.WriteString(chunk.Message.Content)
+			if input.OllamaStreamOut != nil {
+				_, _ = io.WriteString(input.OllamaStreamOut, chunk.Message.Content)
+			}
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	parsed := ollamaChatResponse{
+		Message: ollamaMsg{Content: content.String()},
 	}
 	if input.DebugDir != "" {
 		writeOllamaDebugLog(input.DebugDir, "response", map[string]any{
 			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
 			"status":          res.Status,
 			"status_code":     res.StatusCode,
-			"response_raw":    json.RawMessage(raw),
+			"response_raw":    streamChunks,
 			"message_content": parsed.Message.Content,
 		})
 	}
