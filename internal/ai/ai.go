@@ -143,6 +143,28 @@ func (p CursorCLIProvider) ReflectEndOfDay(ctx context.Context, input PlanningIn
 	return p.run(ctx, "Create a concise end-of-day reflection as JSON matching the requested schema.", input)
 }
 
+func (p CursorCLIProvider) ClassifyTaskSignals(ctx context.Context, in TaskSignalsInput) (TaskSignalsOutput, error) {
+	command := p.Command
+	if command == "" {
+		command = "cursor-agent"
+	}
+	instruction := "For each open signal, choose an action: ignore, assign_task, propose_task, or pending. Return JSON with key decisions only."
+	payload, err := BuildTaskSignalsPrompt(instruction, in)
+	if err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	args := p.Args
+	if len(args) == 0 {
+		args = []string{"-p", payload}
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	return ParseTaskSignalsOutput(output)
+}
+
 func (p CursorCLIProvider) run(ctx context.Context, instruction string, input PlanningInput) (PlanningOutput, error) {
 	command := p.Command
 	if command == "" {

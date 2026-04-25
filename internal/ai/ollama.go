@@ -163,6 +163,71 @@ func (p OllamaProvider) run(ctx context.Context, instruction string, input Plann
 	return ParsePlanningOutput([]byte(parsed.Message.Content))
 }
 
+// ClassifyTaskSignals uses a single non-streaming JSON response for reliable parsing.
+func (p OllamaProvider) ClassifyTaskSignals(ctx context.Context, in TaskSignalsInput) (TaskSignalsOutput, error) {
+	instruction := "For each open signal, choose an action: ignore (noise), assign_task (map to an existing task_id from the input), propose_task (suggest a new task for the user to confirm later), or pending (uncertain). Prefer assign_task when a task link or title clearly matches. Never invent task_ids that are not in tasks. Stay within the JSON schema."
+	payload, err := BuildTaskSignalsPrompt(instruction, in)
+	if err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	body, err := json.Marshal(ollamaChatRequest{
+		Model: p.Model,
+		Messages: []ollamaMsg{
+			{Role: "user", Content: payload},
+		},
+		Stream: false,
+		Format: "json",
+	})
+	if err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	if in.DebugDir != "" {
+		writeOllamaDebugLog(in.DebugDir, "task-signals-request", map[string]any{
+			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+			"base_url":    p.BaseURL,
+			"model":       p.Model,
+			"instruction": instruction,
+			"request":     json.RawMessage(body),
+			"prompt":      payload,
+		})
+	}
+	url := strings.TrimRight(p.BaseURL, "/") + "/api/chat"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := p.client().Do(req)
+	if err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		var errBody bytes.Buffer
+		_, _ = errBody.ReadFrom(res.Body)
+		if in.DebugDir != "" {
+			writeOllamaDebugLog(in.DebugDir, "task-signals-error", map[string]any{
+				"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+				"status":      res.Status,
+				"status_code": res.StatusCode,
+				"response":    strings.TrimSpace(errBody.String()),
+			})
+		}
+		return TaskSignalsOutput{}, fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(errBody.String()))
+	}
+	var parsed ollamaChatResponse
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		return TaskSignalsOutput{}, err
+	}
+	if in.DebugDir != "" {
+		writeOllamaDebugLog(in.DebugDir, "task-signals-response", map[string]any{
+			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
+			"message_content": parsed.Message.Content,
+		})
+	}
+	return ParseTaskSignalsOutput([]byte(parsed.Message.Content))
+}
+
 func writeOllamaDebugLog(debugDir, stage string, payload map[string]any) {
 	if strings.TrimSpace(debugDir) == "" {
 		return

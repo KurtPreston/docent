@@ -167,6 +167,9 @@ func TestLocalGitCollectorResolvesProjectRepoPaths(t *testing.T) {
 		Collector:   "local-git",
 		Enabled:     true,
 		ProjectID:   "p1",
+		Config: map[string]string{
+			"checks": "repository_status",
+		},
 		Target: map[string]string{
 			"project_id": "p1",
 			"repo_id":    "main",

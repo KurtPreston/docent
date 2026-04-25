@@ -63,6 +63,12 @@ func (s Store) Ensure(ctx context.Context) error {
 	if err := writeDefaultYAML(filepath.Join(s.Root, "delegations.yaml"), DelegationsFile{}); err != nil {
 		return err
 	}
+	if err := writeDefaultYAML(filepath.Join(s.Root, "signals.yaml"), SignalsFile{}); err != nil {
+		return err
+	}
+	if err := writeDefaultYAML(filepath.Join(s.Root, "proposed-tasks.yaml"), ProposedTasksFile{}); err != nil {
+		return err
+	}
 	if err := writeDefaultText(filepath.Join(s.Root, ".gitignore"), ".env\n"); err != nil {
 		return err
 	}
@@ -155,7 +161,48 @@ func (s Store) ValidateAll() error {
 	if _, err := s.LoadDelegations(tasks); err != nil {
 		return fmt.Errorf("validate delegations: %w", err)
 	}
+	if _, err := s.LoadSignals(projects, tasks); err != nil {
+		return fmt.Errorf("validate signals: %w", err)
+	}
+	if _, err := s.LoadProposedTasks(projects, tasks); err != nil {
+		return fmt.Errorf("validate proposed tasks: %w", err)
+	}
 	return nil
+}
+
+func (s Store) LoadSignals(projects ProjectsFile, tasks TasksFile) (SignalsFile, error) {
+	var file SignalsFile
+	err := readYAML(filepath.Join(s.Root, "signals.yaml"), &file)
+	if err != nil {
+		return file, err
+	}
+	return file, file.ValidateWithProjects(projects, tasks)
+}
+
+func (s Store) SaveSignals(projects ProjectsFile, tasks TasksFile, file SignalsFile) error {
+	if err := file.ValidateWithProjects(projects, tasks); err != nil {
+		return err
+	}
+	return writeYAML(filepath.Join(s.Root, "signals.yaml"), file)
+}
+
+func (s Store) LoadProposedTasks(projects ProjectsFile, tasks TasksFile) (ProposedTasksFile, error) {
+	var file ProposedTasksFile
+	err := readYAML(filepath.Join(s.Root, "proposed-tasks.yaml"), &file)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ProposedTasksFile{}, nil
+		}
+		return file, err
+	}
+	return file, file.Validate(projects, tasks)
+}
+
+func (s Store) SaveProposedTasks(projects ProjectsFile, tasks TasksFile, file ProposedTasksFile) error {
+	if err := file.Validate(projects, tasks); err != nil {
+		return err
+	}
+	return writeYAML(filepath.Join(s.Root, "proposed-tasks.yaml"), file)
 }
 
 func (s Store) CommitAll(ctx context.Context, message string) error {

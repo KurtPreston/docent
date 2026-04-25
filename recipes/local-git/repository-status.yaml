@@ -12,6 +12,9 @@ required_target:
 defaults:
   schedule: every-status-check
   summary_prompt: Summarize branch, latest commit, remote divergence, and whether local changes need attention.
+  config:
+    checks: repository_status, branch_wip
+    branch_lookback_days: "14"
 examples:
   - name: Host-scoped project repo
     target:

@@ -52,6 +52,46 @@ func TestSetupValidateAndStartDayDryRun(t *testing.T) {
 	}
 }
 
+func TestUpdateTasksDryRun(t *testing.T) {
+	root := workspaceTempDir(t)
+	userdataDir := filepath.Join(root, "userdata")
+	var out bytes.Buffer
+	app := New(&out, &bytes.Buffer{}, strings.NewReader(""))
+	app.Now = func() time.Time { return time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC) }
+	app.Git = noopGit{}
+	if err := app.Run(context.Background(), []string{"setup", "--yes", "--userdata", userdataDir, "--recipes", filepath.Join("..", "..", "testdata", "empty-recipes")}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"add_project", "--userdata", userdataDir, "--id", "slakkr-ai", "--name", "Slakkr", "--description", "d"}); err != nil {
+		t.Fatalf("add_project: %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"add_task", "--userdata", userdataDir, "--project", "slakkr-ai", "--id", "t-one", "--name", "A task", "--priority", "low", "--next-action", "x", "--status", "ready"}); err != nil {
+		t.Fatalf("add_task: %v", err)
+	}
+	if err := app.Run(context.Background(), []string{"update_tasks", "--userdata", userdataDir, "--dry-run"}); err != nil {
+		t.Fatalf("update_tasks: %v", err)
+	}
+	if !strings.Contains(out.String(), "update_tasks (dry-run)") {
+		t.Fatalf("expected dry-run line, got: %q", out.String())
+	}
+	tasksBefore, err := os.ReadFile(filepath.Join(userdataDir, "tasks.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(tasksBefore), "t-one") {
+		t.Fatal("expected task in tasks.yaml before")
+	}
+	// run again in write mode should not remove tasks
+	out.Reset()
+	if err := app.Run(context.Background(), []string{"update_tasks", "--userdata", userdataDir, "--min-confidence", "0.99"}); err != nil {
+		t.Fatalf("update_tasks: %v", err)
+	}
+	tasksAfter, _ := os.ReadFile(filepath.Join(userdataDir, "tasks.yaml"))
+	if string(tasksAfter) != string(tasksBefore) {
+		t.Fatalf("tasks.yaml should be unchanged, before:\n%s\nafter:\n%s", tasksBefore, tasksAfter)
+	}
+}
+
 func TestSetupCanPromptForUserdataRemote(t *testing.T) {
 	root := workspaceTempDir(t)
 	userdataDir := filepath.Join(root, "userdata")

@@ -423,3 +423,193 @@ func validAgentWorkState(s AgentWorkState) bool {
 		return false
 	}
 }
+
+// --- Task signals (update_tasks) ---
+
+// SignalResolution is how a user or classifier resolved a discovered signal.
+type SignalResolution string
+
+const (
+	SignalResolutionPending SignalResolution = "pending"
+	SignalResolutionIgnored SignalResolution = "ignored"
+	SignalResolutionTask    SignalResolution = "task"
+)
+
+type SignalsFile struct {
+	Signals []Signal `yaml:"signals"`
+}
+
+// Signal is a durable record correlating an external or local WIP item with a task or resolution.
+type Signal struct {
+	ID           string            `yaml:"id"`
+	Source       string            `yaml:"source"`
+	Kind         string            `yaml:"kind"`
+	SourceID     string            `yaml:"source_id,omitempty"`
+	URL          string            `yaml:"url,omitempty"`
+	Title        string            `yaml:"title"`
+	Summary      string            `yaml:"summary,omitempty"`
+	ProjectID    string            `yaml:"project_id,omitempty"`
+	ObservedAt   YAMLDateTime      `yaml:"observed_at,omitempty"`
+	LastSeenAt   YAMLDateTime      `yaml:"last_seen_at,omitempty"`
+	Resolution   SignalResolution  `yaml:"resolution,omitempty"`
+	TaskID       string            `yaml:"task_id,omitempty"`
+	Reason       string            `yaml:"reason,omitempty"`
+	ClassifiedAt YAMLDateTime      `yaml:"classified_at,omitempty"`
+}
+
+// ProposedTasksFile stores AI or workflow proposals before they are promoted to tasks.
+type ProposedTasksFile struct {
+	Proposed []ProposedTask `yaml:"proposed_tasks"`
+}
+
+// ProposedTask is a not-yet-confirmed task row linked to one or more signal ids.
+type ProposedTask struct {
+	ID              string         `yaml:"id"`
+	SourceSignalIDs []string       `yaml:"source_signal_ids"`
+	ProjectID       string         `yaml:"project_id"`
+	Name            string         `yaml:"name"`
+	Description     string         `yaml:"description,omitempty"`
+	Status          TaskStatus     `yaml:"status,omitempty"`
+	Priority        Priority       `yaml:"priority,omitempty"`
+	NextAction      string         `yaml:"next_action,omitempty"`
+	Confidence      *float64       `yaml:"confidence,omitempty"`
+	Reason          string         `yaml:"reason,omitempty"`
+	CreatedAt       YAMLDateTime   `yaml:"created_at,omitempty"`
+}
+
+func (f SignalsFile) Validate(tasks TasksFile) error {
+	var problems []string
+	taskIDs := map[string]bool{}
+	for _, t := range tasks.Tasks {
+		taskIDs[t.ID] = true
+	}
+	seen := map[string]bool{}
+	for i, s := range f.Signals {
+		path := fmt.Sprintf("signals[%d]", i)
+		if s.ID == "" {
+			problems = append(problems, path+".id is required")
+		} else if !signalIDValid(s.ID) {
+			problems = append(problems, path+".id is invalid (expected sig-…)")
+		}
+		if s.Source == "" {
+			problems = append(problems, path+".source is required")
+		}
+		if s.Kind == "" {
+			problems = append(problems, path+".kind is required")
+		}
+		if s.Title == "" {
+			problems = append(problems, path+".title is required")
+		}
+		if s.URL != "" {
+			if _, err := url.ParseRequestURI(s.URL); err != nil {
+				problems = append(problems, path+".url is invalid")
+			}
+		}
+		if !validSignalResolution(s.Resolution) {
+			problems = append(problems, path+".resolution is invalid")
+		}
+		if s.Resolution == SignalResolutionTask {
+			if s.TaskID == "" {
+				problems = append(problems, path+".task_id is required when resolution is task")
+			} else if !taskIDs[s.TaskID] {
+				problems = append(problems, path+".task_id references an unknown task")
+			}
+		}
+		if s.Resolution != SignalResolutionTask && s.TaskID != "" {
+			problems = append(problems, path+".task_id must be empty unless resolution is task")
+		}
+		if s.ProjectID != "" {
+			// project existence checked by caller with ProjectsFile when available
+		}
+		if seen[s.ID] {
+			problems = append(problems, path+".id is duplicated")
+		}
+		seen[s.ID] = true
+	}
+	return validationResult(problems)
+}
+
+// ValidateWithProjects requires project_id references to exist.
+func (f SignalsFile) ValidateWithProjects(projects ProjectsFile, tasks TasksFile) error {
+	if err := f.Validate(tasks); err != nil {
+		return err
+	}
+	proj := map[string]bool{}
+	for _, p := range projects.Projects {
+		proj[p.ID] = true
+	}
+	var problems []string
+	for i, s := range f.Signals {
+		if s.ProjectID != "" && !proj[s.ProjectID] {
+			problems = append(problems, fmt.Sprintf("signals[%d].project_id references an unknown project", i))
+		}
+	}
+	return validationResult(problems)
+}
+
+var signalIDPattern = regexp.MustCompile(`^sig-[0-9a-f]{8,64}$`)
+
+func signalIDValid(id string) bool {
+	return signalIDPattern.MatchString(id)
+}
+
+func validSignalResolution(r SignalResolution) bool {
+	switch r {
+	case "":
+		return true
+	case SignalResolutionPending, SignalResolutionIgnored, SignalResolutionTask:
+		return true
+	default:
+		return false
+	}
+}
+
+var proposedTaskIDPattern = regexp.MustCompile(`^pt-[a-z][a-z0-9-]*$`)
+
+func proposedTaskIDValid(id string) bool {
+	return proposedTaskIDPattern.MatchString(id)
+}
+
+func (f ProposedTasksFile) Validate(projects ProjectsFile, tasks TasksFile) error {
+	var problems []string
+	proj := map[string]bool{}
+	for _, p := range projects.Projects {
+		proj[p.ID] = true
+	}
+	seen := map[string]bool{}
+	for i, p := range f.Proposed {
+		path := fmt.Sprintf("proposed_tasks[%d]", i)
+		if p.ID == "" {
+			problems = append(problems, path+".id is required")
+		} else if !proposedTaskIDValid(p.ID) {
+			problems = append(problems, path+".id must match ^pt-[a-z][a-z0-9-]*$")
+		}
+		if p.Name == "" {
+			problems = append(problems, path+".name is required")
+		}
+		if p.ProjectID == "" {
+			problems = append(problems, path+".project_id is required")
+		} else if !proj[p.ProjectID] {
+			problems = append(problems, path+".project_id references an unknown project")
+		}
+		if len(p.SourceSignalIDs) == 0 {
+			problems = append(problems, path+".source_signal_ids is required")
+		}
+		if p.Status != "" && !validTaskStatus(p.Status) {
+			problems = append(problems, path+".status is invalid")
+		}
+		if p.Priority != "" && !validPriority(p.Priority) {
+			problems = append(problems, path+".priority is invalid")
+		}
+		if p.Confidence != nil {
+			if *p.Confidence < 0 || *p.Confidence > 1 {
+				problems = append(problems, path+".confidence must be between 0 and 1")
+			}
+		}
+		if seen[p.ID] {
+			problems = append(problems, path+".id is duplicated")
+		}
+		seen[p.ID] = true
+	}
+	return validationResult(problems)
+}

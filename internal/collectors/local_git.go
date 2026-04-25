@@ -41,18 +41,68 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		return nil, fmt.Errorf("no existing working tree on this host for project_id=%s repo_id=%s", projectID, repoID)
 	}
 
+	repoStatus, branchWip := parseLocalGitChecks(directive.Config)
+	lookbackDays := 14
+	if v := strings.TrimSpace(directive.Config["branch_lookback_days"]); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			lookbackDays = n
+		}
+	}
+	lookback := time.Duration(lookbackDays) * 24 * time.Hour
+	now := c.Clock()
+
 	var out []StatusItem
 	for _, abs := range dirs {
-		item, err := c.collectOne(ctx, directive, abs)
-		if err != nil {
-			return nil, err
+		if repoStatus {
+			item, err := c.collectOne(ctx, directive, abs)
+			if err != nil {
+				return nil, err
+			}
+			if len(dirs) > 1 {
+				item.Title = fmt.Sprintf("%s (%s)", directive.Name, filepath.Base(abs))
+			}
+			out = append(out, item)
 		}
-		if len(dirs) > 1 {
-			item.Title = fmt.Sprintf("%s (%s)", directive.Name, filepath.Base(abs))
+		if branchWip {
+			extra, err := c.collectBranchWIP(ctx, directive, abs, lookback, now, len(dirs) > 1)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, extra...)
 		}
-		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return []StatusItem{{
+			DirectiveID: directive.ID,
+			ProjectID:   directive.ProjectID,
+			Source:      "local-git",
+			Kind:        "git_report",
+			Title:       directive.Name,
+			Summary:     "No local-git signals for this run (e.g. no WIP branches in lookback or no main/master to compare).",
+			Severity:    "info",
+			ObservedAt:  c.Clock(),
+		}}, nil
 	}
 	return out, nil
+}
+
+// parseLocalGitChecks returns (repository_status, branch_wip). Empty checks enables both.
+func parseLocalGitChecks(config map[string]string) (bool, bool) {
+	raw := strings.TrimSpace(config["checks"])
+	if raw == "" {
+		return true, true
+	}
+	var repo, branch bool
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(strings.ToLower(p))
+		switch p {
+		case "repository_status", "repo", "status":
+			repo = true
+		case "branch_wip", "branches", "wip":
+			branch = true
+		}
+	}
+	return repo, branch
 }
 
 func defaultExpandRepoPath(opts *CollectOpts) func(string) string {
@@ -137,6 +187,100 @@ func (c LocalGitCollector) collectOne(ctx context.Context, directive userdata.Di
 		ObservedAt:  c.Clock(),
 		Fields:      fields,
 	}, nil
+}
+
+// collectBranchWIP lists local feature branches with recent tip commits and commits ahead of main/master. Read-only.
+func (c LocalGitCollector) collectBranchWIP(ctx context.Context, d userdata.Directive, abs string, lookback time.Duration, now time.Time, multiPath bool) ([]StatusItem, error) {
+	base, err := resolveBaseBranchName(ctx, abs)
+	if err != nil || base == "" {
+		return nil, nil
+	}
+	lines, err := gitOutput(ctx, abs, "for-each-ref", "refs/heads/", "--format=%(refname:short)\t%(committerdate:iso-strict)\t%(objectname:short)")
+	if err != nil {
+		return nil, err
+	}
+	var out []StatusItem
+	prefix := d.Name
+	if multiPath {
+		prefix = fmt.Sprintf("%s (%s)", d.Name, filepath.Base(abs))
+	}
+	for _, line := range strings.Split(lines, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+		bName := strings.TrimSpace(parts[0])
+		iso := strings.TrimSpace(parts[1])
+		obj := strings.TrimSpace(parts[2])
+		if bName == "main" || bName == "master" {
+			continue
+		}
+		tip, err := time.Parse(time.RFC3339, iso)
+		if err != nil {
+			// some git versions use slightly different format
+			if tip, err = time.Parse("2006-01-02 15:04:05 -0700", strings.ReplaceAll(iso, "T", " ")); err != nil {
+				continue
+			}
+		}
+		if now.Sub(tip) > lookback {
+			continue
+		}
+		// read-only: count commits on branch not reachable from base
+		ahead, rerr := gitOutput(ctx, abs, "rev-list", "--count", base+".."+bName)
+		if rerr != nil {
+			continue
+		}
+		ahead = strings.TrimSpace(ahead)
+		if ahead == "0" {
+			continue
+		}
+		mb, _ := gitOutput(ctx, abs, "merge-base", base, bName)
+		mb = strings.TrimSpace(mb)
+		latest, _ := gitOutput(ctx, abs, "log", "-1", "--pretty=format:%h %s", bName)
+		title := fmt.Sprintf("WIP branch %s (ahead of %s)", bName, base)
+		if multiPath {
+			title = fmt.Sprintf("%s — %s", prefix, title)
+		} else {
+			title = prefix + " — " + title
+		}
+		fields := map[string]string{
+			"path":          abs,
+			"branch":        bName,
+			"base_branch":   base,
+			"merge_base":    mb,
+			"ahead":         ahead,
+			"latest_commit": strings.TrimSpace(latest),
+			"tip_object":    obj,
+			"committer_utc": tip.UTC().Format(time.RFC3339),
+		}
+		summary := fmt.Sprintf("tip=%s, ahead of %s by %s commit(s), merge_base=%s", strings.TrimSpace(latest), base, ahead, mb)
+		out = append(out, StatusItem{
+			DirectiveID: d.ID,
+			ProjectID:   d.ProjectID,
+			Source:      "local-git",
+			Kind:        "branch_wip",
+			Title:       title,
+			Summary:     summary,
+			Severity:    "info",
+			ObservedAt:  c.Clock(),
+			Fields:      fields,
+		})
+	}
+	return out, nil
+}
+
+func resolveBaseBranchName(ctx context.Context, abs string) (string, error) {
+	for _, name := range []string{"main", "master"} {
+		_, err := gitOutput(ctx, abs, "rev-parse", "--verify", name)
+		if err == nil {
+			return name, nil
+		}
+	}
+	return "", nil
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {

@@ -20,6 +20,7 @@ import (
 	"github.com/kurt/slakkr-ai/internal/collectors"
 	"github.com/kurt/slakkr-ai/internal/daybook"
 	"github.com/kurt/slakkr-ai/internal/recipes"
+	"github.com/kurt/slakkr-ai/internal/taskupdate"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 	"github.com/kurt/slakkr-ai/internal/web"
 	"github.com/kurt/slakkr-ai/internal/workflow"
@@ -69,6 +70,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.updateStatus(ctx, args[1:])
 	case "end_day":
 		return a.endDay(ctx, args[1:])
+	case "update_tasks":
+		return a.updateTasks(ctx, args[1:])
 	case "validate":
 		return a.validate(args[1:])
 	case "list-recipes":
@@ -85,7 +88,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 }
 
 func (a *App) usage() error {
-	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|validate|list-recipes|serve|delegation|plan> [flags]")
+	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|update_tasks|validate|list-recipes|serve|delegation|plan> [flags]")
 	return nil
 }
 
@@ -960,6 +963,42 @@ func (a *App) endDay(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.Err, "warning: could not commit userdata: %v\n", err)
 	}
 	fmt.Fprintf(a.Out, "Finalized %s.\n", entry.Path)
+	return nil
+}
+
+func (a *App) updateTasks(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("update_tasks", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	dryRun := fs.Bool("dry-run", false, "print actions without writing signals or proposed-tasks")
+	minConf := fs.Float64("min-confidence", ai.DefaultTaskSignalConfidence, "minimum model confidence to auto-apply assign/ignore")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	progress := newDirectiveProgressTable(a.Out)
+	defer progress.Done()
+	t := a.Now()
+	res, err := taskupdate.Run(ctx, workflow.Deps{
+		Registry:          a.Registry,
+		Now:               a.Now,
+		ExpandRepoPath:    expandRepoPath,
+		OnDirectiveUpdate: progress.Update,
+	}, *userdataDir, taskupdate.Options{
+		DryRun:        *dryRun,
+		MinConfidence: *minConf,
+		Now:           t,
+	})
+	if err != nil {
+		return err
+	}
+	progress.Done()
+	if *dryRun {
+		fmt.Fprintf(a.Out, "update_tasks (dry-run): scanned=%d open_for_ai=%d auto_assigned=%d auto_ignored=%d proposed=%d still_pending=%d\n",
+			res.Scanned, res.OpenForAI, res.AutoAssign, res.AutoIgnore, res.ProposedNew, res.Pending)
+	} else {
+		fmt.Fprintf(a.Out, "update_tasks: scanned=%d open_for_ai=%d auto_assigned=%d auto_ignored=%d proposed=%d still_pending=%d (userdata/signals.yaml, userdata/proposed-tasks.yaml)\n",
+			res.Scanned, res.OpenForAI, res.AutoAssign, res.AutoIgnore, res.ProposedNew, res.Pending)
+	}
 	return nil
 }
 
