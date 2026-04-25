@@ -92,6 +92,49 @@ func TestRegistryRunsManualCollectorsSequentiallyWhenManualAnswerSet(t *testing.
 	}
 }
 
+// seqTestCollector appends a marker when Collect runs; used to assert manual runs before parallel work.
+type seqTestCollector struct {
+	clock func() time.Time
+	mark  string
+	order *[]string
+}
+
+func (c seqTestCollector) Collect(_ context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+	*c.order = append(*c.order, c.mark)
+	return []StatusItem{{
+		DirectiveID: d.ID,
+		Source:      "seq-test",
+		Kind:        "test",
+		Title:       d.Name,
+		Summary:     c.mark,
+		ObservedAt:  c.clock(),
+	}}, nil
+}
+
+func TestRegistryRunsManualBeforeParallelWhenManualAnswerSet(t *testing.T) {
+	clock := func() time.Time { return time.Unix(0, 0).UTC() }
+	reg := NewRegistry(clock)
+	var order []string
+	reg.Register("seq-test", seqTestCollector{clock: clock, mark: "parallel", order: &order})
+	directives := []userdata.Directive{
+		{ID: "m1", Name: "M", Collector: "manual", Enabled: true, Target: map[string]string{"prompt": "q"}},
+		{ID: "p1", Name: "P", Collector: "seq-test", Enabled: true},
+	}
+	opts := &CollectOpts{
+		ManualAnswer: func(_ context.Context, _ userdata.Directive, _ string) (string, error) {
+			order = append(order, "manual")
+			return "ok", nil
+		},
+	}
+	_, err := reg.Collect(context.Background(), directives, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 2 || order[0] != "manual" || order[1] != "parallel" {
+		t.Fatalf("order = %v want [manual parallel]", order)
+	}
+}
+
 func TestLocalGitCollectorResolvesProjectRepoPaths(t *testing.T) {
 	dir := workspaceTempDir(t)
 	fakeGit := filepath.Join(dir, "git")

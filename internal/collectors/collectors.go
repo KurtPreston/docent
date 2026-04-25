@@ -36,7 +36,7 @@ type CollectOpts struct {
 	ExpandRepoPath func(string) string
 	OnDirectiveUpdate func(DirectiveProgress)
 	// ManualAnswer, when set, is called for each manual collector directive so the user can reply (e.g. start_day on a TTY).
-	// Collect runs those directives sequentially after other collectors finish.
+	// Collect runs those directives first (sequentially) so prompts appear before slower collectors (e.g. git/API) run.
 	ManualAnswer func(ctx context.Context, d userdata.Directive, question string) (answer string, err error)
 }
 
@@ -100,17 +100,21 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive,
 		}
 	}
 	var parallel []userdata.Directive
-	var manualAfter []userdata.Directive
+	var manualFirst []userdata.Directive
 	if opts != nil && opts.ManualAnswer != nil {
 		for _, directive := range enabled {
 			if directive.Collector == "manual" {
-				manualAfter = append(manualAfter, directive)
+				manualFirst = append(manualFirst, directive)
 			} else {
 				parallel = append(parallel, directive)
 			}
 		}
 	} else {
 		parallel = enabled
+	}
+	var all []StatusItem
+	for _, d := range manualFirst {
+		all = append(all, r.collectDirective(ctx, d, opts)...)
 	}
 	type directiveResult struct {
 		items []StatusItem
@@ -125,12 +129,8 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive,
 		}(i, directive)
 	}
 	wg.Wait()
-	var all []StatusItem
 	for i := range results {
 		all = append(all, results[i].items...)
-	}
-	for _, d := range manualAfter {
-		all = append(all, r.collectDirective(ctx, d, opts)...)
 	}
 	return all, nil
 }
