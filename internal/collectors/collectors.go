@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/userdata"
@@ -32,6 +33,14 @@ type CollectOpts struct {
 	Projects       userdata.ProjectsFile
 	Config         userdata.ConfigFile
 	ExpandRepoPath func(string) string
+	OnDirectiveUpdate func(DirectiveProgress)
+}
+
+type DirectiveProgress struct {
+	DirectiveID string
+	Description string
+	Status      string
+	Detail      string
 }
 
 type Collector interface {
@@ -74,30 +83,72 @@ func (r *Registry) Names() []string {
 }
 
 func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	var all []StatusItem
+	type directiveResult struct {
+		items []StatusItem
+	}
+	enabled := make([]userdata.Directive, 0, len(directives))
 	for _, directive := range directives {
 		if !directive.Enabled {
 			continue
 		}
+		enabled = append(enabled, directive)
+	}
+	results := make([]directiveResult, len(enabled))
+	var wg sync.WaitGroup
+	for i, directive := range enabled {
 		collector, ok := r.collectors[directive.Collector]
 		if !ok {
-			return all, fmt.Errorf("directive %s uses unknown collector %q", directive.ID, directive.Collector)
+			return nil, fmt.Errorf("directive %s uses unknown collector %q", directive.ID, directive.Collector)
 		}
-		items, err := collector.Collect(ctx, directive, opts)
-		if err != nil {
-			all = append(all, StatusItem{
+		if opts != nil && opts.OnDirectiveUpdate != nil {
+			opts.OnDirectiveUpdate(DirectiveProgress{
 				DirectiveID: directive.ID,
-				ProjectID:   directive.ProjectID,
-				Source:      directive.Collector,
-				Kind:        "collector_error",
-				Title:       directive.Name,
-				Summary:     err.Error(),
-				Severity:    "error",
-				ObservedAt:  r.clock(),
+				Description: directive.Name,
+				Status:      "running",
+				Detail:      "collecting",
 			})
-			continue
 		}
-		all = append(all, items...)
+		wg.Add(1)
+		go func(index int, d userdata.Directive, c Collector) {
+			defer wg.Done()
+			items, err := c.Collect(ctx, d, opts)
+			if err != nil {
+				if opts != nil && opts.OnDirectiveUpdate != nil {
+					opts.OnDirectiveUpdate(DirectiveProgress{
+						DirectiveID: d.ID,
+						Description: d.Name,
+						Status:      "error",
+						Detail:      err.Error(),
+					})
+				}
+				items = []StatusItem{{
+					DirectiveID: d.ID,
+					ProjectID:   d.ProjectID,
+					Source:      d.Collector,
+					Kind:        "collector_error",
+					Title:       d.Name,
+					Summary:     err.Error(),
+					Severity:    "error",
+					ObservedAt:  r.clock(),
+				}}
+				results[index] = directiveResult{items: items}
+				return
+			}
+			if opts != nil && opts.OnDirectiveUpdate != nil {
+				opts.OnDirectiveUpdate(DirectiveProgress{
+					DirectiveID: d.ID,
+					Description: d.Name,
+					Status:      "done",
+					Detail:      fmt.Sprintf("%d item(s)", len(items)),
+				})
+			}
+			results[index] = directiveResult{items: items}
+		}(i, directive, collector)
+	}
+	wg.Wait()
+	var all []StatusItem
+	for i := range results {
+		all = append(all, results[i].items...)
 	}
 	return all, nil
 }

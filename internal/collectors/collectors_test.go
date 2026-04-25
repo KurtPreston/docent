@@ -2,9 +2,12 @@ package collectors
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +76,64 @@ func TestLocalGitCollectorResolvesProjectRepoPaths(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Severity != "warning" {
 		t.Fatalf("expected dirty warning, got %#v", items)
+	}
+}
+
+func TestGoogleCalendarCollectorReadsURLFromCredentialRef(t *testing.T) {
+	now := time.Date(2026, 4, 25, 8, 0, 0, 0, time.UTC)
+	ical := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:20260425T090000Z\r\nSUMMARY:Deep Work\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(ical))
+	}))
+	defer server.Close()
+
+	userdataDir := workspaceTempDir(t)
+	writeFile(t, filepath.Join(userdataDir, ".env"), "SLAKKR_TEST_ICAL_URL="+server.URL+"\n")
+	collector := GoogleCalendarCollector{
+		Clock: func() time.Time { return now },
+		HTTP:  server.Client(),
+	}
+	items, err := collector.Collect(context.Background(), userdata.Directive{
+		ID:        "cal",
+		Name:      "Calendar",
+		Collector: "google-calendar",
+		Enabled:   true,
+		CredentialRefs: map[string]string{
+			"ical_url": "SLAKKR_TEST_ICAL_URL",
+		},
+	}, &CollectOpts{UserdataDir: userdataDir})
+	if err != nil {
+		t.Fatalf("collect calendar: %v", err)
+	}
+	if len(items) != 1 || items[0].Kind != "calendar_event" || items[0].Title != "Deep Work" {
+		t.Fatalf("unexpected calendar items: %#v", items)
+	}
+}
+
+func TestGoogleCalendarCollector403Message(t *testing.T) {
+	now := time.Unix(0, 0).UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer server.Close()
+	collector := GoogleCalendarCollector{
+		Clock: func() time.Time { return now },
+		HTTP:  server.Client(),
+	}
+	_, err := collector.Collect(context.Background(), userdata.Directive{
+		ID:        "cal",
+		Name:      "Test Cal",
+		Collector: "google-calendar",
+		Enabled:   true,
+		Config:    map[string]string{"ical_url": server.URL},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "403") || !strings.Contains(msg, "Re-copy") {
+		t.Fatalf("expected 403 + guidance in error, got: %s", msg)
 	}
 }
 

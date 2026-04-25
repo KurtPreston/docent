@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -22,6 +23,7 @@ import (
 	"github.com/kurt/slakkr-ai/internal/userdata"
 	"github.com/kurt/slakkr-ai/internal/web"
 	"github.com/kurt/slakkr-ai/internal/workflow"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -855,7 +857,11 @@ func (a *App) startDay(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "start_day")
+	progress := newDirectiveProgressTable(a.Out)
+	defer progress.Done()
+	daybookProgress := func(p collectors.DirectiveProgress) { progress.Update(p) }
+	const daybookProgressID = "_slakkr_daybook"
+	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "start_day", progress.Update)
 	if err != nil {
 		return err
 	}
@@ -865,25 +871,73 @@ func (a *App) startDay(ctx context.Context, args []string) error {
 		return err
 	}
 	provider := ai.SelectProvider(cfg.AI, a.AI)
+	daybookProgress(collectors.DirectiveProgress{
+		DirectiveID: daybookProgressID,
+		Description: "Daybook entry",
+		Status:      "running",
+		Detail:      "generating day plan",
+	})
 	output, err := provider.ProposeDayPlan(ctx, input)
 	if err != nil {
+		daybookProgress(collectors.DirectiveProgress{
+			DirectiveID: daybookProgressID,
+			Description: "Daybook entry",
+			Status:      "error",
+			Detail:      err.Error(),
+		})
 		return err
 	}
 	ai.NormalizePlanningOutput(&output)
+	daybookProgress(collectors.DirectiveProgress{
+		DirectiveID: daybookProgressID,
+		Description: "Daybook entry",
+		Status:      "running",
+		Detail:      "writing daybook",
+	})
 	if err := daybook.AppendStatus(entry, input.Statuses); err != nil {
+		daybookProgress(collectors.DirectiveProgress{
+			DirectiveID: daybookProgressID,
+			Description: "Daybook entry",
+			Status:      "error",
+			Detail:      err.Error(),
+		})
 		return err
 	}
 	entry, err = daybook.LoadOrCreate(*userdataDir, input.Date)
 	if err != nil {
+		daybookProgress(collectors.DirectiveProgress{
+			DirectiveID: daybookProgressID,
+			Description: "Daybook entry",
+			Status:      "error",
+			Detail:      err.Error(),
+		})
 		return err
 	}
 	if err := daybook.AppendPlan(entry, output); err != nil {
+		daybookProgress(collectors.DirectiveProgress{
+			DirectiveID: daybookProgressID,
+			Description: "Daybook entry",
+			Status:      "error",
+			Detail:      err.Error(),
+		})
 		return err
 	}
 	planFile := workflow.DailyPlanFromOutput(input.Date, output, a.Now())
 	if err := store.SaveDailyPlan(planFile); err != nil {
+		daybookProgress(collectors.DirectiveProgress{
+			DirectiveID: daybookProgressID,
+			Description: "Daybook entry",
+			Status:      "error",
+			Detail:      err.Error(),
+		})
 		return err
 	}
+	daybookProgress(collectors.DirectiveProgress{
+		DirectiveID: daybookProgressID,
+		Description: "Daybook entry",
+		Status:      "done",
+		Detail:      "plan and daybook updated",
+	})
 	fmt.Fprintf(a.Out, "Updated %s with %d status item(s).\n", entry.Path, len(input.Statuses))
 	return nil
 }
@@ -896,7 +950,7 @@ func (a *App) updateStatus(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "update_status")
+	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "update_status", nil)
 	if err != nil {
 		return err
 	}
@@ -915,7 +969,7 @@ func (a *App) endDay(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "end_day")
+	input, entry, err := a.planningInput(ctx, *userdataDir, *date, "end_day", nil)
 	if err != nil {
 		return err
 	}
@@ -946,7 +1000,11 @@ func (a *App) endDay(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a *App) planningInput(ctx context.Context, userdataDir, dateString, mode string) (ai.PlanningInput, daybook.Entry, error) {
+func (a *App) planningInput(
+	ctx context.Context,
+	userdataDir, dateString, mode string,
+	onDirectiveUpdate func(collectors.DirectiveProgress),
+) (ai.PlanningInput, daybook.Entry, error) {
 	date, err := time.Parse("2006-01-02", dateString)
 	if err != nil {
 		return ai.PlanningInput{}, daybook.Entry{}, err
@@ -955,7 +1013,138 @@ func (a *App) planningInput(ctx context.Context, userdataDir, dateString, mode s
 		Registry:       a.Registry,
 		Now:            a.Now,
 		ExpandRepoPath: expandRepoPath,
+		OnDirectiveUpdate: onDirectiveUpdate,
 	}, userdataDir, date, mode)
+}
+
+type directiveProgressTable struct {
+	out           io.Writer
+	mu            sync.Mutex
+	order         []string
+	rows          map[string]collectors.DirectiveProgress
+	interactive   bool
+	colorEnabled  bool
+	renderedLines int
+}
+
+func newDirectiveProgressTable(out io.Writer) *directiveProgressTable {
+	interactive := false
+	if f, ok := out.(*os.File); ok {
+		interactive = term.IsTerminal(int(f.Fd()))
+	}
+	return &directiveProgressTable{
+		out:          out,
+		rows:         map[string]collectors.DirectiveProgress{},
+		interactive:  interactive,
+		colorEnabled: interactive && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb",
+	}
+}
+
+func (t *directiveProgressTable) Update(p collectors.DirectiveProgress) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, exists := t.rows[p.DirectiveID]; !exists {
+		t.order = append(t.order, p.DirectiveID)
+	}
+	t.rows[p.DirectiveID] = p
+	t.renderLocked()
+}
+
+func (t *directiveProgressTable) Done() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.order) == 0 {
+		return
+	}
+	if t.interactive {
+		fmt.Fprintln(t.out)
+		return
+	}
+	fmt.Fprintln(t.out)
+}
+
+func (t *directiveProgressTable) renderLocked() {
+	lines := 2 + len(t.order)
+	if t.interactive && t.renderedLines > 0 {
+		fmt.Fprintf(t.out, "\x1b[%dA", t.renderedLines)
+	}
+	t.printTableLine("Task Status")
+	t.printTableLine("Indicator | Task Description | Status")
+	for _, id := range t.order {
+		row := t.rows[id]
+		t.printTableLine(fmt.Sprintf("%s | %s | %s", t.statusIcon(row.Status), row.Description, t.statusLabel(row)))
+	}
+	if !t.interactive {
+		fmt.Fprintln(t.out)
+	}
+	t.renderedLines = lines
+}
+
+func (t *directiveProgressTable) printTableLine(line string) {
+	if !t.interactive {
+		fmt.Fprintln(t.out, line)
+		return
+	}
+	fmt.Fprintf(t.out, "\x1b[2K\r%s\n", line)
+}
+
+func (t *directiveProgressTable) statusIcon(status string) string {
+	icon := "⟳"
+	switch status {
+	case "done":
+		icon = "✓"
+	case "error":
+		icon = "✗"
+	}
+	if !t.colorEnabled {
+		return icon
+	}
+	switch status {
+	case "done":
+		return colorize(icon, ansiGreen)
+	case "error":
+		return colorize(icon, ansiRed)
+	default:
+		return colorize(icon, ansiYellow)
+	}
+}
+
+func (t *directiveProgressTable) statusLabel(p collectors.DirectiveProgress) string {
+	label := ""
+	if strings.TrimSpace(p.Detail) == "" {
+		switch p.Status {
+		case "done":
+			label = "done"
+		case "error":
+			label = "error"
+		default:
+			label = "running"
+		}
+	} else {
+		label = p.Detail
+	}
+	if !t.colorEnabled {
+		return label
+	}
+	switch p.Status {
+	case "done":
+		return colorize(label, ansiGreen)
+	case "error":
+		return colorize(label, ansiRed)
+	default:
+		return colorize(label, ansiYellow)
+	}
+}
+
+const (
+	ansiReset  = "\x1b[0m"
+	ansiRed    = "\x1b[31m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+)
+
+func colorize(value, color string) string {
+	return color + value + ansiReset
 }
 
 func (a *App) serve(ctx context.Context, args []string) error {

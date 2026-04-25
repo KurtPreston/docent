@@ -17,6 +17,7 @@ type Deps struct {
 	Registry       *collectors.Registry
 	Now            func() time.Time
 	ExpandRepoPath func(string) string
+	OnDirectiveUpdate func(collectors.DirectiveProgress)
 }
 
 // BuildPlanningInput loads userdata, runs collectors, applies cache and attention, and loads the daybook entry.
@@ -56,6 +57,7 @@ func BuildPlanningInput(ctx context.Context, d Deps, userdataDir string, date ti
 		Projects:       projects,
 		Config:         cfg,
 		ExpandRepoPath: expand,
+		OnDirectiveUpdate: d.OnDirectiveUpdate,
 	}
 	statuses, err := d.Registry.Collect(ctx, directives.Directives, collectOpts)
 	if err != nil {

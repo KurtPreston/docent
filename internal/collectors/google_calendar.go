@@ -29,17 +29,21 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 	if rawURL == "" {
 		rawURL = strings.TrimSpace(directive.Config["url"])
 	}
-	if rawURL == "" {
-		return nil, fmt.Errorf("config.ical_url is required (secret iCal link from Google Calendar settings)")
-	}
 	tokenKey := directive.CredentialRefs["ical_url"]
 	if tokenKey == "" {
 		tokenKey = directive.CredentialRefs["url"]
 	}
 	if tokenKey != "" {
-		if v := userdata.ResolveEnv(opts.UserdataDir, tokenKey); v != "" {
+		userdataDir := ""
+		if opts != nil {
+			userdataDir = opts.UserdataDir
+		}
+		if v := userdata.ResolveEnv(userdataDir, tokenKey); v != "" {
 			rawURL = v
 		}
+	}
+	if rawURL == "" {
+		return nil, fmt.Errorf("config.ical_url is required (secret iCal link from Google Calendar settings)")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -55,7 +59,7 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("calendar ical fetch %s", res.Status)
+		return nil, calendarIcalHTTPError(res)
 	}
 	events := parseICSEvents(string(body), c.Clock(), 14)
 	now := c.Clock()
@@ -88,6 +92,25 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 		})
 	}
 	return items, nil
+}
+
+func calendarIcalHTTPError(res *http.Response) error {
+	if res == nil {
+		return fmt.Errorf("iCal feed: empty response")
+	}
+	switch res.StatusCode {
+	case http.StatusForbidden:
+		return fmt.Errorf("iCal feed returned 403 Forbidden. Google is rejecting this URL: the secret link may be invalid, reset, or revoked. Re-copy \"Secret address in iCal format\" from the calendar's settings (Integrate calendar) into userdata/.env (or the matching SLAKKR_*_ICAL_URL in your environment)")
+	case http.StatusNotFound:
+		return fmt.Errorf("iCal feed returned 404 Not Found: the URL may be wrong or the calendar export was removed")
+	case http.StatusUnauthorized:
+		return fmt.Errorf("iCal feed returned 401 Unauthorized: the feed URL or token in the link may be invalid or expired")
+	default:
+		if res.StatusCode >= 500 {
+			return fmt.Errorf("iCal feed server error: %s (try again later)", res.Status)
+		}
+		return fmt.Errorf("iCal feed request failed: %s", res.Status)
+	}
 }
 
 type icsEvent struct {
