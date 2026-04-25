@@ -32,7 +32,10 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 	if rawURL == "" {
 		return nil, fmt.Errorf("config.ical_url is required (secret iCal link from Google Calendar settings)")
 	}
-	tokenKey := directive.CredentialRefs["url"]
+	tokenKey := directive.CredentialRefs["ical_url"]
+	if tokenKey == "" {
+		tokenKey = directive.CredentialRefs["url"]
+	}
 	if tokenKey != "" {
 		if v := userdata.ResolveEnv(opts.UserdataDir, tokenKey); v != "" {
 			rawURL = v
