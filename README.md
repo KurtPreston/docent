@@ -10,6 +10,7 @@ The current implementation is a Go CLI with reusable packages behind the command
 go test ./...
 go run ./cmd/slakkr list-recipes
 go run ./cmd/slakkr setup
+go run ./cmd/slakkr configure_host
 go run ./cmd/slakkr add_project
 go run ./cmd/slakkr add_task
 go run ./cmd/slakkr start_day
@@ -39,6 +40,7 @@ Setup asks for a human-readable name, then generates the stable directive id. If
 ## Commands
 
 - `setup` initializes `userdata`, asks about remote persistence, discovers recipes, and can interactively instantiate directives.
+- `configure_host` configures host-local defaults (such as `code_home`) and can import projects from `CODE_HOME`.
 - `add_project` adds or updates one project in `userdata/projects.yaml`.
 - `add_task` adds or updates one task in `userdata/tasks.yaml`.
 - `start_day` gathers status, creates today's daybook entry, and proposes focus blocks and delegation candidates.
@@ -53,6 +55,7 @@ The `scripts/` wrappers match the initial product sketch:
 
 ```sh
 scripts/setup
+scripts/configure_host
 scripts/add_project
 scripts/add_task
 scripts/start_day

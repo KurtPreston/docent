@@ -115,6 +115,13 @@ func (s Store) LoadConfig() (ConfigFile, error) {
 	return file, err
 }
 
+func (s Store) SaveConfig(file ConfigFile) error {
+	if err := file.Validate(); err != nil {
+		return err
+	}
+	return writeYAML(filepath.Join(s.Root, "config.yaml"), file)
+}
+
 func (s Store) ValidateAll() error {
 	projects, err := s.LoadProjects()
 	if err != nil {

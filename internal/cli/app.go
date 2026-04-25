@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/kurt/slakkr-ai/internal/ai"
 	"github.com/kurt/slakkr-ai/internal/collectors"
 	"github.com/kurt/slakkr-ai/internal/daybook"
@@ -50,6 +52,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "setup":
 		return a.setup(ctx, args[1:])
+	case "configure_host":
+		return a.configureHost(ctx, args[1:])
 	case "add_project":
 		return a.addProject(ctx, args[1:])
 	case "add_task":
@@ -70,7 +74,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 }
 
 func (a *App) usage() error {
-	fmt.Fprintln(a.Out, "Usage: slakkr <setup|add_project|add_task|start_day|update_status|end_day|validate|list-recipes> [flags]")
+	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|validate|list-recipes> [flags]")
 	return nil
 }
 
@@ -443,6 +447,106 @@ func (a *App) addProject(ctx context.Context, args []string) error {
 	return nil
 }
 
+func (a *App) configureHost(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("configure_host", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	hostFlag := fs.String("host", "", "host id (defaults to SLAKKR_HOST or hostname)")
+	codeHomeFlag := fs.String("code-home", "", "default code home (defaults to CODE_HOME)")
+	nonInteractive := fs.Bool("yes", false, "accept defaults")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	store := userdata.NewStore(*userdataDir)
+	store.GitClient = a.Git
+	if err := store.Ensure(ctx); err != nil {
+		return err
+	}
+	hostID := strings.TrimSpace(*hostFlag)
+	if hostID == "" {
+		var err error
+		hostID, err = userdata.CurrentHostID()
+		if err != nil {
+			return err
+		}
+	} else {
+		var err error
+		hostID, err = userdata.SanitizeHostKey(hostID)
+		if err != nil {
+			return err
+		}
+	}
+	projects, err := store.LoadProjects()
+	if err != nil {
+		return err
+	}
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.Hosts == nil {
+		cfg.Hosts = map[string]userdata.HostProfile{}
+	}
+	prompter := StdioPrompter{In: a.In, Out: a.Out}
+	codeHome := strings.TrimSpace(*codeHomeFlag)
+	if codeHome == "" {
+		codeHome = strings.TrimSpace(os.Getenv(userdata.EnvCodeHome))
+	}
+	codeHome = expandRepoPath(codeHome)
+	if !*nonInteractive {
+		currentDefault := codeHome
+		if currentDefault == "" {
+			currentDefault = userdata.EffectiveCodeHome(cfg, hostID)
+		}
+		entered, err := prompter.Ask("Code home for host "+hostID, currentDefault)
+		if err != nil {
+			return err
+		}
+		codeHome = expandRepoPath(entered)
+	}
+	cfg.Hosts[hostID] = userdata.HostProfile{CodeHome: codeHome}
+	if err := store.SaveConfig(cfg); err != nil {
+		return err
+	}
+
+	importedCount := 0
+	if codeHome != "" {
+		dirs, err := immediateSubdirs(codeHome)
+		if err != nil {
+			return err
+		}
+		selected, err := selectFoldersForImport(dirs, projects, hostID, *nonInteractive, prompter, a.In, a.Out)
+		if err != nil {
+			return err
+		}
+		for _, dir := range dirs {
+			if !selected[dir] {
+				continue
+			}
+			if hostHasPath(projects, hostID, dir) {
+				continue
+			}
+			project := importedProjectFromDir(projects, hostID, dir)
+			upsertProject(&projects, project)
+			importedCount++
+		}
+		if importedCount > 0 {
+			if err := store.SaveProjects(projects); err != nil {
+				return err
+			}
+		}
+	}
+	if err := store.CommitAll(ctx, "Configure slakkr host "+hostID); err != nil {
+		fmt.Fprintf(a.Err, "warning: could not commit userdata: %v\n", err)
+	}
+	fmt.Fprintf(a.Out, "Configured host %s.\n", hostID)
+	if codeHome != "" {
+		fmt.Fprintf(a.Out, "Code home: %s\n", codeHome)
+	}
+	fmt.Fprintf(a.Out, "Imported %d project(s).\n", importedCount)
+	return nil
+}
+
 func (a *App) addTask(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("add_task", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
@@ -619,6 +723,119 @@ func dedupeStringKeepOrder(values []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func immediateSubdirs(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		out = append(out, filepath.Join(root, entry.Name()))
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func selectFoldersForImport(
+	dirs []string,
+	projects userdata.ProjectsFile,
+	hostID string,
+	nonInteractive bool,
+	prompter Prompter,
+	in io.Reader,
+	out io.Writer,
+) (map[string]bool, error) {
+	selected := map[string]bool{}
+	if len(dirs) == 0 {
+		return selected, nil
+	}
+	if nonInteractive {
+		for _, dir := range dirs {
+			if hostHasPath(projects, hostID, dir) {
+				selected[dir] = true
+			}
+		}
+		return selected, nil
+	}
+	if in == os.Stdin && out == os.Stdout {
+		var options []string
+		dirByOption := map[string]string{}
+		var defaults []string
+		for _, dir := range dirs {
+			label := fmt.Sprintf("%s (%s)", filepath.Base(dir), dir)
+			options = append(options, label)
+			dirByOption[label] = dir
+			if hostHasPath(projects, hostID, dir) {
+				defaults = append(defaults, label)
+			}
+		}
+		var chosen []string
+		prompt := &survey.MultiSelect{
+			Message: "Select folders to import as projects",
+			Options: options,
+			Default: defaults,
+		}
+		if err := survey.AskOne(prompt, &chosen, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
+			return nil, err
+		}
+		for _, option := range chosen {
+			if dir := dirByOption[option]; dir != "" {
+				selected[dir] = true
+			}
+		}
+		return selected, nil
+	}
+	// Fallback for tests or non-terminal stdin: prompt one directory at a time.
+	for _, dir := range dirs {
+		alreadyTracked := hostHasPath(projects, hostID, dir)
+		prompt := fmt.Sprintf("Import project %s", filepath.Base(dir))
+		choice, err := prompter.Confirm(prompt, alreadyTracked)
+		if err != nil {
+			return nil, err
+		}
+		if choice {
+			selected[dir] = true
+		}
+	}
+	return selected, nil
+}
+
+func hostHasPath(projects userdata.ProjectsFile, hostID, path string) bool {
+	path = expandRepoPath(path)
+	for _, project := range projects.Projects {
+		for _, repo := range project.Repos {
+			for _, existing := range userdata.RepoWorktreePaths(repo, hostID) {
+				if expandRepoPath(existing) == path {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func importedProjectFromDir(projects userdata.ProjectsFile, hostID, dir string) userdata.Project {
+	name := filepath.Base(dir)
+	id := slugID(name)
+	project := userdata.Project{
+		ID:          id,
+		Name:        name,
+		Description: "Imported from code home",
+		Repos: []userdata.Repo{{
+			ID:          id,
+			Name:        name,
+			PathsByHost: map[string][]string{hostID: {expandRepoPath(dir)}},
+		}},
+	}
+	if idx := projectIndexByID(projects.Projects, id); idx >= 0 {
+		project = mergeProjectRepos(projects.Projects[idx], project, hostID)
+	}
+	return project
 }
 
 func (a *App) startDay(ctx context.Context, args []string) error {

@@ -115,6 +115,45 @@ func TestAddProjectUsesGitOriginAsRemoteDefault(t *testing.T) {
 	}
 }
 
+func TestConfigureHostSetsCodeHomeAndImportsDirectories(t *testing.T) {
+	root := workspaceTempDir(t)
+	userdataDir := filepath.Join(root, "userdata")
+	codeHome := filepath.Join(root, "code-home")
+	if err := os.MkdirAll(filepath.Join(codeHome, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(codeHome, "beta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SLAKKR_HOST", "dev-machine")
+	t.Setenv("CODE_HOME", codeHome)
+
+	var out bytes.Buffer
+	app := New(&out, &bytes.Buffer{}, strings.NewReader("\ny\nn\n"))
+	app.Git = noopGit{}
+
+	if err := app.Run(context.Background(), []string{"configure_host", "--userdata", userdataDir}); err != nil {
+		t.Fatalf("configure_host: %v", err)
+	}
+	configContent, err := os.ReadFile(filepath.Join(userdataDir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configContent), "dev-machine:") || !strings.Contains(string(configContent), expandRepoPath(codeHome)) {
+		t.Fatalf("config.yaml should contain host and code_home, got:\n%s", configContent)
+	}
+	projectsContent, err := os.ReadFile(filepath.Join(userdataDir, "projects.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(projectsContent), "id: alpha") || !strings.Contains(string(projectsContent), expandRepoPath(filepath.Join(codeHome, "alpha"))) {
+		t.Fatalf("projects.yaml should contain imported alpha project, got:\n%s", projectsContent)
+	}
+	if strings.Contains(string(projectsContent), "id: beta") {
+		t.Fatalf("projects.yaml should not contain beta project, got:\n%s", projectsContent)
+	}
+}
+
 func TestPromptDirectiveWritesSecretsToUserdataEnv(t *testing.T) {
 	root := workspaceTempDir(t)
 	prompter := StdioPrompter{
