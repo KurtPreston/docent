@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,9 @@ func (s Store) Ensure(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Join(s.Root, "status-cache"), 0o755); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Join(s.Root, "plans"), 0o755); err != nil {
+		return err
+	}
 	if err := writeDefaultYAML(filepath.Join(s.Root, "projects.yaml"), ProjectsFile{}); err != nil {
 		return err
 	}
@@ -52,7 +56,11 @@ func (s Store) Ensure(ctx context.Context) error {
 		Daybook: DaybookConfig{
 			DefaultSections: []string{"Plan", "Status Updates", "Delegation Candidates", "Reflection"},
 		},
+		AI: AIConfig{Provider: "rule-based"},
 	}); err != nil {
+		return err
+	}
+	if err := writeDefaultYAML(filepath.Join(s.Root, "delegations.yaml"), DelegationsFile{}); err != nil {
 		return err
 	}
 	if err := writeDefaultText(filepath.Join(s.Root, ".gitignore"), ".env\n"); err != nil {
@@ -130,7 +138,8 @@ func (s Store) ValidateAll() error {
 	if err := projects.Validate(); err != nil {
 		return fmt.Errorf("validate projects: %w", err)
 	}
-	if _, err := s.LoadTasks(projects); err != nil {
+	tasks, err := s.LoadTasks(projects)
+	if err != nil {
 		return fmt.Errorf("validate tasks: %w", err)
 	}
 	if _, err := s.LoadDirectives(projects); err != nil {
@@ -142,6 +151,9 @@ func (s Store) ValidateAll() error {
 	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("validate config: %w", err)
+	}
+	if _, err := s.LoadDelegations(tasks); err != nil {
+		return fmt.Errorf("validate delegations: %w", err)
 	}
 	return nil
 }
@@ -258,4 +270,48 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
+}
+
+func (s Store) LoadDelegations(tasks TasksFile) (DelegationsFile, error) {
+	var file DelegationsFile
+	path := filepath.Join(s.Root, "delegations.yaml")
+	err := readYAML(path, &file)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return DelegationsFile{}, nil
+		}
+		return file, err
+	}
+	return file, file.Validate(tasks)
+}
+
+func (s Store) SaveDelegations(tasks TasksFile, file DelegationsFile) error {
+	if err := file.Validate(tasks); err != nil {
+		return err
+	}
+	return writeYAML(filepath.Join(s.Root, "delegations.yaml"), file)
+}
+
+func (s Store) DailyPlanPath(date time.Time) string {
+	return filepath.Join(s.Root, "plans", date.Format("2006-01-02")+".yaml")
+}
+
+func (s Store) LoadDailyPlan(date time.Time) (DailyPlanFile, error) {
+	var file DailyPlanFile
+	err := readYAML(s.DailyPlanPath(date), &file)
+	return file, err
+}
+
+func (s Store) SaveDailyPlan(file DailyPlanFile) error {
+	if err := file.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(s.Root, "plans"), 0o755); err != nil {
+		return err
+	}
+	date, err := time.Parse("2006-01-02", file.Date)
+	if err != nil {
+		return err
+	}
+	return writeYAML(s.DailyPlanPath(date), file)
 }

@@ -124,6 +124,24 @@ type HostProfile struct {
 type ConfigFile struct {
 	Daybook DaybookConfig          `yaml:"daybook"`
 	Hosts   map[string]HostProfile `yaml:"hosts,omitempty"`
+	AI      AIConfig               `yaml:"ai,omitempty"`
+}
+
+// AIConfig selects the planning/reflection provider (rule-based default).
+type AIConfig struct {
+	Provider string           `yaml:"provider,omitempty"`
+	Ollama   AIProviderOllama `yaml:"ollama,omitempty"`
+	Cursor   AIProviderCursor `yaml:"cursor,omitempty"`
+}
+
+type AIProviderOllama struct {
+	BaseURL string `yaml:"base_url,omitempty"`
+	Model   string `yaml:"model,omitempty"`
+}
+
+type AIProviderCursor struct {
+	Command string   `yaml:"command,omitempty"`
+	Args    []string `yaml:"args,omitempty"`
 }
 
 type YAMLDateTime struct {
@@ -201,7 +219,19 @@ func (f ConfigFile) Validate() error {
 			problems = append(problems, "hosts has invalid key "+hostKey)
 		}
 	}
+	if f.AI.Provider != "" && !validAIProvider(f.AI.Provider) {
+		problems = append(problems, "ai.provider is invalid")
+	}
 	return validationResult(problems)
+}
+
+func validAIProvider(p string) bool {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), "_", "-")) {
+	case "rule-based", "ollama", "cursor":
+		return true
+	default:
+		return false
+	}
 }
 
 func (f TasksFile) Validate(projects ProjectsFile) error {
@@ -328,4 +358,68 @@ func validDelegationState(state DelegationState) bool {
 func IsValidationError(err error) bool {
 	var validationErr ValidationError
 	return errors.As(err, &validationErr)
+}
+
+type DelegationsFile struct {
+	Delegations []AgentWorkEntry `yaml:"delegations"`
+}
+
+type AgentWorkEntry struct {
+	ID             string         `yaml:"id"`
+	TaskID         string         `yaml:"task_id,omitempty"`
+	State          AgentWorkState `yaml:"state"`
+	Title          string         `yaml:"title"`
+	Prompt         string         `yaml:"prompt,omitempty"`
+	ExpectedOutput string         `yaml:"expected_output,omitempty"`
+	ReviewCriteria string         `yaml:"review_criteria,omitempty"`
+	Context        string         `yaml:"context,omitempty"`
+	CreatedAt      YAMLDateTime   `yaml:"created_at,omitempty"`
+}
+
+type AgentWorkState string
+
+const (
+	AgentWorkCandidate   AgentWorkState = "candidate"
+	AgentWorkReady       AgentWorkState = "ready"
+	AgentWorkActive      AgentWorkState = "active"
+	AgentWorkNeedsReview AgentWorkState = "needs_review"
+	AgentWorkAccepted    AgentWorkState = "accepted"
+	AgentWorkRejected    AgentWorkState = "rejected"
+	AgentWorkSuperseded  AgentWorkState = "superseded"
+)
+
+func (f DelegationsFile) Validate(tasks TasksFile) error {
+	var problems []string
+	taskIDs := map[string]bool{}
+	for _, t := range tasks.Tasks {
+		taskIDs[t.ID] = true
+	}
+	seen := map[string]bool{}
+	for i, d := range f.Delegations {
+		path := fmt.Sprintf("delegations[%d]", i)
+		problems = append(problems, validateID(path+".id", d.ID)...)
+		if d.Title == "" {
+			problems = append(problems, path+".title is required")
+		}
+		if !validAgentWorkState(d.State) {
+			problems = append(problems, path+".state is invalid")
+		}
+		if d.TaskID != "" && !taskIDs[d.TaskID] {
+			problems = append(problems, path+".task_id references unknown task")
+		}
+		if seen[d.ID] {
+			problems = append(problems, path+".id is duplicated")
+		}
+		seen[d.ID] = true
+	}
+	return validationResult(problems)
+}
+
+func validAgentWorkState(s AgentWorkState) bool {
+	switch s {
+	case AgentWorkCandidate, AgentWorkReady, AgentWorkActive, AgentWorkNeedsReview, AgentWorkAccepted, AgentWorkRejected, AgentWorkSuperseded:
+		return true
+	default:
+		return false
+	}
 }
