@@ -1,0 +1,10 @@
+projects:
+  - id: slakkr-ai
+    name: slakkr-ai
+    description: Local-first attention governor (dogfood)
+    repos:
+      - id: slakkr-ai
+        name: slakkr-ai
+        paths_by_host:
+          YOUR_HOST:
+            - /Users/kurt/Code/slakkr-ai

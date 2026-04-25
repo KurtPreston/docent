@@ -20,6 +20,8 @@ go run ./cmd/slakkr end_day
 
 The tool writes user-owned data under `userdata/`. That directory is gitignored by this repo and initialized as its own local git repository. Setup asks whether to add a remote for `userdata`; local-only remains the default.
 
+To dogfood quickly, copy [examples/dogfood/](examples/dogfood/) into `userdata/` (adjust `YOUR_HOST` and paths) after `setup`.
+
 ## Data Layout
 
 - `recipes/` contains reusable directive recipes that can be shared by the public project or an organization-specific fork.

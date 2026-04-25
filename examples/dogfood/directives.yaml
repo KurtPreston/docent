@@ -1,0 +1,25 @@
+directives:
+  - id: slakkr-local-git
+    recipe_id: local-git-repository-status
+    name: slakkr-ai working tree
+    collector: local-git
+    enabled: true
+    schedule: every-status-check
+    project_id: slakkr-ai
+    target:
+      project_id: slakkr-ai
+      repo_id: slakkr-ai
+    summary_prompt: Summarize local git state and whether uncommitted work needs attention today.
+  - id: slakkr-gitea-activity
+    recipe_id: gitea-repository-discovery
+    name: Personal Gitea activity
+    collector: gitea
+    enabled: true
+    schedule: every-status-check
+    target:
+      owner: YOUR_GITEA_USER
+    config:
+      base_url: https://gitea.example.com
+    credential_refs:
+      token: SLAKKR_SLAKKR_GITEA_TOKEN
+    summary_prompt: Summarize recent repo activity relevant to personal projects.
