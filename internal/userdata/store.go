@@ -174,6 +174,9 @@ func (s Store) LoadSignals(projects ProjectsFile, tasks TasksFile) (SignalsFile,
 	var file SignalsFile
 	err := readYAML(filepath.Join(s.Root, "signals.yaml"), &file)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return SignalsFile{}, nil
+		}
 		return file, err
 	}
 	return file, file.ValidateWithProjects(projects, tasks)

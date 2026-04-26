@@ -11,6 +11,7 @@ The first useful milestone is daily personal use. The initial project is **slakk
 ## Technical anchors
 
 - `README.md` — userdata layout, recipes/directives, daybook, AI boundary
+- `docs/Best Practices.md` — streaming AI output, read-only collectors, CLI habits
 - `internal/userdata/models.go` — projects, tasks, directives, config
 - `internal/collectors/` — normalized `StatusItem` and collectors
 - `internal/ai/` — `PlanningInput` / `PlanningOutput`, providers

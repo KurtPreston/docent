@@ -59,7 +59,7 @@ Setup asks for a human-readable name, then generates the stable directive id. If
 - `start_day` gathers status, creates today's daybook entry, and proposes focus blocks and delegation candidates.
 - `update_status` gathers status and appends a status snapshot to today's daybook.
 - `end_day` gathers final status, appends reflection prompts, and attempts to commit `userdata`.
-- `update_tasks` runs the same read-only status collectors as the daybook flow, classifies new work signals, updates `userdata/signals.yaml`, and can append to `userdata/proposed-tasks.yaml` (it does not modify `tasks.yaml` automatically). Use `--dry-run` to preview.
+- `update_tasks` runs the same read-only status collectors as the daybook flow, classifies new work signals, updates `userdata/signals.yaml`, and can append to `userdata/proposed-tasks.yaml` (it does not modify `tasks.yaml` automatically). **After a successful (non-dry) run,** it **walks any pending rows in** `proposed-tasks.yaml` in the terminal: create a real task, link to an existing task, dismiss, or skip. Use `--no-resolve` to skip that step, and `--dry-run` to avoid writing and skip the review.
 - `validate` checks user data schemas and references.
 - `list-recipes` shows reusable recipes available in this checkout or fork.
 - `serve` runs a small local web UI (JSON APIs for planning input, saved plan, delegations).
@@ -98,3 +98,5 @@ scripts/end_day
 ## AI Boundary
 
 Deterministic code loads YAML, validates schemas, discovers recipes, gathers status, writes daybook files, and commits user data. AI providers synthesize that bounded context into plans, reflection questions, and delegation suggestions. The default provider is rule-based and deterministic for tests; `internal/ai` also supports **Ollama** (HTTP) and **Cursor** (`cursor-agent` CLI). See [docs/MCP.md](docs/MCP.md) for optional MCP evaluation.
+
+For **streaming Ollama output**, **read-only collectors**, and consistent terminal behavior, see [docs/Best Practices.md](docs/Best%20Practices.md).

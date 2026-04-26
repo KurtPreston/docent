@@ -163,9 +163,9 @@ func (p OllamaProvider) run(ctx context.Context, instruction string, input Plann
 	return ParsePlanningOutput([]byte(parsed.Message.Content))
 }
 
-// ClassifyTaskSignals uses a single non-streaming JSON response for reliable parsing.
+// ClassifyTaskSignals uses streaming chat, matching ProposeDayPlan, so the CLI can show live output on stderr.
 func (p OllamaProvider) ClassifyTaskSignals(ctx context.Context, in TaskSignalsInput) (TaskSignalsOutput, error) {
-	instruction := "For each open signal, choose an action: ignore (noise), assign_task (map to an existing task_id from the input), propose_task (suggest a new task for the user to confirm later), or pending (uncertain). Prefer assign_task when a task link or title clearly matches. Never invent task_ids that are not in tasks. Stay within the JSON schema."
+	instruction := "For each open signal, choose an action: ignore (noise), assign_task (map to an existing task_id from the input), propose_task (suggest a new task for the user to confirm later), or pending (uncertain). Prefer assign_task when a task link or title clearly matches. Never invent task_ids that are not in tasks. Return a single JSON object with key: decisions (array of objects with signal_id, action, task_id, confidence, reason, and optional proposed_* when proposing a task). Valid actions: ignore, assign_task, propose_task, pending."
 	payload, err := BuildTaskSignalsPrompt(instruction, in)
 	if err != nil {
 		return TaskSignalsOutput{}, err
@@ -175,8 +175,7 @@ func (p OllamaProvider) ClassifyTaskSignals(ctx context.Context, in TaskSignalsI
 		Messages: []ollamaMsg{
 			{Role: "user", Content: payload},
 		},
-		Stream: false,
-		Format: "json",
+		Stream: true,
 	})
 	if err != nil {
 		return TaskSignalsOutput{}, err
@@ -215,13 +214,51 @@ func (p OllamaProvider) ClassifyTaskSignals(ctx context.Context, in TaskSignalsI
 		}
 		return TaskSignalsOutput{}, fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(errBody.String()))
 	}
-	var parsed ollamaChatResponse
-	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
-		return TaskSignalsOutput{}, err
+	decoder := json.NewDecoder(res.Body)
+	var content strings.Builder
+	streamChunks := make([]ollamaChatStreamResponse, 0, 128)
+	for {
+		var chunk ollamaChatStreamResponse
+		if err := decoder.Decode(&chunk); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return TaskSignalsOutput{}, err
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if in.DebugDir != "" {
+				writeOllamaDebugLog(in.DebugDir, "error", map[string]any{
+					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+					"error":     fmt.Sprintf("ollama task-signals stream parse: %v", err),
+				})
+			}
+			return TaskSignalsOutput{}, fmt.Errorf("ollama task-signals stream: %w", err)
+		}
+		streamChunks = append(streamChunks, chunk)
+		if chunk.Message.Thinking != "" {
+			if in.StreamOut != nil {
+				_, _ = io.WriteString(in.StreamOut, chunk.Message.Thinking)
+			}
+		}
+		if chunk.Message.Content != "" {
+			content.WriteString(chunk.Message.Content)
+			if in.StreamOut != nil {
+				_, _ = io.WriteString(in.StreamOut, chunk.Message.Content)
+			}
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	parsed := ollamaChatResponse{
+		Message: ollamaMsg{Content: content.String()},
 	}
 	if in.DebugDir != "" {
 		writeOllamaDebugLog(in.DebugDir, "task-signals-response", map[string]any{
 			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
+			"status":          res.Status,
+			"status_code":     res.StatusCode,
+			"response_raw":    streamChunks,
 			"message_content": parsed.Message.Content,
 		})
 	}

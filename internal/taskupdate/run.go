@@ -3,6 +3,7 @@ package taskupdate
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"time"
 
@@ -14,9 +15,13 @@ import (
 
 // Options controls update_tasks runs.
 type Options struct {
-	DryRun          bool
-	MinConfidence   float64
-	Now             time.Time
+	DryRun        bool
+	MinConfidence float64
+	Now           time.Time
+	// BeforeClassify runs after collectors finish and before any AI call (e.g. close the directive progress UI).
+	BeforeClassify func()
+	// OllamaStreamOut receives streamed tokens when using the Ollama provider; nil means no streaming sink.
+	OllamaStreamOut io.Writer
 }
 
 // Result summarizes a run.
@@ -97,6 +102,9 @@ func Run(ctx context.Context, d workflow.Deps, userdataDir string, opts Options)
 		}
 		return res, nil
 	}
+	if opts.BeforeClassify != nil {
+		opts.BeforeClassify()
+	}
 	classifier := ai.SelectTaskSignalClassifier(ai.SelectProvider(cfg.AI, nil))
 	aiIn := ai.TaskSignalsInput{
 		Now:         now,
@@ -104,6 +112,7 @@ func Run(ctx context.Context, d workflow.Deps, userdataDir string, opts Options)
 		Tasks:       tasks.Tasks,
 		OpenSignals: open,
 		DebugDir:    filepath.Join(userdataDir, "status-cache", "ai-debug"),
+		StreamOut:   opts.OllamaStreamOut,
 	}
 	aiOut, err := classifier.ClassifyTaskSignals(ctx, aiIn)
 	if err != nil {

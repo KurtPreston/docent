@@ -972,32 +972,77 @@ func (a *App) updateTasks(ctx context.Context, args []string) error {
 	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
 	dryRun := fs.Bool("dry-run", false, "print actions without writing signals or proposed-tasks")
 	minConf := fs.Float64("min-confidence", ai.DefaultTaskSignalConfidence, "minimum model confidence to auto-apply assign/ignore")
+	noResolve := fs.Bool("no-resolve", false, "do not launch interactive review of proposed-tasks at the end")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	progress := newDirectiveProgressTable(a.Out)
 	defer progress.Done()
 	t := a.Now()
+	store := userdata.NewStore(*userdataDir)
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	provider := ai.SelectProvider(cfg.AI, a.AI)
+	_, ollama := provider.(ai.OllamaProvider)
+	var beforeClassify func()
+	if ollama {
+		beforeClassify = func() {
+			progress.Done()
+			fmt.Fprintln(a.Err, "\nOllama task signal triage (streaming)")
+			fmt.Fprintln(a.Err, strings.Repeat("-", 40))
+		}
+	} else {
+		beforeClassify = func() {
+			progress.Done()
+		}
+	}
+	var streamOut io.Writer
+	if ollama {
+		streamOut = a.Err
+	}
 	res, err := taskupdate.Run(ctx, workflow.Deps{
 		Registry:          a.Registry,
 		Now:               a.Now,
 		ExpandRepoPath:    expandRepoPath,
 		OnDirectiveUpdate: progress.Update,
 	}, *userdataDir, taskupdate.Options{
-		DryRun:        *dryRun,
-		MinConfidence: *minConf,
-		Now:           t,
+		DryRun:          *dryRun,
+		MinConfidence:   *minConf,
+		Now:             t,
+		BeforeClassify:  beforeClassify,
+		OllamaStreamOut: streamOut,
 	})
 	if err != nil {
 		return err
 	}
+	if ollama {
+		fmt.Fprintln(a.Err, "")
+	}
 	progress.Done()
+	var reviewed int
+	if !*dryRun && !*noResolve {
+		if a.stdinIsTerminal() {
+			var err error
+			reviewed, err = a.resolveProposedTasksInteractive(ctx, *userdataDir)
+			if err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintln(a.Err, "Proposed task review skipped (stdin is not a TTY; use a terminal to resolve proposed-tasks, or pass --no-resolve).")
+		}
+	}
 	if *dryRun {
 		fmt.Fprintf(a.Out, "update_tasks (dry-run): scanned=%d open_for_ai=%d auto_assigned=%d auto_ignored=%d proposed=%d still_pending=%d\n",
 			res.Scanned, res.OpenForAI, res.AutoAssign, res.AutoIgnore, res.ProposedNew, res.Pending)
 	} else {
-		fmt.Fprintf(a.Out, "update_tasks: scanned=%d open_for_ai=%d auto_assigned=%d auto_ignored=%d proposed=%d still_pending=%d (userdata/signals.yaml, userdata/proposed-tasks.yaml)\n",
-			res.Scanned, res.OpenForAI, res.AutoAssign, res.AutoIgnore, res.ProposedNew, res.Pending)
+		extra := ""
+		if reviewed > 0 {
+			extra = fmt.Sprintf("; resolved %d proposed task(s) in review", reviewed)
+		}
+		fmt.Fprintf(a.Out, "update_tasks: scanned=%d open_for_ai=%d auto_assigned=%d auto_ignored=%d proposed=%d still_pending=%d (userdata/signals.yaml, userdata/proposed-tasks.yaml)%s\n",
+			res.Scanned, res.OpenForAI, res.AutoAssign, res.AutoIgnore, res.ProposedNew, res.Pending, extra)
 	}
 	return nil
 }

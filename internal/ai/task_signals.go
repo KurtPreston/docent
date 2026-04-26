@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -18,12 +19,13 @@ type TaskSignalClassifier interface {
 
 // TaskSignalsInput is the bounded context for signal triage.
 type TaskSignalsInput struct {
-	Now         time.Time             `json:"now"`
-	Projects    []userdata.Project    `json:"projects"`
-	Tasks       []userdata.Task       `json:"tasks"`
-	OpenSignals []userdata.Signal     `json:"open_signals"`
-	DebugDir    string                `json:"-"`
-	StreamOut   interface{ Write([]byte) (int, error) } `json:"-"`
+	Now         time.Time          `json:"now"`
+	Projects    []userdata.Project `json:"projects"`
+	Tasks       []userdata.Task    `json:"tasks"`
+	OpenSignals []userdata.Signal  `json:"open_signals"`
+	DebugDir    string             `json:"-"`
+	// StreamOut receives live model output when the provider supports streaming (e.g. Ollama). Typically os.Stderr.
+	StreamOut io.Writer `json:"-"`
 }
 
 // TaskSignalsOutput is the model output for one classification batch.
