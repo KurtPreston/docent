@@ -75,3 +75,20 @@ func TestInstantiateLocalGitAllowsProjectRepoRef(t *testing.T) {
 		t.Fatalf("target: %#v", d.Target)
 	}
 }
+
+func TestInstantiateLocalGitAllowsNoTarget(t *testing.T) {
+	recipe := Recipe{
+		ID:        "local-git-repository-status",
+		Name:      "Local Git",
+		Collector: "local-git",
+	}
+	d, err := recipe.Instantiate(InstantiateInput{
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	if len(d.Target) != 0 {
+		t.Fatalf("target should be empty, got %#v", d.Target)
+	}
+}

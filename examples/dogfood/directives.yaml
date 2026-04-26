@@ -1,14 +1,10 @@
 directives:
-  - id: slakkr-local-git
+  - id: local-git
     recipe_id: local-git-repository-status
-    name: slakkr-ai working tree
+    name: local git projects working tree
     collector: local-git
     enabled: true
     schedule: every-status-check
-    project_id: slakkr-ai
-    target:
-      project_id: slakkr-ai
-      repo_id: slakkr-ai
     summary_prompt: Summarize local git state and whether uncommitted work needs attention today.
   - id: slakkr-gitea-activity
     recipe_id: gitea-repository-discovery

@@ -21,24 +21,18 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 	expand := defaultExpandRepoPath(opts)
 	projectID := strings.TrimSpace(directive.Target["project_id"])
 	repoID := strings.TrimSpace(directive.Target["repo_id"])
-	if projectID == "" || repoID == "" {
-		return nil, fmt.Errorf("local-git requires target project_id and repo_id")
-	}
 	if opts == nil || opts.HostID == "" {
 		return nil, fmt.Errorf("local-git requires host context (SLAKKR_HOST or hostname)")
 	}
-	candidates, err := userdata.ExpandedRepoWorktrees(opts.Projects, projectID, repoID, opts.HostID, expand)
+	dirs, err := resolveDirectiveRepoDirs(opts.Projects, opts.HostID, projectID, repoID, expand)
 	if err != nil {
 		return nil, err
 	}
-	var dirs []string
-	for _, dir := range candidates {
-		if st, err := os.Stat(dir); err == nil && st.IsDir() {
-			dirs = append(dirs, dir)
-		}
-	}
 	if len(dirs) == 0 {
-		return nil, fmt.Errorf("no existing working tree on this host for project_id=%s repo_id=%s", projectID, repoID)
+		if projectID != "" || repoID != "" {
+			return nil, fmt.Errorf("no existing working tree on this host for project_id=%s repo_id=%s", projectID, repoID)
+		}
+		return nil, fmt.Errorf("no existing working trees on this host (define paths_by_host in userdata/projects.yaml)")
 	}
 
 	repoStatus, branchWip := parseLocalGitChecks(directive.Config)
@@ -84,6 +78,51 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		}}, nil
 	}
 	return out, nil
+}
+
+func resolveDirectiveRepoDirs(projects userdata.ProjectsFile, hostID, projectID, repoID string, expand func(string) string) ([]string, error) {
+	projectID = strings.TrimSpace(projectID)
+	repoID = strings.TrimSpace(repoID)
+	switch {
+	case projectID == "" && repoID == "":
+		return existingHostRepoDirs(projects, hostID, expand), nil
+	case projectID == "" || repoID == "":
+		return nil, fmt.Errorf("local-git target must include both project_id and repo_id when target is set")
+	default:
+		candidates, err := userdata.ExpandedRepoWorktrees(projects, projectID, repoID, hostID, expand)
+		if err != nil {
+			return nil, err
+		}
+		var dirs []string
+		for _, dir := range candidates {
+			if st, err := os.Stat(dir); err == nil && st.IsDir() {
+				dirs = append(dirs, dir)
+			}
+		}
+		return dirs, nil
+	}
+}
+
+func existingHostRepoDirs(projects userdata.ProjectsFile, hostID string, expand func(string) string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range projects.Projects {
+		for _, r := range p.Repos {
+			for _, raw := range userdata.RepoWorktreePaths(r, hostID) {
+				dir := expand(raw)
+				if dir == "" || seen[dir] {
+					continue
+				}
+				st, err := os.Stat(dir)
+				if err != nil || !st.IsDir() {
+					continue
+				}
+				seen[dir] = true
+				out = append(out, dir)
+			}
+		}
+	}
+	return out
 }
 
 // parseLocalGitChecks returns (repository_status, branch_wip). Empty checks enables both.

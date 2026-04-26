@@ -1,14 +1,7 @@
 id: local-git-repository-status
 name: Local Git Repository Status
-description: Check a local Git working tree for branch, latest commit, remote, and uncommitted changes. Paths come from the matching repo entry in projects.yaml (paths_by_host) for the current host.
+description: Check local Git working trees for branch, latest commit, remote, and uncommitted changes. Without a target, scans all repos in projects.yaml that have paths_by_host for this host; with a target, scopes to one project/repo.
 collector: local-git
-required_target:
-  - name: project_id
-    description: Project id in userdata/projects.yaml
-    required: true
-  - name: repo_id
-    description: Repo id under that project
-    required: true
 defaults:
   schedule: every-status-check
   summary_prompt: Summarize branch, latest commit, remote divergence, and whether local changes need attention.
@@ -16,7 +9,8 @@ defaults:
     checks: repository_status, branch_wip
     branch_lookback_days: "14"
 examples:
-  - name: Host-scoped project repo
+  - name: Host-wide scan (all repos on this host)
+  - name: Single project repo override
     target:
       project_id: slakkr-ai
       repo_id: slakkr-ai

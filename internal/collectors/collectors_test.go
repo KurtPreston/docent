@@ -183,6 +183,86 @@ func TestLocalGitCollectorResolvesProjectRepoPaths(t *testing.T) {
 	}
 }
 
+func TestLocalGitCollectorWithoutTargetScansAllHostRepos(t *testing.T) {
+	dir := workspaceTempDir(t)
+	fakeGit := filepath.Join(dir, "git")
+	if runtime.GOOS == "windows" {
+		fakeGit += ".bat"
+	}
+	writeFile(t, fakeGit, fakeGitScript())
+	if err := os.Chmod(fakeGit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	host := "test-machine"
+	repoA := filepath.Join(dir, "repo-a")
+	repoB := filepath.Join(dir, "repo-b")
+	if err := os.MkdirAll(repoA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repoB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	collector := LocalGitCollector{Clock: time.Now}
+	opts := &CollectOpts{
+		HostID: host,
+		Projects: userdata.ProjectsFile{Projects: []userdata.Project{
+			{
+				ID: "p1",
+				Repos: []userdata.Repo{{
+					ID: "main",
+					PathsByHost: map[string][]string{
+						host: {repoA},
+					},
+				}},
+			},
+			{
+				ID: "p2",
+				Repos: []userdata.Repo{{
+					ID: "main",
+					PathsByHost: map[string][]string{
+						host: {repoB},
+					},
+				}},
+			},
+		}},
+	}
+	items, err := collector.Collect(context.Background(), userdata.Directive{
+		ID:        "repo",
+		Name:      "Repo",
+		Collector: "local-git",
+		Enabled:   true,
+		Config: map[string]string{
+			"checks": "repository_status",
+		},
+	}, opts)
+	if err != nil {
+		t.Fatalf("collect git: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 repos, got %#v", items)
+	}
+}
+
+func TestLocalGitCollectorRejectsPartialTarget(t *testing.T) {
+	collector := LocalGitCollector{Clock: time.Now}
+	_, err := collector.Collect(context.Background(), userdata.Directive{
+		ID:        "repo",
+		Name:      "Repo",
+		Collector: "local-git",
+		Enabled:   true,
+		Target: map[string]string{
+			"project_id": "p1",
+		},
+	}, &CollectOpts{
+		HostID:   "host",
+		Projects: userdata.ProjectsFile{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "both project_id and repo_id") {
+		t.Fatalf("expected partial target error, got %v", err)
+	}
+}
+
 func TestGoogleCalendarCollectorReadsURLFromCredentialRef(t *testing.T) {
 	now := time.Date(2026, 4, 25, 8, 0, 0, 0, time.UTC)
 	ical := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:20260425T090000Z\r\nSUMMARY:Deep Work\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
