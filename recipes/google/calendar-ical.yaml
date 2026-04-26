@@ -7,6 +7,3 @@ required_config:
     description: iCal feed URL from Google Calendar settings (Integrate calendar).
     required: true
     secret: true
-defaults:
-  schedule: every-status-check
-  summary_prompt: Summarize upcoming calendar events that affect focus time today.

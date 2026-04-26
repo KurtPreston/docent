@@ -99,16 +99,13 @@ type DirectivesFile struct {
 
 type Directive struct {
 	ID             string            `yaml:"id"`
-	RecipeID       string            `yaml:"recipe_id,omitempty"`
 	Name           string            `yaml:"name"`
 	Collector      string            `yaml:"collector"`
 	Enabled        bool              `yaml:"enabled"`
-	Schedule       string            `yaml:"schedule,omitempty"`
 	ProjectID      string            `yaml:"project_id,omitempty"`
 	Target         map[string]string `yaml:"target,omitempty"`
 	Config         map[string]string `yaml:"config,omitempty"`
 	CredentialRefs map[string]string `yaml:"credential_refs,omitempty"`
-	SummaryPrompt  string            `yaml:"summary_prompt,omitempty"`
 }
 
 type DaybookConfig struct {

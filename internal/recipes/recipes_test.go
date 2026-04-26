@@ -12,7 +12,6 @@ func TestInstantiateRecipeMergesDefaultsAndLocalTarget(t *testing.T) {
 			Required: true,
 		}},
 		Defaults: RecipeDefaults{
-			Schedule: "every-status-check",
 			Config: map[string]string{
 				"base_url": "https://github.com",
 			},
@@ -28,9 +27,6 @@ func TestInstantiateRecipeMergesDefaultsAndLocalTarget(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("instantiate recipe: %v", err)
-	}
-	if directive.RecipeID != recipe.ID {
-		t.Fatalf("recipe id = %q, want %q", directive.RecipeID, recipe.ID)
 	}
 	if directive.Config["base_url"] != "https://github.com" {
 		t.Fatalf("base_url default was not copied")

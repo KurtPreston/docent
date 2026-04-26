@@ -10,9 +10,6 @@ required_config:
     description: Gitea API token.
     required: true
     secret: true
-defaults:
-  schedule: setup-and-daily
-  summary_prompt: Summarize repositories discovered from Gitea and suggest which should become projects or local repo directives.
 required_target:
   - name: owner
     description: User or organization whose repositories should be listed.

@@ -6,9 +6,6 @@ required_config:
   - name: base_url
     description: Enterprise GitHub base URL, such as https://github.example.com.
     required: true
-defaults:
-  schedule: every-status-check
-  summary_prompt: Summarize open PR state, review decisions, draft status, and likely next actions.
 required_target:
   - name: repo
     description: Repository in owner/name form.

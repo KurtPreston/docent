@@ -12,14 +12,12 @@ import (
 )
 
 type Recipe struct {
-	ID             string          `yaml:"id"`
-	Name           string          `yaml:"name"`
-	Description    string          `yaml:"description,omitempty"`
-	Collector      string          `yaml:"collector"`
-	RequiredConfig []ConfigField   `yaml:"required_config,omitempty"`
-	RequiredTarget []TargetField   `yaml:"required_target,omitempty"`
-	Defaults       RecipeDefaults  `yaml:"defaults,omitempty"`
-	Examples       []RecipeExample `yaml:"examples,omitempty"`
+	ID             string         `yaml:"id"`
+	Name           string         `yaml:"name"`
+	Collector      string         `yaml:"collector"`
+	RequiredConfig []ConfigField  `yaml:"required_config,omitempty"`
+	RequiredTarget []TargetField  `yaml:"required_target,omitempty"`
+	Defaults       RecipeDefaults `yaml:"defaults,omitempty"`
 }
 
 type ConfigField struct {
@@ -36,14 +34,6 @@ type TargetField struct {
 }
 
 type RecipeDefaults struct {
-	Schedule      string            `yaml:"schedule,omitempty"`
-	Config        map[string]string `yaml:"config,omitempty"`
-	Target        map[string]string `yaml:"target,omitempty"`
-	SummaryPrompt string            `yaml:"summary_prompt,omitempty"`
-}
-
-type RecipeExample struct {
-	Name   string            `yaml:"name"`
 	Config map[string]string `yaml:"config,omitempty"`
 	Target map[string]string `yaml:"target,omitempty"`
 }
@@ -143,16 +133,13 @@ func (r Recipe) Instantiate(input InstantiateInput) (userdata.Directive, error) 
 	}
 	return userdata.Directive{
 		ID:             id,
-		RecipeID:       r.ID,
 		Name:           name,
 		Collector:      r.Collector,
 		Enabled:        input.Enabled,
-		Schedule:       r.Defaults.Schedule,
 		ProjectID:      input.ProjectID,
 		Target:         target,
 		Config:         config,
 		CredentialRefs: input.CredentialRefs,
-		SummaryPrompt:  r.Defaults.SummaryPrompt,
 	}, nil
 }
 

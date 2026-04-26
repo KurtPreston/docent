@@ -7,15 +7,9 @@ required_config:
     description: GitHub base URL. Use https://github.com for public GitHub.
     required: false
 defaults:
-  schedule: every-status-check
   config:
     base_url: https://github.com
-  summary_prompt: Summarize open PR state, review decisions, draft status, and likely next actions for this repository.
 required_target:
   - name: repo
     description: Repository in owner/name form.
     required: true
-examples:
-  - name: slakkr-ai
-    target:
-      repo: owner/slakkr-ai

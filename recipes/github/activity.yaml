@@ -11,10 +11,8 @@ required_config:
     required: true
     secret: true
 defaults:
-  schedule: every-status-check
   config:
     base_url: https://github.com
-  summary_prompt: Summarize assigned issues, review requests, authored PRs, mentions, and likely next actions.
 required_target:
   - name: username
     description: GitHub username whose activity should be checked.
