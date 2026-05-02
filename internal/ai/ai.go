@@ -130,6 +130,10 @@ func (RuleBasedProvider) ReflectEndOfDay(_ context.Context, input PlanningInput)
 	return output, nil
 }
 
+func (RuleBasedProvider) SummarizeRecentActivity(_ context.Context, in RecentActivityInput) (string, error) {
+	return RenderRecentActivityMarkdown(in), nil
+}
+
 type CursorCLIProvider struct {
 	Command string
 	Args    []string
@@ -184,6 +188,34 @@ func (p CursorCLIProvider) run(ctx context.Context, instruction string, input Pl
 		return PlanningOutput{}, err
 	}
 	return ParsePlanningOutput(output)
+}
+
+func (p CursorCLIProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
+	command := p.Command
+	if command == "" {
+		command = "cursor-agent"
+	}
+	instruction := fmt.Sprintf(
+		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC) on host %q. Group by project. Use the structured `statuses` JSON below as ground truth. Return one Markdown document with per-project sections, a brief executive summary at the top, and noteworthy callouts. Do not invent activity not present in the input.",
+		in.LookbackDays,
+		in.Since.Format(time.RFC3339),
+		in.Now.Format(time.RFC3339),
+		in.HostID,
+	)
+	payload, err := BuildRecentActivityPrompt(instruction, in)
+	if err != nil {
+		return "", err
+	}
+	args := p.Args
+	if len(args) == 0 {
+		args = []string{"-p", payload}
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return StripMarkdownFence(string(output)), nil
 }
 
 func BuildPrompt(instruction string, input PlanningInput) (string, error) {

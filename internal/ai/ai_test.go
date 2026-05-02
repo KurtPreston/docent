@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -128,5 +129,40 @@ func TestParsePlanningOutputAcceptsStringAndAlternateProposedTaskChanges(t *test
 	}
 	if output.ProposedTaskChanges[2].Value != "Update title" || output.ProposedTaskChanges[2].Reason != "clarity" {
 		t.Fatalf("third: %#v", output.ProposedTaskChanges[2])
+	}
+}
+
+func TestRuleBasedSummarizeRecentActivityMatchesRender(t *testing.T) {
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	in := RecentActivityInput{
+		Now:          now,
+		Since:        since,
+		LookbackDays: 7,
+		HostID:       "h1",
+		Projects: []userdata.Project{{ID: "p1", Name: "One"}},
+		Statuses: []collectors.StatusItem{
+			{
+				DirectiveID: "d1",
+				ProjectID:   "p1",
+				Source:      "local-git",
+				Kind:        "commit",
+				Title:       "fix stuff",
+				ObservedAt:  now.Add(-time.Hour),
+				Fields: map[string]string{"short_hash": "abc1234", "author": "dev"},
+			},
+		},
+	}
+	rule := RenderRecentActivityMarkdown(in)
+	p := RuleBasedProvider{}
+	out, err := p.SummarizeRecentActivity(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != rule {
+		t.Fatalf("mismatch\nrule:\n%s\n---\nout:\n%s", rule, out)
+	}
+	if !strings.Contains(out, "abc1234") || !strings.Contains(out, "p1") {
+		t.Fatalf("unexpected markdown: %s", out)
 	}
 }

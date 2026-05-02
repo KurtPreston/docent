@@ -352,3 +352,34 @@ func fakeGitScript() string {
 	}
 	return "#!/usr/bin/env sh\ncase \"$1\" in\n  branch) echo main ;;\n  status) echo ' M README.md' ;;\n  log) echo 'abc123 initial' ;;\n  remote) echo 'git@example.com:repo.git' ;;\nesac\n"
 }
+
+func TestRegistryCollectActivitySkipsManual(t *testing.T) {
+	clock := func() time.Time { return time.Unix(0, 0).UTC() }
+	reg := NewRegistry(clock)
+	var progress []string
+	opts := &CollectOpts{
+		OnDirectiveUpdate: func(p DirectiveProgress) {
+			progress = append(progress, p.DirectiveID+":"+p.Status+":"+p.Detail)
+		},
+	}
+	directives := []userdata.Directive{
+		{ID: "m", Name: "M", Collector: "manual", Enabled: true, Target: map[string]string{"prompt": "x"}},
+		{ID: "s", Name: "S", Collector: "slack", Enabled: true},
+	}
+	items, err := reg.CollectActivity(context.Background(), directives, time.Unix(0, 0), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected no items, got %#v", items)
+	}
+	var sawSkip bool
+	for _, p := range progress {
+		if strings.Contains(p, "skipped (no activity mode)") {
+			sawSkip = true
+		}
+	}
+	if !sawSkip {
+		t.Fatalf("expected skipped manual progress, got %v", progress)
+	}
+}

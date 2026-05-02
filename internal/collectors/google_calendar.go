@@ -94,6 +94,75 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 	return items, nil
 }
 
+// CollectActivity returns calendar events whose DTSTART falls in [since, now] (read-only GET of iCal).
+func (c GoogleCalendarCollector) CollectActivity(ctx context.Context, directive userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error) {
+	rawURL := strings.TrimSpace(directive.Config["ical_url"])
+	if rawURL == "" {
+		rawURL = strings.TrimSpace(directive.Config["url"])
+	}
+	tokenKey := directive.CredentialRefs["ical_url"]
+	if tokenKey == "" {
+		tokenKey = directive.CredentialRefs["url"]
+	}
+	if tokenKey != "" {
+		userdataDir := ""
+		if opts != nil {
+			userdataDir = opts.UserdataDir
+		}
+		if v := userdata.ResolveEnv(userdataDir, tokenKey); v != "" {
+			rawURL = v
+		}
+	}
+	if rawURL == "" {
+		return nil, fmt.Errorf("config.ical_url is required (secret iCal link from Google Calendar settings)")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, calendarIcalHTTPError(res)
+	}
+	now := c.Clock()
+	events := parseICSEventsInWindow(string(body), since, now)
+	var items []StatusItem
+	for _, ev := range events {
+		fields := map[string]string{
+			"start": ev.start.UTC().Format(time.RFC3339),
+		}
+		if !ev.end.IsZero() {
+			fields["end"] = ev.end.UTC().Format(time.RFC3339)
+			if ev.end.After(ev.start) {
+				fields["duration"] = ev.end.Sub(ev.start).String()
+			}
+		}
+		if ev.uid != "" {
+			fields["uid"] = ev.uid
+		}
+		items = append(items, StatusItem{
+			DirectiveID: directive.ID,
+			ProjectID:   directive.ProjectID,
+			Source:      "google-calendar",
+			Kind:        "calendar_event",
+			Title:       ev.summary,
+			Summary:     ev.start.Format(time.RFC3339),
+			Severity:    "info",
+			ObservedAt:  ev.start.UTC(),
+			Fields:      fields,
+		})
+	}
+	return items, nil
+}
+
 func calendarIcalHTTPError(res *http.Response) error {
 	if res == nil {
 		return fmt.Errorf("iCal feed: empty response")
@@ -115,7 +184,9 @@ func calendarIcalHTTPError(res *http.Response) error {
 
 type icsEvent struct {
 	start   time.Time
+	end     time.Time
 	summary string
+	uid     string
 }
 
 func unfoldICS(s string) string {
@@ -162,6 +233,65 @@ func parseICSEvents(raw string, now time.Time, horizonDays int) []icsEvent {
 	sort.Slice(out, func(i, j int) bool { return out[i].start.Before(out[j].start) })
 	if len(out) > 15 {
 		out = out[:15]
+	}
+	return out
+}
+
+func parseICSEventsInWindow(raw string, since, now time.Time) []icsEvent {
+	text := unfoldICS(raw)
+	blocks := strings.Split(text, "BEGIN:VEVENT")
+	if len(blocks) < 2 {
+		return nil
+	}
+	var out []icsEvent
+	for _, b := range blocks[1:] {
+		endBlock := strings.Index(b, "END:VEVENT")
+		if endBlock >= 0 {
+			b = b[:endBlock]
+		}
+		var startStr, endStr, summary, uid string
+		for _, line := range strings.Split(b, "\n") {
+			line = strings.TrimSpace(line)
+			upper := strings.ToUpper(line)
+			if strings.HasPrefix(upper, "DTSTART") {
+				if idx := strings.LastIndex(line, ":"); idx >= 0 {
+					startStr = strings.TrimSpace(line[idx+1:])
+				}
+			}
+			if strings.HasPrefix(upper, "DTEND") {
+				if idx := strings.LastIndex(line, ":"); idx >= 0 {
+					endStr = strings.TrimSpace(line[idx+1:])
+				}
+			}
+			if strings.HasPrefix(upper, "SUMMARY") {
+				if idx := strings.Index(line, ":"); idx >= 0 {
+					summary = strings.TrimSpace(line[idx+1:])
+				}
+			}
+			if strings.HasPrefix(upper, "UID") {
+				if idx := strings.Index(line, ":"); idx >= 0 {
+					uid = strings.TrimSpace(line[idx+1:])
+				}
+			}
+		}
+		if startStr == "" || summary == "" {
+			continue
+		}
+		t, ok := parseICSDate(startStr)
+		if !ok || t.Before(since) || t.After(now) {
+			continue
+		}
+		ev := icsEvent{start: t, summary: summary, uid: uid}
+		if endStr != "" {
+			if te, ok := parseICSDate(endStr); ok {
+				ev.end = te
+			}
+		}
+		out = append(out, ev)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].start.Before(out[j].start) })
+	if len(out) > 50 {
+		out = out[:50]
 	}
 	return out
 }

@@ -82,13 +82,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.delegation(ctx, args[1:])
 	case "plan":
 		return a.planCmd(ctx, args[1:])
+	case "recent_activity":
+		return a.recentActivity(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
 func (a *App) usage() error {
-	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|update_tasks|validate|list-recipes|serve|delegation|plan> [flags]")
+	fmt.Fprintln(a.Out, "Usage: slakkr <setup|configure_host|add_project|add_task|start_day|update_status|end_day|update_tasks|recent_activity|validate|list-recipes|serve|delegation|plan> [flags]")
 	return nil
 }
 
@@ -1044,6 +1046,98 @@ func (a *App) updateTasks(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.Out, "update_tasks: scanned=%d open_for_ai=%d auto_assigned=%d auto_ignored=%d proposed=%d still_pending=%d (userdata/signals.yaml, userdata/proposed-tasks.yaml)%s\n",
 			res.Scanned, res.OpenForAI, res.AutoAssign, res.AutoIgnore, res.ProposedNew, res.Pending, extra)
 	}
+	return nil
+}
+
+func (a *App) recentActivity(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("recent_activity", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	days := fs.Int("days", 0, "lookback days (0 = prompt on TTY or default 7)")
+	outPath := fs.String("out", "", "output markdown path (default userdata/recent-activity/<date>.md)")
+	dateStr := fs.String("date", "", "date for output filename YYYY-MM-DD (default today)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	lookbackDays := *days
+	if lookbackDays <= 0 {
+		if a.stdinIsTerminal() {
+			prompter := StdioPrompter{In: a.In, Out: a.Out}
+			v, err := prompter.Ask("Lookback days", "7")
+			if err != nil {
+				return err
+			}
+			v = strings.TrimSpace(v)
+			if v == "" {
+				lookbackDays = 7
+			} else {
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 1 {
+					return fmt.Errorf("lookback days must be a positive integer")
+				}
+				lookbackDays = n
+			}
+		} else {
+			lookbackDays = 7
+		}
+	}
+	outDate := strings.TrimSpace(*dateStr)
+	if outDate == "" {
+		outDate = a.Now().Format("2006-01-02")
+	} else {
+		if _, err := time.Parse("2006-01-02", outDate); err != nil {
+			return fmt.Errorf("--date must be YYYY-MM-DD: %w", err)
+		}
+	}
+	progress := newDirectiveProgressTable(a.Out)
+	defer progress.Done()
+	lookback := time.Duration(lookbackDays) * 24 * time.Hour
+	input, err := workflow.BuildRecentActivityInput(ctx, workflow.Deps{
+		Registry:          a.Registry,
+		Now:               a.Now,
+		ExpandRepoPath:    expandRepoPath,
+		OnDirectiveUpdate: progress.Update,
+	}, *userdataDir, a.Now(), lookback)
+	if err != nil {
+		return err
+	}
+	progress.Done()
+	store := userdata.NewStore(*userdataDir)
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	provider := ai.SelectProvider(cfg.AI, a.AI)
+	summarizer, ok := provider.(ai.ActivitySummarizer)
+	_, ollamaProv := provider.(ai.OllamaProvider)
+	var md string
+	if ok {
+		if ollamaProv {
+			fmt.Fprintln(a.Err, "\nOllama recent activity (streaming)")
+			fmt.Fprintln(a.Err, strings.Repeat("-", 40))
+			input.StreamOut = a.Err
+		}
+		md, err = summarizer.SummarizeRecentActivity(ctx, input)
+		if ollamaProv {
+			fmt.Fprintln(a.Err, "")
+		}
+		if err != nil {
+			return err
+		}
+	} else {
+		md = ai.RenderRecentActivityMarkdown(input)
+	}
+	out := strings.TrimSpace(*outPath)
+	if out == "" {
+		out = filepath.Join(*userdataDir, "recent-activity", outDate+".md")
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(out, []byte(md+"\n"), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.Out, "Wrote %s\n", out)
 	return nil
 }
 

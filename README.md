@@ -21,6 +21,7 @@ go run ./cmd/slakkr validate
 go run ./cmd/slakkr serve --addr 127.0.0.1:8765
 go run ./cmd/slakkr plan show
 go run ./cmd/slakkr delegation list
+go run ./cmd/slakkr recent_activity
 ```
 
 The tool writes user-owned data under `userdata/`. That directory is gitignored by this repo and initialized as its own local git repository. Setup asks whether to add a remote for `userdata`; local-only remains the default.
@@ -39,6 +40,7 @@ To dogfood quickly, copy [examples/dogfood/](examples/dogfood/) into `userdata/`
 - `userdata/delegations.yaml` stores agent delegation ledger entries.
 - `userdata/signals.yaml` stores resolved work signals (from collectors) mapped to tasks or ignore decisions.
 - `userdata/proposed-tasks.yaml` stores task proposals for later confirmation (from `update_tasks`), before they are promoted into `tasks.yaml`.
+- `userdata/recent-activity/YYYY-MM-DD.md` stores Markdown summaries produced by `recent_activity` (lookback activity across collectors).
 
 A recipe is a reusable template shipped with this repo or a fork. A directive is your local configured instance of a recipe. During setup, the directive id is just the stable key written to `userdata/directives.yaml`; accepting the suggested default is usually right for a first setup.
 
@@ -64,7 +66,7 @@ Setup asks for a human-readable name, then generates the stable directive id. If
 - `list-recipes` shows reusable recipes available in this checkout or fork.
 - `serve` runs a small local web UI (JSON APIs for planning input, saved plan, delegations).
 - `plan show` prints the structured daily plan YAML from `userdata/plans/` (after `start_day`).
-- `delegation list` / `delegation add` manage the agent work ledger in `userdata/delegations.yaml`.
+- `recent_activity` collects **activity** from enabled directives over a lookback window (via each collector’s `CollectActivity` implementation), then asks the configured AI provider to summarize into `userdata/recent-activity/<date>.md`. Use `--days N` for lookback; without it, a TTY prompts (default 7). `--date` sets the output filename only; collection uses the current time. **`manual` directives are skipped** in activity mode. Per-collector behavior: **local-git** — commits and reflog since the window; **github/github-enterprise** — PRs and issues with `updated:` in range; **github-activity** — user-scoped search (`author`, `reviewed-by`, `involves`) with `updated:`; **gitea** — repos whose `updated_at` is in range; **jira** — JQL plus `updated >= "<since>"`; **google-calendar** — iCal events whose `DTSTART` falls in `[since, now]`; **slack** placeholder returns no rows.
 
 ## AI providers
 
@@ -93,6 +95,7 @@ scripts/start_day
 scripts/update_status
 scripts/update_tasks
 scripts/end_day
+scripts/recent_activity
 ```
 
 ## AI Boundary

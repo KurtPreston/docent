@@ -106,6 +106,81 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	return items, nil
 }
 
+// CollectActivity keeps only repositories whose updated_at is on or after `since`.
+func (c GiteaCollector) CollectActivity(ctx context.Context, directive userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error) {
+	base := strings.TrimSpace(directive.Config["base_url"])
+	owner := strings.TrimSpace(directive.Target["owner"])
+	if base == "" {
+		return nil, fmt.Errorf("config.base_url is required")
+	}
+	if owner == "" {
+		return nil, fmt.Errorf("target.owner is required")
+	}
+	tokenKey := directive.CredentialRefs["token"]
+	token := userdata.ResolveEnv(opts.UserdataDir, tokenKey)
+	if token == "" {
+		return nil, fmt.Errorf("gitea token missing (set %s in environment or userdata/.env)", tokenKey)
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("invalid base_url")
+	}
+	apiBase := strings.TrimRight(u.String(), "/")
+	repos, err := c.fetchReposForOwner(ctx, apiBase, owner, token)
+	if err != nil {
+		return nil, err
+	}
+	now := c.Clock()
+	var items []StatusItem
+	for _, r := range repos {
+		updatedAt, err := parseGiteaTime(r.Updated)
+		if err != nil || updatedAt.Before(since) || updatedAt.After(now) {
+			continue
+		}
+		title := r.FullName
+		if title == "" {
+			title = r.Name
+		}
+		summary := fmt.Sprintf("updated=%s branch=%s", r.Updated, r.DefaultBranch)
+		if r.Private {
+			summary += " private=true"
+		}
+		items = append(items, StatusItem{
+			DirectiveID: directive.ID,
+			ProjectID:   directive.ProjectID,
+			Source:      "gitea",
+			Kind:        "repository_updated",
+			Title:       title,
+			Summary:     summary,
+			URL:         r.HTMLURL,
+			Severity:    "info",
+			ObservedAt:  updatedAt.UTC(),
+			Fields: map[string]string{
+				"name":           r.Name,
+				"full_name":      r.FullName,
+				"updated_at":     r.Updated,
+				"default_branch": r.DefaultBranch,
+				"private":        fmt.Sprintf("%t", r.Private),
+				"owner":          owner,
+				"gitea_base":     apiBase,
+			},
+		})
+	}
+	return items, nil
+}
+
+func parseGiteaTime(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty time")
+	}
+	// RFC3339 from Gitea API
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.Parse("2006-01-02T15:04:05Z07:00", s)
+}
+
 func (c GiteaCollector) fetchReposForOwner(ctx context.Context, apiBase, owner, token string) ([]giteaRepo, error) {
 	userURL := fmt.Sprintf("%s/api/v1/users/%s/repos?limit=20&order=updated", apiBase, url.PathEscape(owner))
 	orgURL := fmt.Sprintf("%s/api/v1/orgs/%s/repos?limit=20&order=updated", apiBase, url.PathEscape(owner))

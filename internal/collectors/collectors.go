@@ -51,6 +51,13 @@ type Collector interface {
 	Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
 }
 
+// ActivityCollector collects time-windowed activity for directives that support lookback mode
+// (for example recent_activity). ManualCollector deliberately does not implement this interface.
+type ActivityCollector interface {
+	Collector
+	CollectActivity(ctx context.Context, directive userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error)
+}
+
 type Registry struct {
 	collectors map[string]Collector
 	clock      func() time.Time
@@ -133,6 +140,96 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive,
 		all = append(all, results[i].items...)
 	}
 	return all, nil
+}
+
+// CollectActivity runs enabled directives in lookback mode. Collectors that do not implement
+// ActivityCollector are reported as skipped (e.g. manual). Parallelism matches Collect but
+// manual-first ordering is not used for activity runs.
+func (r *Registry) CollectActivity(ctx context.Context, directives []userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error) {
+	enabled := make([]userdata.Directive, 0, len(directives))
+	for _, directive := range directives {
+		if !directive.Enabled {
+			continue
+		}
+		enabled = append(enabled, directive)
+	}
+	for _, directive := range enabled {
+		if _, ok := r.collectors[directive.Collector]; !ok {
+			return nil, fmt.Errorf("directive %s uses unknown collector %q", directive.ID, directive.Collector)
+		}
+	}
+	type directiveResult struct {
+		items []StatusItem
+	}
+	results := make([]directiveResult, len(enabled))
+	var wg sync.WaitGroup
+	for i, directive := range enabled {
+		wg.Add(1)
+		go func(index int, d userdata.Directive) {
+			defer wg.Done()
+			results[index].items = r.collectActivityDirective(ctx, d, since, opts)
+		}(i, directive)
+	}
+	wg.Wait()
+	var all []StatusItem
+	for i := range results {
+		all = append(all, results[i].items...)
+	}
+	return all, nil
+}
+
+func (r *Registry) collectActivityDirective(ctx context.Context, d userdata.Directive, since time.Time, opts *CollectOpts) []StatusItem {
+	collector := r.collectors[d.Collector]
+	ac, ok := collector.(ActivityCollector)
+	if !ok {
+		if opts != nil && opts.OnDirectiveUpdate != nil {
+			opts.OnDirectiveUpdate(DirectiveProgress{
+				DirectiveID: d.ID,
+				Description: d.Name,
+				Status:      "done",
+				Detail:      "skipped (no activity mode)",
+			})
+		}
+		return nil
+	}
+	if opts != nil && opts.OnDirectiveUpdate != nil {
+		opts.OnDirectiveUpdate(DirectiveProgress{
+			DirectiveID: d.ID,
+			Description: d.Name,
+			Status:      "running",
+			Detail:      "collecting activity",
+		})
+	}
+	items, err := ac.CollectActivity(ctx, d, since, opts)
+	if err != nil {
+		if opts != nil && opts.OnDirectiveUpdate != nil {
+			opts.OnDirectiveUpdate(DirectiveProgress{
+				DirectiveID: d.ID,
+				Description: d.Name,
+				Status:      "error",
+				Detail:      err.Error(),
+			})
+		}
+		return []StatusItem{{
+			DirectiveID: d.ID,
+			ProjectID:   d.ProjectID,
+			Source:      d.Collector,
+			Kind:        "collector_error",
+			Title:       d.Name,
+			Summary:     err.Error(),
+			Severity:    "error",
+			ObservedAt:  r.clock(),
+		}}
+	}
+	if opts != nil && opts.OnDirectiveUpdate != nil {
+		opts.OnDirectiveUpdate(DirectiveProgress{
+			DirectiveID: d.ID,
+			Description: d.Name,
+			Status:      "done",
+			Detail:      fmt.Sprintf("%d item(s)", len(items)),
+		})
+	}
+	return items
 }
 
 func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, opts *CollectOpts) []StatusItem {
@@ -229,4 +326,9 @@ func (c PlaceholderCollector) Collect(_ context.Context, directive userdata.Dire
 		Severity:    "info",
 		ObservedAt:  c.Clock(),
 	}}, nil
+}
+
+// CollectActivity returns no rows for placeholders (e.g. slack) so recent_activity stays clean.
+func (c PlaceholderCollector) CollectActivity(_ context.Context, _ userdata.Directive, _ time.Time, _ *CollectOpts) ([]StatusItem, error) {
+	return nil, nil
 }
