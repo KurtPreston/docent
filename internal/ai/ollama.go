@@ -73,6 +73,14 @@ func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentAc
 	if err != nil {
 		return "", err
 	}
+	if in.StreamOut != nil {
+		fmt.Fprintln(in.StreamOut, "Prompt:")
+		fmt.Fprintln(in.StreamOut, strings.Repeat("-", 72))
+		_, _ = io.WriteString(in.StreamOut, payload)
+		fmt.Fprintln(in.StreamOut)
+		fmt.Fprintln(in.StreamOut, strings.Repeat("-", 72))
+		fmt.Fprintln(in.StreamOut)
+	}
 	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut)
 	if err != nil {
 		return "", err
