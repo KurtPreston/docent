@@ -60,7 +60,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	fs.StringVar(&configPath, "config", "", "config file path (default <userdata>/config.yaml)")
 	fs.StringVar(&configPath, "c", "", "shorthand for --config")
 	modeFlag := fs.String("mode", "", "daily-plan | recent-activity | custom-prompt")
-	outPath := fs.String("out", "", "output markdown path (default userdata/output/<date>-<mode>.md)")
+	outPath := fs.String("out", "", "output markdown path (default userdata/output/<date>-<mode>.md; if the file exists, -2, -3, … are appended before the extension)")
 	noSave := fs.Bool("no-save", false, "do not write output file")
 	dateStr := fs.String("date", "", "date label YYYY-MM-DD for output filename (default today)")
 
@@ -308,6 +308,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 			return err
 		}
+		out, err = uniqueOutputPath(out)
+		if err != nil {
+			return err
+		}
 		if err := os.WriteFile(out, []byte(md), 0o644); err != nil {
 			return err
 		}
@@ -315,6 +319,26 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+// uniqueOutputPath returns path if nothing exists at that path yet; otherwise it
+// returns the same basename with -2, -3, … inserted before the extension.
+func uniqueOutputPath(path string) (string, error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	candidate := path
+	for n := 2; ; n++ {
+		_, err := os.Stat(candidate)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return candidate, nil
+			}
+			return "", err
+		}
+		candidate = filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, n, ext))
+	}
 }
 
 func mergeDirectivesFromLegacyFile(userdataDir string, cfg *userdata.ConfigFile) error {
