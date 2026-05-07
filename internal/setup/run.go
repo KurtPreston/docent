@@ -222,6 +222,10 @@ func pickActivityFormatter(cfg *userdata.ConfigFile, model configschema.Model, s
 			continue
 		}
 		def := activityFormatterSurveyDefault(tf, cfg.AI.ActivityFormatter)
+		if tf.SkipSetupPrompt {
+			cfg.AI.ActivityFormatter = def
+			continue
+		}
 		var choice string
 		p := &survey.Select{
 			Message: tf.Prompt,
@@ -397,7 +401,7 @@ func manageCollectors(cfg *userdata.ConfigFile, model configschema.Model, survey
 				Config:         map[string]string{},
 				CredentialRefs: map[string]string{},
 			}
-			if err := promptDirectiveIdentity(&d, br, surveyOpt); err != nil {
+			if err := promptDirectiveIdentity(&d, br, model, surveyOpt); err != nil {
 				return err
 			}
 			if err := promptDirectiveFields(&d, br, surveyOpt); err != nil {
@@ -502,26 +506,34 @@ func indicesForCollector(cfg *userdata.ConfigFile, collector string) []int {
 	return ix
 }
 
-func promptDirectiveIdentity(d *userdata.Directive, br configschema.CollectorBranch, surveyOpt survey.AskOpt) error {
+func promptDirectiveIdentity(d *userdata.Directive, br configschema.CollectorBranch, model configschema.Model, surveyOpt survey.AskOpt) error {
 	idDef := br.DefaultID
 	if strings.TrimSpace(d.ID) != "" {
 		idDef = d.ID
 	}
-	var id string
-	if err := survey.AskOne(&survey.Input{Message: "Directive id (lowercase, digits, hyphens)", Default: idDef}, &id, surveyOpt); err != nil {
-		return err
+	if model.SkipDirectiveIDSetupPrompt {
+		d.ID = strings.TrimSpace(idDef)
+	} else {
+		var id string
+		if err := survey.AskOne(&survey.Input{Message: "Directive id (lowercase, digits, hyphens)", Default: idDef}, &id, surveyOpt); err != nil {
+			return err
+		}
+		d.ID = strings.TrimSpace(id)
 	}
-	d.ID = strings.TrimSpace(id)
 
 	nameDef := br.DisplayName
 	if strings.TrimSpace(d.Name) != "" {
 		nameDef = d.Name
 	}
-	var name string
-	if err := survey.AskOne(&survey.Input{Message: "Short label / name", Default: nameDef}, &name, surveyOpt); err != nil {
-		return err
+	if model.SkipDirectiveNameSetupPrompt {
+		d.Name = strings.TrimSpace(nameDef)
+	} else {
+		var name string
+		if err := survey.AskOne(&survey.Input{Message: "Short label / name", Default: nameDef}, &name, surveyOpt); err != nil {
+			return err
+		}
+		d.Name = strings.TrimSpace(name)
 	}
-	d.Name = strings.TrimSpace(name)
 	return nil
 }
 
@@ -596,6 +608,33 @@ func promptDirectiveFields(d *userdata.Directive, br configschema.CollectorBranc
 		def := f.Default
 		if cur != "" {
 			def = cur
+		}
+		if f.SkipSetupPrompt {
+			if f.Secret {
+				envName := strings.TrimSpace(def)
+				if envName == "" && !f.Required {
+					clearCredential(d, f.Key)
+					continue
+				}
+				if envName == "" && f.Required {
+					return fmt.Errorf("directive field %q is required but has no default", f.Key)
+				}
+				setCredential(d, f.Key, envName)
+				continue
+			}
+			val := strings.TrimSpace(def)
+			if val == "" && !f.Required {
+				clearNonSecret(d, f)
+				continue
+			}
+			if val == "" && f.Required {
+				return fmt.Errorf("directive field %q is required but has no default", f.Key)
+			}
+			if err := validateFieldValue(val, f.Validator); err != nil {
+				return fmt.Errorf("%s: %w", f.Prompt, err)
+			}
+			setNonSecret(d, f, val)
+			continue
 		}
 		if f.Secret {
 			msg := f.Prompt + " (environment variable name)"

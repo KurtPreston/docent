@@ -38,11 +38,31 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 				if len(tf.Enum) != 2 {
 					t.Fatalf("activity_formatter enums: %+v", tf.Enum)
 				}
+				if !tf.SkipSetupPrompt {
+					t.Fatal("expected activity_formatter x-slakkr-setup-skip-prompt")
+				}
 			}
 		}
 	}
 	if !foundFormatter {
 		t.Fatal("expected activity_formatter TopLevelFields on ai branches")
+	}
+	if !m.SkipDirectiveIDSetupPrompt || !m.SkipDirectiveNameSetupPrompt {
+		t.Fatalf("directive identity skip flags: id=%v name=%v", m.SkipDirectiveIDSetupPrompt, m.SkipDirectiveNameSetupPrompt)
+	}
+	var ghUserSkips int
+	for _, br := range m.Collectors {
+		for _, f := range br.Fields {
+			if br.Collector == "github" && f.Section == configschema.SectionTarget && f.Key == "username" {
+				if !f.SkipSetupPrompt {
+					t.Fatal("expected github target.username x-slakkr-setup-skip-prompt")
+				}
+				ghUserSkips++
+			}
+		}
+	}
+	if ghUserSkips != 1 {
+		t.Fatalf("github username skip: got %d", ghUserSkips)
 	}
 }
 

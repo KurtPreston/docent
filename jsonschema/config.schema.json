@@ -30,7 +30,8 @@
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
               "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological"
+              "x-slakkr-default": "repo-chronological",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "required": ["provider"],
@@ -47,7 +48,8 @@
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
               "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological"
+              "x-slakkr-default": "repo-chronological",
+              "x-slakkr-setup-skip-prompt": true
             },
             "ollama": {
               "type": "object",
@@ -81,7 +83,8 @@
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
               "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological"
+              "x-slakkr-default": "repo-chronological",
+              "x-slakkr-setup-skip-prompt": true
             },
             "cursor": {
               "type": "object",
@@ -112,11 +115,13 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9-]*$"
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "x-slakkr-setup-skip-prompt": true
         },
         "name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "x-slakkr-setup-skip-prompt": true
         },
         "collector": {
           "type": "string"
@@ -246,7 +251,8 @@
           "properties": {
             "username": {
               "type": "string",
-              "x-slakkr-prompt": "GitHub username (leave empty for authenticated user)"
+              "x-slakkr-prompt": "GitHub username (leave empty for authenticated user)",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -297,7 +303,8 @@
           "properties": {
             "username": {
               "type": "string",
-              "x-slakkr-prompt": "GitHub Enterprise username (leave empty for authenticated user)"
+              "x-slakkr-prompt": "GitHub Enterprise username (leave empty for authenticated user)",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -350,7 +357,8 @@
           "properties": {
             "owner": {
               "type": "string",
-              "x-slakkr-prompt": "User or organization (leave empty for authenticated user)"
+              "x-slakkr-prompt": "User or organization (leave empty for authenticated user)",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
