@@ -92,13 +92,15 @@
                 "command": {
                   "type": "string",
                   "x-slakkr-prompt": "cursor-agent command",
-                  "x-slakkr-default": "cursor-agent"
+                  "x-slakkr-default": "cursor-agent",
+                  "x-slakkr-setup-skip-prompt": true
                 },
                 "args": {
                   "type": "array",
                   "items": {
                     "type": "string"
-                  }
+                  },
+                  "x-slakkr-setup-skip-prompt": true
                 }
               },
               "additionalProperties": false
