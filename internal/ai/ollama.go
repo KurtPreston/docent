@@ -19,6 +19,7 @@ type OllamaProvider struct {
 	BaseURL    string
 	Model      string
 	HTTPClient *http.Client
+	Formatter  ActivityFormatter
 }
 
 type ollamaChatRequest struct {
@@ -49,9 +50,16 @@ func (p OllamaProvider) client() *http.Client {
 	return http.DefaultClient
 }
 
+func (p OllamaProvider) formatterOrDefault() ActivityFormatter {
+	if p.Formatter != nil {
+		return p.Formatter
+	}
+	return SelectActivityFormatter("")
+}
+
 func (p OllamaProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput) (string, error) {
-	instruction := "Create a practical daily plan. Section `## Yesterday` summarizes factual work from `statuses`. Section `## Today` proposes a focused plan for today using that activity and optional `user_priorities`."
-	payload, err := BuildDailyPlanPrompt(instruction, in)
+	instruction := "Create a practical daily plan. Section `## Yesterday` summarizes factual work from the aggregated activity below. Section `## Today` proposes a focused plan for today using that activity and optional priorities."
+	payload, err := BuildDailyPlanPrompt(instruction, in, p.formatterOrDefault())
 	if err != nil {
 		return "", err
 	}
@@ -65,12 +73,12 @@ func (p OllamaProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput
 
 func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
 	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by Git repository when each status item's `repository` field is set (usually org/repo). Use the structured `statuses` JSON below as ground truth. Return one Markdown document with per-repository sections, a brief executive summary at the top, and noteworthy callouts. Do not invent activity not present in the input.",
+		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s). Activity below is grouped by Git repository where each item's repository field is set (usually org/repo); treat it as ground truth. Return one Markdown document with a brief executive summary at the top and noteworthy callouts. Do not invent activity not present in the input.",
 		in.LookbackDays,
 		in.Since.Format(time.RFC3339),
 		in.Now.Format(time.RFC3339),
 	)
-	payload, err := BuildRecentActivityPrompt(instruction, in)
+	payload, err := BuildRecentActivityPrompt(instruction, in, p.formatterOrDefault())
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +91,7 @@ func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentAc
 }
 
 func (p OllamaProvider) RunCustomPrompt(ctx context.Context, in CustomPromptInput) (string, error) {
-	payload, err := BuildCustomPromptPayload(in.UserPrompt, in)
+	payload, err := BuildCustomPromptPayload(in.UserPrompt, in, p.formatterOrDefault())
 	if err != nil {
 		return "", err
 	}

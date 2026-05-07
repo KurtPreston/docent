@@ -22,7 +22,7 @@ Bootstrap or refresh `userdata/config.yaml` and reconcile secret placeholders in
 # or: go run ./cmd/slakkr-setup --userdata userdata
 ```
 
-The wizard picks an AI provider (cursor / ollama / offline `rule-based`), walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
+The wizard picks an AI provider (cursor / ollama / offline `rule-based`), an activity formatter, walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
 
 Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`internal/configschema/config.schema.json`](internal/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
 
@@ -30,6 +30,7 @@ Config shape is validated at runtime against [`jsonschema/config.schema.json`](j
 
 Single file: `ai` and `directives`.
 
+- **`ai.activity_formatter`** (optional): How activity is aggregated for the model and rule-based output. **`repo-chronological`** (default)—group by `repository`, chronological lines per repo. **`json-signal-list`**—full `statuses` as a structured JSON array (heavier payload; debugging).
 - **`directives`**: Collector, target, config, `credential_refs` for secrets in `userdata/.env`.
 - **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory’s immediate children that contain `.git`.
 - **Legacy**: If `directives` is missing but `userdata/directives.yaml` exists, directives are loaded from there once.
@@ -40,6 +41,7 @@ Example:
 # yaml-language-server: $schema=../jsonschema/config.schema.json
 ai:
   provider: ollama   # or cursor, rule-based
+  activity_formatter: repo-chronological  # optional; or json-signal-list
   ollama:
     base_url: http://127.0.0.1:11434
     model: llama3
@@ -79,7 +81,7 @@ Run without `--mode` on a TTY to pick interactively.
 
 ## AI providers
 
-- **`rule-based`**: Deterministic markdown (no network); good for tests.
+- **`rule-based`**: Deterministic markdown (no network); uses the same `activity_formatter` shaping as cloud providers.
 - **`ollama`**: HTTP chat to Ollama; streams to stderr when connected to a TTY.
 - **`cursor`**: Shells out to `cursor-agent` (override with `ai.cursor.command` / `args`). Each call runs from a fresh temp directory in read-only `--mode=ask` with `--sandbox=enabled`, so the agent cannot edit files or run shell commands. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
 

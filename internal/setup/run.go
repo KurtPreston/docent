@@ -187,15 +187,69 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 	}
 	switch {
 	case strings.HasPrefix(sel, "cursor"):
-		cfg.AI = userdata.AIConfig{Provider: "cursor"}
-		return fillAINested(cfg, model, "cursor", surveyOpt)
+		cfg.AI.Provider = "cursor"
+		cfg.AI.Ollama = userdata.AIProviderOllama{}
+		if err := fillAINested(cfg, model, "cursor", surveyOpt); err != nil {
+			return err
+		}
 	case strings.HasPrefix(sel, "ollama"):
-		cfg.AI = userdata.AIConfig{Provider: "ollama"}
-		return fillAINested(cfg, model, "ollama", surveyOpt)
+		cfg.AI.Provider = "ollama"
+		cfg.AI.Cursor = userdata.AIProviderCursor{}
+		if err := fillAINested(cfg, model, "ollama", surveyOpt); err != nil {
+			return err
+		}
 	default:
-		cfg.AI = userdata.AIConfig{Provider: "rule-based"}
+		cfg.AI.Provider = "rule-based"
+		cfg.AI.Ollama = userdata.AIProviderOllama{}
+		cfg.AI.Cursor = userdata.AIProviderCursor{}
+	}
+	return pickActivityFormatter(cfg, model, surveyOpt)
+}
+
+func pickActivityFormatter(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey.AskOpt) error {
+	var branch *configschema.AIProviderBranch
+	for i := range model.AIProviders {
+		if model.AIProviders[i].Provider == cfg.AI.Provider {
+			branch = &model.AIProviders[i]
+			break
+		}
+	}
+	if branch == nil {
 		return nil
 	}
+	for _, tf := range branch.TopLevelFields {
+		if tf.Key != "activity_formatter" || len(tf.Enum) == 0 {
+			continue
+		}
+		def := activityFormatterSurveyDefault(tf, cfg.AI.ActivityFormatter)
+		var choice string
+		p := &survey.Select{
+			Message: tf.Prompt,
+			Options: tf.Enum,
+			Default: def,
+		}
+		if err := survey.AskOne(p, &choice, surveyOpt); err != nil {
+			return err
+		}
+		cfg.AI.ActivityFormatter = choice
+	}
+	return nil
+}
+
+func activityFormatterSurveyDefault(tf configschema.AIField, cfgVal string) string {
+	v := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(cfgVal, "_", "-")))
+	for _, opt := range tf.Enum {
+		if opt == v {
+			return opt
+		}
+	}
+	d := strings.TrimSpace(tf.Default)
+	for _, opt := range tf.Enum {
+		if opt == d {
+			return opt
+		}
+	}
+	return tf.Enum[0]
 }
 
 func providerDefaultLabel(p string) string {

@@ -69,9 +69,57 @@ func parseAIProviders(aiDef any) ([]AIProviderBranch, error) {
 				branch.Fields = append(branch.Fields, extractAIFields(om)...)
 			}
 		}
+		extractAITopLevelEnumFields(&branch, bm)
 		out = append(out, branch)
 	}
 	return out, nil
+}
+
+// extractAITopLevelEnumFields parses string enum keys on ai (same level as provider), e.g. activity_formatter.
+func extractAITopLevelEnumFields(branch *AIProviderBranch, bm map[string]any) {
+	props, ok := bm["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	var keys []string
+	for k := range props {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		switch key {
+		case "provider", "ollama", "cursor":
+			continue
+		}
+		vm, ok := props[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		enumRaw, ok := vm["enum"].([]any)
+		if !ok {
+			continue
+		}
+		var opts []string
+		for _, v := range enumRaw {
+			s, ok := v.(string)
+			if ok && strings.TrimSpace(s) != "" {
+				opts = append(opts, s)
+			}
+		}
+		if len(opts) == 0 {
+			continue
+		}
+		def := strings.TrimSpace(strAnnotation(vm, "x-slakkr-default", ""))
+		if def == "" {
+			def = opts[0]
+		}
+		branch.TopLevelFields = append(branch.TopLevelFields, AIField{
+			Key:     key,
+			Prompt:  strAnnotation(vm, "x-slakkr-prompt", key),
+			Default: def,
+			Enum:    opts,
+		})
+	}
 }
 
 func extractAIFields(objSchema map[string]any) []AIField {

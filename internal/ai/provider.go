@@ -11,6 +11,7 @@ func SelectProvider(cfg userdata.AIConfig, fallback Provider) Provider {
 	if fallback == nil {
 		fallback = RuleBasedProvider{}
 	}
+	formatter := SelectActivityFormatter(cfg.ActivityFormatter)
 	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(cfg.Provider), "_", "-")) {
 	case "ollama":
 		base := strings.TrimRight(strings.TrimSpace(cfg.Ollama.BaseURL), "/")
@@ -21,16 +22,20 @@ func SelectProvider(cfg userdata.AIConfig, fallback Provider) Provider {
 		if model == "" {
 			model = "llama3"
 		}
-		return OllamaProvider{BaseURL: base, Model: model}
+		return OllamaProvider{BaseURL: base, Model: model, Formatter: formatter}
 	case "cursor":
 		cmd := strings.TrimSpace(cfg.Cursor.Command)
 		if cmd == "" {
 			cmd = "cursor-agent"
 		}
-		return CursorCLIProvider{Command: cmd, Args: cfg.Cursor.Args}
+		return CursorCLIProvider{Command: cmd, Args: cfg.Cursor.Args, Formatter: formatter}
 	case "", "rule-based":
-		return RuleBasedProvider{}
+		return RuleBasedProvider{Formatter: formatter}
 	default:
+		if rb, ok := fallback.(RuleBasedProvider); ok {
+			rb.Formatter = formatter
+			return rb
+		}
 		return fallback
 	}
 }

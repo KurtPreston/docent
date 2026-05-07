@@ -24,6 +24,13 @@
             "provider": {
               "type": "string",
               "const": "rule-based"
+            },
+            "activity_formatter": {
+              "type": "string",
+              "enum": ["repo-chronological", "json-signal-list"],
+              "default": "repo-chronological",
+              "x-slakkr-prompt": "Activity formatter",
+              "x-slakkr-default": "repo-chronological"
             }
           },
           "required": ["provider"],
@@ -34,6 +41,13 @@
             "provider": {
               "type": "string",
               "const": "ollama"
+            },
+            "activity_formatter": {
+              "type": "string",
+              "enum": ["repo-chronological", "json-signal-list"],
+              "default": "repo-chronological",
+              "x-slakkr-prompt": "Activity formatter",
+              "x-slakkr-default": "repo-chronological"
             },
             "ollama": {
               "type": "object",
@@ -61,6 +75,13 @@
             "provider": {
               "type": "string",
               "const": "cursor"
+            },
+            "activity_formatter": {
+              "type": "string",
+              "enum": ["repo-chronological", "json-signal-list"],
+              "default": "repo-chronological",
+              "x-slakkr-prompt": "Activity formatter",
+              "x-slakkr-default": "repo-chronological"
             },
             "cursor": {
               "type": "object",

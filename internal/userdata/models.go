@@ -27,9 +27,10 @@ type Directive struct {
 }
 
 type AIConfig struct {
-	Provider string           `yaml:"provider,omitempty"`
-	Ollama   AIProviderOllama `yaml:"ollama,omitempty"`
-	Cursor   AIProviderCursor `yaml:"cursor,omitempty"`
+	Provider           string           `yaml:"provider,omitempty"`
+	ActivityFormatter  string           `yaml:"activity_formatter,omitempty"`
+	Ollama             AIProviderOllama `yaml:"ollama,omitempty"`
+	Cursor             AIProviderCursor `yaml:"cursor,omitempty"`
 }
 
 type AIProviderOllama struct {

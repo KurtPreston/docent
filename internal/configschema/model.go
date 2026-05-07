@@ -8,18 +8,20 @@ type Model struct {
 
 // AIProviderBranch describes one ai.provider option (rule-based / ollama / cursor).
 type AIProviderBranch struct {
-	Provider  string
-	NestedKey string // "", "ollama", or "cursor"
-	Fields    []AIField
+	Provider       string
+	NestedKey      string // "", "ollama", or "cursor"
+	Fields         []AIField // leaves under ai.ollama or ai.cursor
+	TopLevelFields []AIField // enum-like keys on ai next to provider (e.g. activity_formatter)
 }
 
-// AIField is a leaf field under ai.ollama or ai.cursor.
+// AIField is a wizard prompt leaf (nested under ai.ollama/ai.cursor, or ai root for enums).
 type AIField struct {
 	Key       string
 	Prompt    string
 	Default   string
 	Validator string
 	IsArgs    bool // cursor.args — optional comma-separated in wizard
+	Enum      []string
 }
 
 // CollectorBranch describes one collector type from the directive oneOf.

@@ -30,6 +30,56 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 	if len(m.Collectors) != 6 {
 		t.Fatalf("collectors: got %d", len(m.Collectors))
 	}
+	var foundFormatter bool
+	for _, br := range m.AIProviders {
+		for _, tf := range br.TopLevelFields {
+			if tf.Key == "activity_formatter" {
+				foundFormatter = true
+				if len(tf.Enum) != 2 {
+					t.Fatalf("activity_formatter enums: %+v", tf.Enum)
+				}
+			}
+		}
+	}
+	if !foundFormatter {
+		t.Fatal("expected activity_formatter TopLevelFields on ai branches")
+	}
+}
+
+func TestValidateYAML_badActivityFormatterFails(t *testing.T) {
+	yamlDoc := `
+ai:
+  provider: rule-based
+  activity_formatter: bogus
+directives:
+  - id: gh
+    name: GH
+    collector: github
+    enabled: true
+`
+	err := configschema.ValidateYAML([]byte(strings.TrimSpace(yamlDoc)))
+	if err == nil {
+		t.Fatal("expected schema validation error")
+	}
+}
+
+func TestValidateYAML_activityFormatterValuesOK(t *testing.T) {
+	for _, val := range []string{"repo-chronological", "json-signal-list"} {
+		yamlDoc := `
+ai:
+  provider: rule-based
+  activity_formatter: VALUE
+directives:
+  - id: gh
+    name: GH
+    collector: github
+    enabled: true
+`
+		doc := strings.ReplaceAll(strings.TrimSpace(yamlDoc), "VALUE", val)
+		if err := configschema.ValidateYAML([]byte(doc)); err != nil {
+			t.Fatalf("%q: %v", val, configschema.ValidationProblems(err))
+		}
+	}
 }
 
 func TestValidateYAML_badDirectiveFails(t *testing.T) {

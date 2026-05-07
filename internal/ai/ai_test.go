@@ -20,7 +20,7 @@ func TestBuildDailyPlanPromptBoundary(t *testing.T) {
 			Summary:     "abc",
 			ObservedAt:  time.Unix(1, 0).UTC(),
 		}},
-	})
+	}, RepoChronologicalFormatter{HeadingLevel: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,9 +45,15 @@ func TestRenderRecentActivityMarkdown(t *testing.T) {
 			Title:       "x",
 			Summary:     "y",
 			ObservedAt:  time.Unix(500, 0).UTC(),
+			Fields: map[string]string{
+				"short_hash": "abcd123",
+			},
 		}},
-	})
+	}, RepoChronologicalFormatter{HeadingLevel: 2})
 	if !strings.Contains(md, "p1") {
+		t.Fatal(md)
+	}
+	if !strings.Contains(md, "local-git commit abcd123:") {
 		t.Fatal(md)
 	}
 }

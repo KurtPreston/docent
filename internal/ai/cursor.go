@@ -17,14 +17,23 @@ import (
 // uses cursor-agent's read-only `ask` mode plus `--sandbox enabled`, so the
 // agent cannot edit files or run shell commands. The temp directory is
 // removed after the call returns. This is defense in depth: slakkr only ever
-// asks the model to convert structured `statuses` JSON into Markdown, so the
+// asks the model to convert structured activity below into Markdown, so the
 // agent should never need to touch the filesystem or execute anything.
 type CursorCLIProvider struct {
 	Command string
+	// Formatter shapes how statuses are appended to prompts (defaults to repo-chronological).
+	Formatter ActivityFormatter
 	// Args, when non-empty, replaces the default flag set passed to
 	// cursor-agent. The prompt payload is always appended as the final
 	// positional argument, so user-supplied Args should NOT include it.
 	Args []string
+}
+
+func (p CursorCLIProvider) formatterOrDefault() ActivityFormatter {
+	if p.Formatter != nil {
+		return p.Formatter
+	}
+	return SelectActivityFormatter("")
 }
 
 func (p CursorCLIProvider) command() string {
@@ -50,8 +59,8 @@ func defaultCursorArgs() []string {
 }
 
 func (p CursorCLIProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput) (string, error) {
-	instruction := "Create a practical daily plan as Markdown with sections `## Yesterday` and `## Today`, using `statuses` as ground truth."
-	payload, err := BuildDailyPlanPrompt(instruction, in)
+	instruction := "Create a practical daily plan as Markdown with sections `## Yesterday` and `## Today`, using the aggregated activity below as ground truth."
+	payload, err := BuildDailyPlanPrompt(instruction, in, p.formatterOrDefault())
 	if err != nil {
 		return "", err
 	}
@@ -60,12 +69,12 @@ func (p CursorCLIProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanIn
 
 func (p CursorCLIProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
 	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by Git repository when each status item's `repository` field is set (usually org/repo). Use the structured `statuses` JSON below as ground truth. Return one Markdown document.",
+		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s). Activity below is grouped by Git repository where each item's repository field is set (usually org/repo) and chronological within each group. Treat it as ground truth. Return one Markdown document.",
 		in.LookbackDays,
 		in.Since.Format(time.RFC3339),
 		in.Now.Format(time.RFC3339),
 	)
-	payload, err := BuildRecentActivityPrompt(instruction, in)
+	payload, err := BuildRecentActivityPrompt(instruction, in, p.formatterOrDefault())
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +82,7 @@ func (p CursorCLIProvider) SummarizeRecentActivity(ctx context.Context, in Recen
 }
 
 func (p CursorCLIProvider) RunCustomPrompt(ctx context.Context, in CustomPromptInput) (string, error) {
-	payload, err := BuildCustomPromptPayload(in.UserPrompt, in)
+	payload, err := BuildCustomPromptPayload(in.UserPrompt, in, p.formatterOrDefault())
 	if err != nil {
 		return "", err
 	}
@@ -131,8 +140,8 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload string, stre
 }
 
 // redactCursorArgs replaces the prompt payload with a placeholder so the
-// banner printed to stderr stays compact and doesn't echo the full statuses
-// JSON (which can be large and may contain repo paths/usernames).
+// banner printed to stderr stays compact and doesn't echo the full prompt
+// payload (which can be large and may contain repo paths/usernames).
 func redactCursorArgs(args []string, payload string) []string {
 	out := make([]string, len(args))
 	for i, a := range args {

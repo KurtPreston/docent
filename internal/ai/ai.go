@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -48,21 +49,36 @@ type CustomPromptInput struct {
 }
 
 // RuleBasedProvider is deterministic (no network); used for tests and offline runs.
-type RuleBasedProvider struct{}
-
-func (RuleBasedProvider) GenerateDailyPlan(_ context.Context, in DailyPlanInput) (string, error) {
-	return RenderDailyPlanMarkdown(in), nil
+type RuleBasedProvider struct {
+	Formatter ActivityFormatter // if nil, uses repo-chronological (##)
 }
 
-func (RuleBasedProvider) SummarizeRecentActivity(_ context.Context, in RecentActivityInput) (string, error) {
-	return RenderRecentActivityMarkdown(in), nil
+func (p RuleBasedProvider) formatterOrDefault() ActivityFormatter {
+	if p.Formatter != nil {
+		return p.Formatter
+	}
+	return RepoChronologicalFormatter{HeadingLevel: 2}
 }
 
-func (RuleBasedProvider) RunCustomPrompt(_ context.Context, in CustomPromptInput) (string, error) {
+func (p RuleBasedProvider) GenerateDailyPlan(_ context.Context, in DailyPlanInput) (string, error) {
+	return RenderDailyPlanMarkdown(in, p.formatterOrDefault()), nil
+}
+
+func (p RuleBasedProvider) SummarizeRecentActivity(_ context.Context, in RecentActivityInput) (string, error) {
+	return RenderRecentActivityMarkdown(in, p.formatterOrDefault()), nil
+}
+
+func (p RuleBasedProvider) RunCustomPrompt(_ context.Context, in CustomPromptInput) (string, error) {
+	nestedFmt := NestRepoChronologicalDepth(p.formatterOrDefault())
+	body, err := nestedFmt.Format(in.Statuses)
+	if err != nil {
+		body = fmt.Sprintf("_formatter error: %v_", err)
+	}
 	var b strings.Builder
 	b.WriteString("# Custom report\n\n")
 	b.WriteString(in.UserPrompt)
 	b.WriteString("\n\n## Activity (ground truth)\n\n")
-	renderActivityBySourceLegacy(&b, in.Statuses)
+	b.WriteString(strings.TrimRight(body, "\n"))
+	b.WriteByte('\n')
 	return b.String(), nil
 }
