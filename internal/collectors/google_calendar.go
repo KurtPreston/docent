@@ -85,7 +85,6 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 		}
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
 			Source:      "google-calendar",
 			Kind:        "calendar_event",
 			Title:       ev.summary,

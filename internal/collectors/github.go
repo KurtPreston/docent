@@ -85,7 +85,7 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		}
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
+			Repository:  repo,
 			Source:      directive.Collector,
 			Kind:        "pull_request_activity",
 			Title:       pr.Title,
@@ -119,7 +119,7 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		}
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
+			Repository:  repo,
 			Source:      directive.Collector,
 			Kind:        "issue_activity",
 			Title:       iss.Title,

@@ -55,44 +55,44 @@ func RenderDailyPlanMarkdown(in DailyPlanInput) string {
 
 // RenderRecentActivityMarkdown deterministically renders statuses as Markdown.
 func RenderRecentActivityMarkdown(in RecentActivityInput) string {
-	projName := map[string]string{}
+	repoTitle := map[string]string{}
 	for _, s := range in.Statuses {
-		pid := strings.TrimSpace(s.ProjectID)
-		if pid == "" {
+		r := strings.TrimSpace(s.Repository)
+		if r == "" {
 			continue
 		}
-		if _, ok := projName[pid]; !ok {
-			projName[pid] = pid
+		if _, ok := repoTitle[r]; !ok {
+			repoTitle[r] = r
 		}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Recent activity (%s — %s)\n\n", in.Since.Format("2006-01-02"), in.Now.Format("2006-01-02"))
 	fmt.Fprintf(&b, "_lookback: %d day(s)_\n\n", in.LookbackDays)
-	byProject := map[string][]collectors.StatusItem{}
+	byRepo := map[string][]collectors.StatusItem{}
 	var cross []collectors.StatusItem
 	for _, s := range in.Statuses {
 		if s.Kind == "collector_error" {
 			continue
 		}
-		pid := strings.TrimSpace(s.ProjectID)
-		if pid == "" {
+		r := strings.TrimSpace(s.Repository)
+		if r == "" {
 			cross = append(cross, s)
 			continue
 		}
-		byProject[pid] = append(byProject[pid], s)
+		byRepo[r] = append(byRepo[r], s)
 	}
-	allPids := make([]string, 0, len(byProject))
-	for pid := range byProject {
-		allPids = append(allPids, pid)
+	allRepos := make([]string, 0, len(byRepo))
+	for r := range byRepo {
+		allRepos = append(allRepos, r)
 	}
-	sort.Strings(allPids)
-	for _, pid := range allPids {
-		name := projName[pid]
+	sort.Strings(allRepos)
+	for _, r := range allRepos {
+		name := repoTitle[r]
 		if name == "" {
-			name = pid
+			name = r
 		}
-		fmt.Fprintf(&b, "## %s (`%s`)\n\n", name, pid)
-		items := byProject[pid]
+		fmt.Fprintf(&b, "## %s (`%s`)\n\n", name, r)
+		items := byRepo[r]
 		if len(items) == 0 {
 			b.WriteString("_No activity in this window._\n\n")
 			continue

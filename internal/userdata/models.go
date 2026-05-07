@@ -22,7 +22,6 @@ type Directive struct {
 	Name           string            `yaml:"name"`
 	Collector      string            `yaml:"collector"`
 	Enabled        bool              `yaml:"enabled"`
-	ProjectID      string            `yaml:"project_id,omitempty"` // optional label for grouping in reports
 	CodeHome       string            `yaml:"code_home,omitempty"`  // local-git: parent dir of immediate child repos when paths empty
 	Paths          []string          `yaml:"paths,omitempty"`      // local-git: explicit repo roots; if empty, use code_home scan
 	Target         map[string]string `yaml:"target,omitempty"`

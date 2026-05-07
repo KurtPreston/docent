@@ -12,7 +12,7 @@ import (
 
 type StatusItem struct {
 	DirectiveID    string            `json:"directive_id"`
-	ProjectID      string            `json:"project_id,omitempty"`
+	Repository     string            `json:"repository,omitempty"` // grouping key when known (e.g. org/repo, local folder name)
 	Source         string            `json:"source"`
 	Kind           string            `json:"kind"`
 	Title          string            `json:"title"`
@@ -146,7 +146,6 @@ func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, o
 		}
 		return []StatusItem{{
 			DirectiveID: d.ID,
-			ProjectID:   d.ProjectID,
 			Source:      d.Collector,
 			Kind:        "collector_error",
 			Title:       d.Name,

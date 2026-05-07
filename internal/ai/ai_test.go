@@ -39,7 +39,7 @@ func TestRenderRecentActivityMarkdown(t *testing.T) {
 		LookbackDays: 7,
 		Statuses: []collectors.StatusItem{{
 			DirectiveID: "d",
-			ProjectID:   "p1",
+			Repository:  "p1",
 			Source:      "local-git",
 			Kind:        "commit",
 			Title:       "x",

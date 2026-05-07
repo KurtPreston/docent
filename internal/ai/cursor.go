@@ -60,7 +60,7 @@ func (p CursorCLIProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanIn
 
 func (p CursorCLIProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
 	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by project when project_id is present. Use the structured `statuses` JSON below as ground truth. Return one Markdown document.",
+		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by Git repository when each status item's `repository` field is set (usually org/repo). Use the structured `statuses` JSON below as ground truth. Return one Markdown document.",
 		in.LookbackDays,
 		in.Since.Format(time.RFC3339),
 		in.Now.Format(time.RFC3339),

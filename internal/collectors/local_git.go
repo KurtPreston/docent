@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,10 +36,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 	var out []StatusItem
 	commitTimes := map[string]time.Time{}
 	for _, abs := range dirs {
-		baseLabel := strings.TrimSpace(directive.ProjectID)
-		if baseLabel == "" {
-			baseLabel = filepath.Base(abs)
-		}
+		repoLabel := localGitRepositoryKey(ctx, abs)
 		logOut, err := gitOutput(ctx, abs, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%s")
 		if err != nil {
 			return nil, err
@@ -75,7 +73,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 			}
 			out = append(out, StatusItem{
 				DirectiveID: directive.ID,
-				ProjectID:   baseLabel,
+				Repository:  repoLabel,
 				Source:      "local-git",
 				Kind:        "commit",
 				Title:       title,
@@ -135,7 +133,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 			}
 			out = append(out, StatusItem{
 				DirectiveID: directive.ID,
-				ProjectID:   baseLabel,
+				Repository:  repoLabel,
 				Source:      "local-git",
 				Kind:        "reflog",
 				Title:       title,
@@ -153,6 +151,71 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		}
 	}
 	return out, nil
+}
+
+// localGitRepositoryKey prefers remote.origin URL (owner/repo or nested path) so local-git
+// aligns with GitHub / Gitea `repository`; falls back to the working tree directory name.
+func localGitRepositoryKey(ctx context.Context, abs string) string {
+	fallback := filepath.Base(abs)
+	out, err := gitOutput(ctx, abs, "remote", "get-url", "origin")
+	if err != nil {
+		return fallback
+	}
+	if key := parseGitRemoteToRepositoryKey(strings.TrimSpace(out)); key != "" {
+		return key
+	}
+	return fallback
+}
+
+// parseGitRemoteToRepositoryKey returns the path portion of a remote URL as host-relative
+// repo identity (e.g. "org/repo"), or "" if the URL does not look like a standard forge URL.
+func parseGitRemoteToRepositoryKey(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		if path, ok := splitSCPLikeGitRemote(raw); ok {
+			return normalizeRepositoryPath(path)
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	path := strings.TrimPrefix(u.Path, "/")
+	return normalizeRepositoryPath(path)
+}
+
+func splitSCPLikeGitRemote(raw string) (path string, ok bool) {
+	at := strings.LastIndex(raw, "@")
+	if at < 0 {
+		return "", false
+	}
+	rest := raw[at+1:]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return "", false
+	}
+	host := rest[:colon]
+	path = rest[colon+1:]
+	if host == "" || path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+func normalizeRepositoryPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimSuffix(path, ".git")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return ""
+	}
+	if strings.Count(path, "/") < 1 {
+		return ""
+	}
+	return path
 }
 
 func localGitRepoDirs(directive userdata.Directive, opts *CollectOpts, expand func(string) string) ([]string, error) {

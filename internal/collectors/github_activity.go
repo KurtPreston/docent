@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,6 +23,9 @@ type ghSearchActivityRow struct {
 	State     string `json:"state"`
 	UpdatedAt string `json:"updatedAt"`
 	ClosedAt  string `json:"closedAt"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
 }
 
 type ghSearchCommitRow struct {
@@ -94,9 +98,13 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 			if err != nil || obs.Before(since) || obs.After(now) {
 				continue
 			}
+			repo := strings.TrimSpace(row.Repository.NameWithOwner)
+			if repo == "" {
+				repo = gitHubOwnerRepoFromURL(row.URL)
+			}
 			items = append(items, StatusItem{
 				DirectiveID: directive.ID,
-				ProjectID:   directive.ProjectID,
+				Repository:  repo,
 				Source:      directive.Collector,
 				Kind:        itemKind,
 				Title:       row.Title,
@@ -108,6 +116,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 					"query":      queryForSummary,
 					"username":   user,
 					"host":       host,
+					"repo":       repo,
 					"state":      row.State,
 					"updated_at": row.UpdatedAt,
 					"closed_at":  row.ClosedAt,
@@ -150,7 +159,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 			repo := strings.TrimSpace(row.Repository.FullName)
 			items = append(items, StatusItem{
 				DirectiveID: directive.ID,
-				ProjectID:   directive.ProjectID,
+				Repository:  repo,
 				Source:      directive.Collector,
 				Kind:        itemKind,
 				Title:       title,
@@ -175,7 +184,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		[]string{"--author", user, "--updated", updatedFilter},
 		fmt.Sprintf("author:%s updated:>=%s", user, dateStr),
 		"authored_pr",
-		"title,url,state,updatedAt,closedAt",
+		"title,url,state,updatedAt,closedAt,repository",
 	); err != nil {
 		return nil, err
 	}
@@ -184,7 +193,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		[]string{"--reviewed-by", user, "--updated", updatedFilter},
 		fmt.Sprintf("reviewed-by:%s updated:>=%s", user, dateStr),
 		"reviewed_pr",
-		"title,url,state,updatedAt",
+		"title,url,state,updatedAt,repository",
 	); err != nil {
 		return nil, err
 	}
@@ -193,7 +202,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		[]string{"--involves", user, "--updated", updatedFilter},
 		fmt.Sprintf("involves:%s updated:>=%s", user, dateStr),
 		"involved_issue",
-		"title,url,state,updatedAt",
+		"title,url,state,updatedAt,repository",
 	); err != nil {
 		return nil, err
 	}
@@ -204,7 +213,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		[]string{"is:issue", "--commenter", user, "--updated", updatedFilter},
 		fmt.Sprintf("is:issue commenter:%s updated:>=%s", user, dateStr),
 		"left_comment",
-		"title,url,state,updatedAt",
+		"title,url,state,updatedAt,repository",
 	); err != nil {
 		return nil, err
 	}
@@ -213,7 +222,7 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		[]string{"--commenter", user, "--updated", updatedFilter},
 		fmt.Sprintf("is:pull-request commenter:%s updated:>=%s", user, dateStr),
 		"left_comment",
-		"title,url,state,updatedAt",
+		"title,url,state,updatedAt,repository",
 	); err != nil {
 		return nil, err
 	}
@@ -224,4 +233,16 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		return nil, err
 	}
 	return items, nil
+}
+
+func gitHubOwnerRepoFromURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Path == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
 }

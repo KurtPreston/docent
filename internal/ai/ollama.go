@@ -65,7 +65,7 @@ func (p OllamaProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput
 
 func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
 	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by project when `project_id` is present. Use the structured `statuses` JSON below as ground truth. Return one Markdown document with per-project sections, a brief executive summary at the top, and noteworthy callouts. Do not invent activity not present in the input.",
+		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by Git repository when each status item's `repository` field is set (usually org/repo). Use the structured `statuses` JSON below as ground truth. Return one Markdown document with per-repository sections, a brief executive summary at the top, and noteworthy callouts. Do not invent activity not present in the input.",
 		in.LookbackDays,
 		in.Since.Format(time.RFC3339),
 		in.Now.Format(time.RFC3339),

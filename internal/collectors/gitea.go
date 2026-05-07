@@ -84,9 +84,13 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 		if r.Private {
 			summary += " private=true"
 		}
+		repoKey := strings.TrimSpace(r.FullName)
+		if repoKey == "" {
+			repoKey = r.Name
+		}
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
+			Repository:  repoKey,
 			Source:      "gitea",
 			Kind:        "repository_updated",
 			Title:       title,

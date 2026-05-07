@@ -116,7 +116,6 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 		web := strings.TrimRight(base, "/") + "/browse/" + iss.Key
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
 			Source:      "jira",
 			Kind:        "issue_activity",
 			Title:       iss.Key + " " + iss.Fields.Summary,
