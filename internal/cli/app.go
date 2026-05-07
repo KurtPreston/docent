@@ -55,6 +55,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	fs.SetOutput(a.Err)
 
 	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	var configPath string
+	fs.StringVar(&configPath, "config", "", "config file path (default <userdata>/config.yaml)")
+	fs.StringVar(&configPath, "c", "", "shorthand for --config")
 	modeFlag := fs.String("mode", "", "daily-plan | recent-activity | custom-prompt")
 	outPath := fs.String("out", "", "output markdown path (default userdata/output/<date>-<mode>.md)")
 	noSave := fs.Bool("no-save", false, "do not write output file")
@@ -71,11 +74,29 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	store := userdata.NewStore(*userdataDir)
-	if err := store.Ensure(ctx); err != nil {
+	if err := os.MkdirAll(filepath.Join(*userdataDir, "output"), 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(*userdataDir, ".cache"), 0o755); err != nil {
 		return err
 	}
 
-	cfg, err := store.LoadConfig()
+	configPath = strings.TrimSpace(configPath)
+	var (
+		cfg       userdata.ConfigFile
+		cfgSource string
+		err       error
+	)
+	if configPath != "" {
+		cfgSource = configPath
+		cfg, err = loadConfigFromPath(configPath)
+	} else {
+		if err := store.Ensure(ctx); err != nil {
+			return err
+		}
+		cfgSource = store.ConfigPath()
+		cfg, err = store.LoadConfig()
+	}
 	if err != nil {
 		return err
 	}
@@ -83,7 +104,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(cfg.Directives) == 0 {
-		return fmt.Errorf("no directives in %s: add a `directives:` list to config.yaml", store.ConfigPath())
+		return fmt.Errorf("no directives in %s: add a `directives:` list", cfgSource)
 	}
 
 	mode := strings.TrimSpace(*modeFlag)
@@ -312,6 +333,21 @@ func mergeDirectivesFromLegacyFile(userdataDir string, cfg *userdata.ConfigFile)
 	}
 	cfg.Directives = legacy.Directives
 	return nil
+}
+
+func loadConfigFromPath(path string) (userdata.ConfigFile, error) {
+	var cfg userdata.ConfigFile
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	if len(strings.TrimSpace(string(content))) == 0 {
+		return cfg, nil
+	}
+	if err := yaml.Unmarshal(content, &cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }
 
 func expandRepoPathFromStdin(in io.Reader) func(string) string {

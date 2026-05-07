@@ -61,6 +61,7 @@ Run without `--mode` on a TTY to pick interactively.
 ### Common flags
 
 - `--userdata DIR` (default `userdata`)
+- `--config PATH`, `-c PATH` (default `userdata/config.yaml`)
 - `--out PATH` — default `userdata/output/<date>-<mode>.md`
 - `--no-save` — stdout only
 - `--date YYYY-MM-DD` — label for default output filename only
