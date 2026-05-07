@@ -33,7 +33,6 @@ Single file: `ai` and `directives`.
 - **`ai.activity_formatter`** (optional): How activity is aggregated for the model and rule-based output. **`repo-chronological`** (default)—group by `repository`, chronological lines per repo. **`json-signal-list`**—full `statuses` as a structured JSON array (heavier payload; debugging).
 - **`directives`**: Collector, target, config, `credential_refs` for secrets in `userdata/.env`.
 - **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory’s immediate children that contain `.git`.
-- **Legacy**: If `directives` is missing but `userdata/directives.yaml` exists, directives are loaded from there once.
 
 Example:
 
@@ -94,8 +93,6 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `gitea` — repos updated under `target.owner`; defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty.
 - `jira` — issues you assign / report / watch (override with `config.query` for project- or label-scoped JQL).
 - `google-calendar` — events from a secret iCal URL.
-
-Manual / slack collectors were removed.
 
 ## Layout
 
