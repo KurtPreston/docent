@@ -1,16 +1,21 @@
 package userdata
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestLoadSignalsMissingFileIsEmpty(t *testing.T) {
-	store := NewStore(t.TempDir())
-	projects := ProjectsFile{Projects: []Project{{ID: "x", Name: "X"}}}
-	tasks := TasksFile{}
-	file, err := store.LoadSignals(projects, tasks)
-	if err != nil {
-		t.Fatalf("LoadSignals: %v", err)
+func TestEnsureCreatesConfigAndOutput(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if len(file.Signals) != 0 {
-		t.Fatalf("expected empty, got %#v", file)
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.Provider != "rule-based" {
+		t.Fatalf("default provider: %q", cfg.AI.Provider)
 	}
 }

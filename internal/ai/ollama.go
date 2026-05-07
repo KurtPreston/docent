@@ -34,10 +34,6 @@ type ollamaMsg struct {
 	Thinking string `json:"thinking,omitempty"`
 }
 
-type ollamaChatResponse struct {
-	Message ollamaMsg `json:"message"`
-}
-
 type ollamaChatStreamResponse struct {
 	Message         ollamaMsg `json:"message"`
 	Done            bool      `json:"done"`
@@ -53,42 +49,65 @@ func (p OllamaProvider) client() *http.Client {
 	return http.DefaultClient
 }
 
-func (p OllamaProvider) ProposeDayPlan(ctx context.Context, input PlanningInput) (PlanningOutput, error) {
-	return p.run(ctx, "Create a concise daily plan as JSON matching the requested schema.", input)
-}
-
-func (p OllamaProvider) ReflectEndOfDay(ctx context.Context, input PlanningInput) (PlanningOutput, error) {
-	return p.run(ctx, "Create a concise end-of-day reflection as JSON matching the requested schema.", input)
-}
-
-func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
-	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC) on host %q. Group by project. Use the structured `statuses` JSON below as ground truth. Return one Markdown document with per-project sections, a brief executive summary at the top, and noteworthy callouts. Do not invent activity not present in the input.",
-		in.LookbackDays,
-		in.Since.Format(time.RFC3339),
-		in.Now.Format(time.RFC3339),
-		in.HostID,
-	)
-	payload, err := BuildRecentActivityPrompt(instruction, in)
+func (p OllamaProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput) (string, error) {
+	instruction := "Create a practical daily plan. Section `## Yesterday` summarizes factual work from `statuses`. Section `## Today` proposes a focused plan for today using that activity and optional `user_priorities`."
+	payload, err := BuildDailyPlanPrompt(instruction, in)
 	if err != nil {
 		return "", err
 	}
-	if in.StreamOut != nil {
-		fmt.Fprintln(in.StreamOut, "Prompt:")
-		fmt.Fprintln(in.StreamOut, strings.Repeat("-", 72))
-		_, _ = io.WriteString(in.StreamOut, payload)
-		fmt.Fprintln(in.StreamOut)
-		fmt.Fprintln(in.StreamOut, strings.Repeat("-", 72))
-		fmt.Fprintln(in.StreamOut)
-	}
-	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut)
+	p.printPrompt(in.StreamOut, payload)
+	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, "markdown-request")
 	if err != nil {
 		return "", err
 	}
 	return StripMarkdownFence(raw), nil
 }
 
-func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir string, streamOut io.Writer) (string, error) {
+func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
+	instruction := fmt.Sprintf(
+		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s UTC). Group by project when `project_id` is present. Use the structured `statuses` JSON below as ground truth. Return one Markdown document with per-project sections, a brief executive summary at the top, and noteworthy callouts. Do not invent activity not present in the input.",
+		in.LookbackDays,
+		in.Since.Format(time.RFC3339),
+		in.Now.Format(time.RFC3339),
+	)
+	payload, err := BuildRecentActivityPrompt(instruction, in)
+	if err != nil {
+		return "", err
+	}
+	p.printPrompt(in.StreamOut, payload)
+	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, "recent-activity-request")
+	if err != nil {
+		return "", err
+	}
+	return StripMarkdownFence(raw), nil
+}
+
+func (p OllamaProvider) RunCustomPrompt(ctx context.Context, in CustomPromptInput) (string, error) {
+	payload, err := BuildCustomPromptPayload(in.UserPrompt, in)
+	if err != nil {
+		return "", err
+	}
+	p.printPrompt(in.StreamOut, payload)
+	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, "custom-prompt-request")
+	if err != nil {
+		return "", err
+	}
+	return StripMarkdownFence(raw), nil
+}
+
+func (p OllamaProvider) printPrompt(streamOut io.Writer, payload string) {
+	if streamOut == nil {
+		return
+	}
+	fmt.Fprintln(streamOut, "Prompt:")
+	fmt.Fprintln(streamOut, strings.Repeat("-", 72))
+	_, _ = io.WriteString(streamOut, payload)
+	fmt.Fprintln(streamOut)
+	fmt.Fprintln(streamOut, strings.Repeat("-", 72))
+	fmt.Fprintln(streamOut)
+}
+
+func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir string, streamOut io.Writer, requestLogStage string) (string, error) {
 	body, err := json.Marshal(ollamaChatRequest{
 		Model: p.Model,
 		Messages: []ollamaMsg{
@@ -100,7 +119,7 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 		return "", err
 	}
 	if debugDir != "" {
-		writeOllamaDebugLog(debugDir, "recent-activity-request", map[string]any{
+		writeOllamaDebugLog(debugDir, requestLogStage, map[string]any{
 			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 			"base_url":  p.BaseURL,
 			"model":     p.Model,
@@ -123,7 +142,7 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 		var errBody bytes.Buffer
 		_, _ = errBody.ReadFrom(res.Body)
 		if debugDir != "" {
-			writeOllamaDebugLog(debugDir, "recent-activity-error", map[string]any{
+			writeOllamaDebugLog(debugDir, "error", map[string]any{
 				"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
 				"status":      res.Status,
 				"status_code": res.StatusCode,
@@ -147,7 +166,7 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 			if debugDir != "" {
 				writeOllamaDebugLog(debugDir, "error", map[string]any{
 					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-					"error":     fmt.Sprintf("ollama recent-activity stream parse: %v", err),
+					"error":     fmt.Sprintf("ollama stream parse: %v", err),
 				})
 			}
 			return "", fmt.Errorf("ollama stream: %w", err)
@@ -168,7 +187,7 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 	}
 	out := content.String()
 	if debugDir != "" {
-		writeOllamaDebugLog(debugDir, "recent-activity-response", map[string]any{
+		writeOllamaDebugLog(debugDir, "markdown-response", map[string]any{
 			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
 			"status":          res.Status,
 			"status_code":     res.StatusCode,
@@ -177,210 +196,6 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 		})
 	}
 	return out, nil
-}
-
-func (p OllamaProvider) run(ctx context.Context, instruction string, input PlanningInput) (PlanningOutput, error) {
-	payload, err := BuildPrompt(instruction, input)
-	if err != nil {
-		return PlanningOutput{}, err
-	}
-	body, err := json.Marshal(ollamaChatRequest{
-		Model: p.Model,
-		Messages: []ollamaMsg{
-			{Role: "user", Content: payload},
-		},
-		Stream: true,
-	})
-	if err != nil {
-		return PlanningOutput{}, err
-	}
-	if input.DebugDir != "" {
-		writeOllamaDebugLog(input.DebugDir, "request", map[string]any{
-			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
-			"base_url":    p.BaseURL,
-			"model":       p.Model,
-			"instruction": instruction,
-			"request":     json.RawMessage(body),
-			"prompt":      payload,
-		})
-	}
-	url := strings.TrimRight(p.BaseURL, "/") + "/api/chat"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return PlanningOutput{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := p.client().Do(req)
-	if err != nil {
-		return PlanningOutput{}, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		var errBody bytes.Buffer
-		_, _ = errBody.ReadFrom(res.Body)
-		if input.DebugDir != "" {
-			writeOllamaDebugLog(input.DebugDir, "error", map[string]any{
-				"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
-				"status":      res.Status,
-				"status_code": res.StatusCode,
-				"response":    strings.TrimSpace(errBody.String()),
-			})
-		}
-		return PlanningOutput{}, fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(errBody.String()))
-	}
-	decoder := json.NewDecoder(res.Body)
-	var content strings.Builder
-	streamChunks := make([]ollamaChatStreamResponse, 0, 128)
-	for {
-		var chunk ollamaChatStreamResponse
-		if err := decoder.Decode(&chunk); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return PlanningOutput{}, err
-			}
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if input.DebugDir != "" {
-				writeOllamaDebugLog(input.DebugDir, "error", map[string]any{
-					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-					"error":     fmt.Sprintf("ollama stream parse: %v", err),
-				})
-			}
-			return PlanningOutput{}, fmt.Errorf("ollama stream: %w", err)
-		}
-		streamChunks = append(streamChunks, chunk)
-		// Qwen3 and similar may stream reasoning in `thinking` while `content` stays empty
-		// until the final answer; Ollama chat deltas are in both fields.
-		if chunk.Message.Thinking != "" {
-			if input.OllamaStreamOut != nil {
-				_, _ = io.WriteString(input.OllamaStreamOut, chunk.Message.Thinking)
-			}
-		}
-		if chunk.Message.Content != "" {
-			content.WriteString(chunk.Message.Content)
-			if input.OllamaStreamOut != nil {
-				_, _ = io.WriteString(input.OllamaStreamOut, chunk.Message.Content)
-			}
-		}
-		if chunk.Done {
-			break
-		}
-	}
-	parsed := ollamaChatResponse{
-		Message: ollamaMsg{Content: content.String()},
-	}
-	if input.DebugDir != "" {
-		writeOllamaDebugLog(input.DebugDir, "response", map[string]any{
-			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
-			"status":          res.Status,
-			"status_code":     res.StatusCode,
-			"response_raw":    streamChunks,
-			"message_content": parsed.Message.Content,
-		})
-	}
-	return ParsePlanningOutput([]byte(parsed.Message.Content))
-}
-
-// ClassifyTaskSignals uses streaming chat, matching ProposeDayPlan, so the CLI can show live output on stderr.
-func (p OllamaProvider) ClassifyTaskSignals(ctx context.Context, in TaskSignalsInput) (TaskSignalsOutput, error) {
-	instruction := "For each open signal, choose an action: ignore (noise), assign_task (map to an existing task_id from the input), propose_task (suggest a new task for the user to confirm later), or pending (uncertain). Prefer assign_task when a task link or title clearly matches. Never invent task_ids that are not in tasks. Return a single JSON object with key: decisions (array of objects with signal_id, action, task_id, confidence, reason, and optional proposed_* when proposing a task). Valid actions: ignore, assign_task, propose_task, pending."
-	payload, err := BuildTaskSignalsPrompt(instruction, in)
-	if err != nil {
-		return TaskSignalsOutput{}, err
-	}
-	body, err := json.Marshal(ollamaChatRequest{
-		Model: p.Model,
-		Messages: []ollamaMsg{
-			{Role: "user", Content: payload},
-		},
-		Stream: true,
-	})
-	if err != nil {
-		return TaskSignalsOutput{}, err
-	}
-	if in.DebugDir != "" {
-		writeOllamaDebugLog(in.DebugDir, "task-signals-request", map[string]any{
-			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
-			"base_url":    p.BaseURL,
-			"model":       p.Model,
-			"instruction": instruction,
-			"request":     json.RawMessage(body),
-			"prompt":      payload,
-		})
-	}
-	url := strings.TrimRight(p.BaseURL, "/") + "/api/chat"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return TaskSignalsOutput{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := p.client().Do(req)
-	if err != nil {
-		return TaskSignalsOutput{}, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		var errBody bytes.Buffer
-		_, _ = errBody.ReadFrom(res.Body)
-		if in.DebugDir != "" {
-			writeOllamaDebugLog(in.DebugDir, "task-signals-error", map[string]any{
-				"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
-				"status":      res.Status,
-				"status_code": res.StatusCode,
-				"response":    strings.TrimSpace(errBody.String()),
-			})
-		}
-		return TaskSignalsOutput{}, fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(errBody.String()))
-	}
-	decoder := json.NewDecoder(res.Body)
-	var content strings.Builder
-	streamChunks := make([]ollamaChatStreamResponse, 0, 128)
-	for {
-		var chunk ollamaChatStreamResponse
-		if err := decoder.Decode(&chunk); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return TaskSignalsOutput{}, err
-			}
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if in.DebugDir != "" {
-				writeOllamaDebugLog(in.DebugDir, "error", map[string]any{
-					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-					"error":     fmt.Sprintf("ollama task-signals stream parse: %v", err),
-				})
-			}
-			return TaskSignalsOutput{}, fmt.Errorf("ollama task-signals stream: %w", err)
-		}
-		streamChunks = append(streamChunks, chunk)
-		if chunk.Message.Thinking != "" {
-			if in.StreamOut != nil {
-				_, _ = io.WriteString(in.StreamOut, chunk.Message.Thinking)
-			}
-		}
-		if chunk.Message.Content != "" {
-			content.WriteString(chunk.Message.Content)
-			if in.StreamOut != nil {
-				_, _ = io.WriteString(in.StreamOut, chunk.Message.Content)
-			}
-		}
-		if chunk.Done {
-			break
-		}
-	}
-	parsed := ollamaChatResponse{
-		Message: ollamaMsg{Content: content.String()},
-	}
-	if in.DebugDir != "" {
-		writeOllamaDebugLog(in.DebugDir, "task-signals-response", map[string]any{
-			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
-			"status":          res.Status,
-			"status_code":     res.StatusCode,
-			"response_raw":    streamChunks,
-			"message_content": parsed.Message.Content,
-		})
-	}
-	return ParseTaskSignalsOutput([]byte(parsed.Message.Content))
 }
 
 func writeOllamaDebugLog(debugDir, stage string, payload map[string]any) {

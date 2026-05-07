@@ -2,56 +2,26 @@ package ai
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/collectors"
-	"github.com/kurt/slakkr-ai/internal/userdata"
 )
-
-// RecentActivityInput is passed to ActivitySummarizer and embedded in prompts.
-type RecentActivityInput struct {
-	Now          time.Time            `json:"now"`
-	Since        time.Time            `json:"since"`
-	LookbackDays int                  `json:"lookback_days"`
-	HostID       string               `json:"host_id"`
-	Projects     []userdata.Project   `json:"projects"`
-	Tasks        []userdata.Task      `json:"tasks,omitempty"`
-	Directives   []userdata.Directive `json:"directives,omitempty"`
-	Statuses     []collectors.StatusItem `json:"statuses"`
-	DebugDir     string               `json:"-"`
-	StreamOut    io.Writer            `json:"-"`
-}
-
-// ActivitySummarizer produces a markdown document from recent activity signals.
-type ActivitySummarizer interface {
-	SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error)
-}
 
 // BuildRecentActivityPrompt serializes input for LLM providers.
 func BuildRecentActivityPrompt(instruction string, in RecentActivityInput) (string, error) {
 	wire := struct {
-		Now          string                    `json:"now"`
-		Since        string                    `json:"since"`
-		LookbackDays int                       `json:"lookback_days"`
-		HostID       string                    `json:"host_id"`
-		Projects     []userdata.Project        `json:"projects"`
-		Tasks        []userdata.Task           `json:"tasks,omitempty"`
-		Directives   []userdata.Directive     `json:"directives,omitempty"`
+		Now          string                   `json:"now"`
+		Since        string                   `json:"since"`
+		LookbackDays int                      `json:"lookback_days"`
 		Statuses     []collectors.StatusItem  `json:"statuses"`
 	}{
 		Now:          in.Now.Format(time.RFC3339),
 		Since:        in.Since.Format(time.RFC3339),
 		LookbackDays: in.LookbackDays,
-		HostID:       in.HostID,
-		Projects:     in.Projects,
-		Tasks:        in.Tasks,
-		Directives:   in.Directives,
 		Statuses:     in.Statuses,
 	}
 	payload, err := json.MarshalIndent(wire, "", "  ")
@@ -66,15 +36,38 @@ func BuildRecentActivityPrompt(instruction string, in RecentActivityInput) (stri
 	return buf.String(), nil
 }
 
+// RenderDailyPlanMarkdown renders a deterministic two-section document for rule-based mode.
+func RenderDailyPlanMarkdown(in DailyPlanInput) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Daily plan\n\n")
+	fmt.Fprintf(&b, "_Window: %s — %s_\n\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
+	if strings.TrimSpace(in.UserPriorities) != "" {
+		fmt.Fprintf(&b, "**Your priorities:** %s\n\n", strings.TrimSpace(in.UserPriorities))
+	}
+	fmt.Fprintf(&b, "## Yesterday\n\n")
+	renderActivityBySourceLegacy(&b, in.Statuses)
+	fmt.Fprintf(&b, "\n## Today\n\n")
+	fmt.Fprintf(&b, "_Suggested next steps (configure `ai.provider` to `ollama` or `cursor` for model-generated planning):_\n\n")
+	fmt.Fprintf(&b, "- Review the activity above and pick 1–3 focus items.\n")
+	fmt.Fprintf(&b, "- Block time for the highest-signal work.\n")
+	return b.String()
+}
+
 // RenderRecentActivityMarkdown deterministically renders statuses as Markdown.
 func RenderRecentActivityMarkdown(in RecentActivityInput) string {
 	projName := map[string]string{}
-	for _, p := range in.Projects {
-		projName[p.ID] = p.Name
+	for _, s := range in.Statuses {
+		pid := strings.TrimSpace(s.ProjectID)
+		if pid == "" {
+			continue
+		}
+		if _, ok := projName[pid]; !ok {
+			projName[pid] = pid
+		}
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Recent activity (%s — %s)\n\n", in.Since.Format("2006-01-02"), in.Now.Format("2006-01-02"))
-	fmt.Fprintf(&b, "_host: %s · lookback: %d day(s)_\n\n", in.HostID, in.LookbackDays)
+	fmt.Fprintf(&b, "_lookback: %d day(s)_\n\n", in.LookbackDays)
 	byProject := map[string][]collectors.StatusItem{}
 	var cross []collectors.StatusItem
 	for _, s := range in.Statuses {
@@ -88,9 +81,9 @@ func RenderRecentActivityMarkdown(in RecentActivityInput) string {
 		}
 		byProject[pid] = append(byProject[pid], s)
 	}
-	allPids := make([]string, 0, len(in.Projects))
-	for _, p := range in.Projects {
-		allPids = append(allPids, p.ID)
+	allPids := make([]string, 0, len(byProject))
+	for pid := range byProject {
+		allPids = append(allPids, pid)
 	}
 	sort.Strings(allPids)
 	for _, pid := range allPids {
@@ -104,11 +97,11 @@ func RenderRecentActivityMarkdown(in RecentActivityInput) string {
 			b.WriteString("_No activity in this window._\n\n")
 			continue
 		}
-		renderActivityBySource(&b, items)
+		renderActivityBySourceLegacy(&b, items)
 	}
 	if len(cross) > 0 {
 		b.WriteString("## Cross-cutting\n\n")
-		renderActivityBySource(&b, cross)
+		renderActivityBySourceLegacy(&b, cross)
 	}
 	var errs []collectors.StatusItem
 	for _, s := range in.Statuses {
@@ -125,7 +118,7 @@ func RenderRecentActivityMarkdown(in RecentActivityInput) string {
 	return b.String()
 }
 
-func renderActivityBySource(b *strings.Builder, items []collectors.StatusItem) {
+func renderActivityBySourceLegacy(b *strings.Builder, items []collectors.StatusItem) {
 	bySource := map[string][]collectors.StatusItem{}
 	var order []string
 	for _, it := range items {
@@ -215,6 +208,59 @@ func formatActivityLine(s collectors.StatusItem) string {
 		}
 		return fmt.Sprintf("%s [%s] %s", iso, s.Kind, s.Title)
 	}
+}
+
+// BuildDailyPlanPrompt builds the user message for LLM daily plan generation.
+func BuildDailyPlanPrompt(instruction string, in DailyPlanInput) (string, error) {
+	wire := struct {
+		Now            string                  `json:"now"`
+		Since          string                  `json:"since"`
+		UserPriorities string                  `json:"user_priorities,omitempty"`
+		Statuses       []collectors.StatusItem `json:"statuses"`
+	}{
+		Now:            in.Now.Format(time.RFC3339),
+		Since:          in.Since.Format(time.RFC3339),
+		UserPriorities: in.UserPriorities,
+		Statuses:       in.Statuses,
+	}
+	payload, err := json.MarshalIndent(wire, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	buf.WriteString(instruction)
+	buf.WriteString("\n\nReturn only a single Markdown document with exactly these sections: `## Yesterday` then `## Today`.\n")
+	buf.WriteString("Use the `statuses` JSON as ground truth. Do not invent work not present in the input.\n")
+	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
+	buf.Write(payload)
+	return buf.String(), nil
+}
+
+// BuildCustomPromptPayload builds the user message for custom prompt mode.
+func BuildCustomPromptPayload(userPrompt string, in CustomPromptInput) (string, error) {
+	wire := struct {
+		Now          string                  `json:"now"`
+		Since        string                  `json:"since"`
+		LookbackDays int                     `json:"lookback_days"`
+		UserPrompt   string                  `json:"user_prompt"`
+		Statuses     []collectors.StatusItem `json:"statuses"`
+	}{
+		Now:          in.Now.Format(time.RFC3339),
+		Since:        in.Since.Format(time.RFC3339),
+		LookbackDays: in.LookbackDays,
+		UserPrompt:   userPrompt,
+		Statuses:     in.Statuses,
+	}
+	payload, err := json.MarshalIndent(wire, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	buf.WriteString("The user request and collected activity are below. Follow the user's instructions using `statuses` as ground truth.\n\n")
+	buf.WriteString("Return only a single Markdown document (no JSON). Do not wrap the entire answer in a code fence.\n")
+	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
+	buf.Write(payload)
+	return buf.String(), nil
 }
 
 // StripMarkdownFence removes a leading ```markdown / ``` wrapper if the model added one.

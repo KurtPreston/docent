@@ -1,8 +1,0 @@
-tasks:
-  - id: dogfood-roadmap
-    project_id: slakkr-ai
-    name: Continue building slakkr-ai attention governor
-    description: Dogfood daily planning, collectors, and Ollama.
-    status: in_progress
-    priority: high
-    next_action: Run start_day and refine directives from daybook feedback.

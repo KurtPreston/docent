@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,17 +26,24 @@ type StatusItem struct {
 	ChangeState    string            `json:"change_state,omitempty"`
 }
 
-// CollectOpts carries host-scoped resolution data for collectors that need it (for example local-git).
+// CollectOpts carries resolution data for collectors (local-git code_home, env resolution, time window).
 type CollectOpts struct {
-	HostID         string
-	UserdataDir    string
-	Projects       userdata.ProjectsFile
-	Config         userdata.ConfigFile
-	ExpandRepoPath func(string) string
+	UserdataDir       string
+	CodeHome          string // default scan root for local-git when directive.Paths is empty
+	ExpandRepoPath    func(string) string
 	OnDirectiveUpdate func(DirectiveProgress)
-	// ManualAnswer, when set, is called for each manual collector directive so the user can reply (e.g. start_day on a TTY).
-	// Collect runs those directives first (sequentially) so prompts appear before slower collectors (e.g. git/API) run.
-	ManualAnswer func(ctx context.Context, d userdata.Directive, question string) (answer string, err error)
+	Since             time.Time
+	Until             time.Time // window end; if zero, collectors use their clock
+}
+
+func (o *CollectOpts) windowEnd(clock func() time.Time) time.Time {
+	if o != nil && !o.Until.IsZero() {
+		return o.Until
+	}
+	if clock != nil {
+		return clock()
+	}
+	return time.Now()
 }
 
 type DirectiveProgress struct {
@@ -47,15 +53,9 @@ type DirectiveProgress struct {
 	Detail      string
 }
 
+// Collector gathers status items for events since opts.Since through window end.
 type Collector interface {
 	Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
-}
-
-// ActivityCollector collects time-windowed activity for directives that support lookback mode
-// (for example recent_activity). ManualCollector deliberately does not implement this interface.
-type ActivityCollector interface {
-	Collector
-	CollectActivity(ctx context.Context, directive userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error)
 }
 
 type Registry struct {
@@ -68,15 +68,13 @@ func NewRegistry(clock func() time.Time) *Registry {
 		clock = time.Now
 	}
 	registry := &Registry{collectors: map[string]Collector{}, clock: clock}
-	registry.Register("manual", ManualCollector{Clock: clock})
 	registry.Register("local-git", LocalGitCollector{Clock: clock})
 	registry.Register("github", GitHubCollector{Clock: clock})
 	registry.Register("github-activity", GitHubActivityCollector{Clock: clock})
 	registry.Register("github-enterprise", GitHubCollector{Clock: clock})
-	registry.Register("gitea", GiteaCollector{Clock: clock})
+	registry.Register("gitea", GiteaCollector{Clock: clock, HTTP: nil})
 	registry.Register("jira", JiraCollector{Clock: clock, HTTP: nil})
 	registry.Register("google-calendar", GoogleCalendarCollector{Clock: clock, HTTP: nil})
-	registry.Register("slack", PlaceholderCollector{Clock: clock, Source: "slack"})
 	return registry
 }
 
@@ -93,59 +91,8 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// Collect runs enabled directives in parallel. Each directive must use CollectOpts.Since/Until.
 func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	enabled := make([]userdata.Directive, 0, len(directives))
-	for _, directive := range directives {
-		if !directive.Enabled {
-			continue
-		}
-		enabled = append(enabled, directive)
-	}
-	for _, directive := range enabled {
-		if _, ok := r.collectors[directive.Collector]; !ok {
-			return nil, fmt.Errorf("directive %s uses unknown collector %q", directive.ID, directive.Collector)
-		}
-	}
-	var parallel []userdata.Directive
-	var manualFirst []userdata.Directive
-	if opts != nil && opts.ManualAnswer != nil {
-		for _, directive := range enabled {
-			if directive.Collector == "manual" {
-				manualFirst = append(manualFirst, directive)
-			} else {
-				parallel = append(parallel, directive)
-			}
-		}
-	} else {
-		parallel = enabled
-	}
-	var all []StatusItem
-	for _, d := range manualFirst {
-		all = append(all, r.collectDirective(ctx, d, opts)...)
-	}
-	type directiveResult struct {
-		items []StatusItem
-	}
-	results := make([]directiveResult, len(parallel))
-	var wg sync.WaitGroup
-	for i, directive := range parallel {
-		wg.Add(1)
-		go func(index int, d userdata.Directive) {
-			defer wg.Done()
-			results[index].items = r.collectDirective(ctx, d, opts)
-		}(i, directive)
-	}
-	wg.Wait()
-	for i := range results {
-		all = append(all, results[i].items...)
-	}
-	return all, nil
-}
-
-// CollectActivity runs enabled directives in lookback mode. Collectors that do not implement
-// ActivityCollector are reported as skipped (e.g. manual). Parallelism matches Collect but
-// manual-first ordering is not used for activity runs.
-func (r *Registry) CollectActivity(ctx context.Context, directives []userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error) {
 	enabled := make([]userdata.Directive, 0, len(directives))
 	for _, directive := range directives {
 		if !directive.Enabled {
@@ -167,7 +114,7 @@ func (r *Registry) CollectActivity(ctx context.Context, directives []userdata.Di
 		wg.Add(1)
 		go func(index int, d userdata.Directive) {
 			defer wg.Done()
-			results[index].items = r.collectActivityDirective(ctx, d, since, opts)
+			results[index].items = r.collectDirective(ctx, d, opts)
 		}(i, directive)
 	}
 	wg.Wait()
@@ -176,60 +123,6 @@ func (r *Registry) CollectActivity(ctx context.Context, directives []userdata.Di
 		all = append(all, results[i].items...)
 	}
 	return all, nil
-}
-
-func (r *Registry) collectActivityDirective(ctx context.Context, d userdata.Directive, since time.Time, opts *CollectOpts) []StatusItem {
-	collector := r.collectors[d.Collector]
-	ac, ok := collector.(ActivityCollector)
-	if !ok {
-		if opts != nil && opts.OnDirectiveUpdate != nil {
-			opts.OnDirectiveUpdate(DirectiveProgress{
-				DirectiveID: d.ID,
-				Description: d.Name,
-				Status:      "done",
-				Detail:      "skipped (no activity mode)",
-			})
-		}
-		return nil
-	}
-	if opts != nil && opts.OnDirectiveUpdate != nil {
-		opts.OnDirectiveUpdate(DirectiveProgress{
-			DirectiveID: d.ID,
-			Description: d.Name,
-			Status:      "running",
-			Detail:      "collecting activity",
-		})
-	}
-	items, err := ac.CollectActivity(ctx, d, since, opts)
-	if err != nil {
-		if opts != nil && opts.OnDirectiveUpdate != nil {
-			opts.OnDirectiveUpdate(DirectiveProgress{
-				DirectiveID: d.ID,
-				Description: d.Name,
-				Status:      "error",
-				Detail:      err.Error(),
-			})
-		}
-		return []StatusItem{{
-			DirectiveID: d.ID,
-			ProjectID:   d.ProjectID,
-			Source:      d.Collector,
-			Kind:        "collector_error",
-			Title:       d.Name,
-			Summary:     err.Error(),
-			Severity:    "error",
-			ObservedAt:  r.clock(),
-		}}
-	}
-	if opts != nil && opts.OnDirectiveUpdate != nil {
-		opts.OnDirectiveUpdate(DirectiveProgress{
-			DirectiveID: d.ID,
-			Description: d.Name,
-			Status:      "done",
-			Detail:      fmt.Sprintf("%d item(s)", len(items)),
-		})
-	}
-	return items
 }
 
 func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, opts *CollectOpts) []StatusItem {
@@ -272,63 +165,4 @@ func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, o
 		})
 	}
 	return items
-}
-
-type ManualCollector struct {
-	Clock func() time.Time
-}
-
-func (c ManualCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	prompt := directive.Target["prompt"]
-	if prompt == "" {
-		prompt = "Manual status requested"
-	}
-	var summary string
-	kind := "manual_prompt"
-	if opts != nil && opts.ManualAnswer != nil {
-		answer, err := opts.ManualAnswer(ctx, directive, prompt)
-		if err != nil {
-			return nil, err
-		}
-		answer = strings.TrimSpace(answer)
-		if answer == "" {
-			answer = "(no answer)"
-		}
-		summary = "Q: " + prompt + " | A: " + answer
-		kind = "manual_response"
-	} else {
-		summary = prompt
-	}
-	return []StatusItem{{
-		DirectiveID: directive.ID,
-		ProjectID:   directive.ProjectID,
-		Source:      "manual",
-		Kind:        kind,
-		Title:       directive.Name,
-		Summary:     summary,
-		ObservedAt:  c.Clock(),
-	}}, nil
-}
-
-type PlaceholderCollector struct {
-	Clock  func() time.Time
-	Source string
-}
-
-func (c PlaceholderCollector) Collect(_ context.Context, directive userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
-	return []StatusItem{{
-		DirectiveID: directive.ID,
-		ProjectID:   directive.ProjectID,
-		Source:      c.Source,
-		Kind:        "not_configured",
-		Title:       directive.Name,
-		Summary:     "Collector interface is present, but this provider is not implemented yet.",
-		Severity:    "info",
-		ObservedAt:  c.Clock(),
-	}}, nil
-}
-
-// CollectActivity returns no rows for placeholders (e.g. slack) so recent_activity stays clean.
-func (c PlaceholderCollector) CollectActivity(_ context.Context, _ userdata.Directive, _ time.Time, _ *CollectOpts) ([]StatusItem, error) {
-	return nil, nil
 }

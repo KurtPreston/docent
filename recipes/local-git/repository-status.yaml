@@ -1,8 +1,0 @@
-id: local-git-repository-status
-name: Local Git Repository Status
-description: Check local Git working trees for branch, latest commit, remote, and uncommitted changes. Without a target, scans all repos in projects.yaml that have paths_by_host for this host; with a target, scopes to one project/repo.
-collector: local-git
-defaults:
-  config:
-    checks: repository_status, branch_wip
-    branch_lookback_days: "14"

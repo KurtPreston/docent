@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-set -eu
-exec go run ./cmd/slakkr add_task "$@"

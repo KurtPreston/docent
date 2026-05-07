@@ -1,105 +1,86 @@
 # slakkr-ai
 
-`slakkr-ai` is a local-first project operations tool for keeping track of projects, tasks, daily plans, status updates, and work that might be delegated to an AI agent.
+Local-first CLI: collect **time-bounded activity** from configured sources, send it to an AI provider, and get a **Markdown** document (printed to stdout and saved under `userdata/output/`).
 
-The current implementation is a Go CLI with reusable packages behind the command layer, so a future local UI can call the same workflows.
-
-## Quick Start
+## Quick start
 
 ```sh
 go test ./...
-go run ./cmd/slakkr list-recipes
-go run ./cmd/slakkr setup
-go run ./cmd/slakkr configure_host
-go run ./cmd/slakkr add_project
-go run ./cmd/slakkr add_task
-go run ./cmd/slakkr start_day
-go run ./cmd/slakkr update_status
-go run ./cmd/slakkr end_day
-go run ./cmd/slakkr update_tasks
-go run ./cmd/slakkr validate
-go run ./cmd/slakkr serve --addr 127.0.0.1:8765
-go run ./cmd/slakkr plan show
-go run ./cmd/slakkr delegation list
-go run ./cmd/slakkr recent_activity
+go run ./cmd/slakkr --help
+# First run creates userdata/config.yaml if missing
+go run ./cmd/slakkr --mode recent-activity --days 3
 ```
 
-The tool writes user-owned data under `userdata/`. That directory is gitignored by this repo and initialized as its own local git repository. Setup asks whether to add a remote for `userdata`; local-only remains the default.
+Or use [`scripts/slakkr`](scripts/slakkr) from the repo root.
 
-To dogfood quickly, copy [examples/dogfood/](examples/dogfood/) into `userdata/` (adjust `YOUR_HOST` and paths) after `setup`.
+## Configuration (`userdata/config.yaml`)
 
-## Data Layout
+Single file: optional `code_home`, `ai`, and `directives`.
 
-- `recipes/` contains reusable directive recipes that can be shared by the public project or an organization-specific fork.
-- `userdata/projects.yaml` stores durable project records.
-- `userdata/tasks.yaml` stores active work, priority, status, links, next actions, and delegation suitability.
-- `userdata/directives.yaml` stores local status-gathering directives instantiated from recipes.
-- `userdata/daybook/YYYY-MM-DD.md` stores daily goals, status snapshots, plans, and reflections.
-- `userdata/status-cache/` is reserved for normalized or raw status snapshots.
-- `userdata/plans/YYYY-MM-DD.yaml` stores the structured daily plan produced by `start_day`.
-- `userdata/delegations.yaml` stores agent delegation ledger entries.
-- `userdata/signals.yaml` stores resolved work signals (from collectors) mapped to tasks or ignore decisions.
-- `userdata/proposed-tasks.yaml` stores task proposals for later confirmation (from `update_tasks`), before they are promoted into `tasks.yaml`.
-- `userdata/recent-activity/YYYY-MM-DD.md` stores Markdown summaries produced by `recent_activity` (lookback activity across collectors).
+- **`code_home`**: Parent directory whose immediate subfolders with `.git` are scanned by `local-git` directives (unless the directive lists explicit `paths`).
+- **`CODE_HOME`**: Environment variable used when `code_home` is empty in config.
+- **`directives`**: Same shape as before (collector, target, config, `credential_refs` for secrets in `userdata/.env`).
+- **Legacy**: If `directives` is missing but `userdata/directives.yaml` exists, directives are loaded from there once.
 
-A recipe is a reusable template shipped with this repo or a fork. A directive is your local configured instance of a recipe. During setup, the directive id is just the stable key written to `userdata/directives.yaml`; accepting the suggested default is usually right for a first setup.
-
-Targets are the specific thing a directive monitors. The local Git recipe takes `project_id` and `repo_id` and resolves working trees from that repo’s `paths_by_host` in `userdata/projects.yaml` (for the current host; see `SLAKKR_HOST`). A Gitea recipe would use server configuration such as a `base_url` plus a target owner or organization.
-
-Recipes and directives are readonly by design. Collectors may inspect local files, repositories, and external services, but they must not mutate the systems they observe. For local Git repositories, collectors must not run mutating commands such as `git checkout`, `git switch`, `git push`, `git pull`, `git fetch`, `git add`, `git commit`, `git merge`, `git rebase`, or `git stash`; they should use inspection commands only.
-
-Secret recipe fields are prompted as secret values during setup. They are written to `userdata/.env` and referenced from directives through `credential_refs`, so tokens are not stored directly in `userdata/directives.yaml`. `userdata/.gitignore` excludes `.env` before setup commits user data.
-
-Setup asks for a human-readable name, then generates the stable directive id. If a recipe asks for a required field you do not want to provide yet, leave it blank and setup will skip that recipe while continuing with the rest.
-
-## Commands
-
-- `setup` initializes `userdata`, asks about remote persistence, discovers recipes, and can interactively instantiate directives.
-- `configure_host` configures host-local defaults (such as `code_home`) and can import projects from `CODE_HOME`.
-- `add_project` adds or updates one project in `userdata/projects.yaml`.
-- `add_task` adds or updates one task in `userdata/tasks.yaml`.
-- `start_day` gathers status, creates today's daybook entry, and proposes focus blocks and delegation candidates.
-- `update_status` gathers status and appends a status snapshot to today's daybook.
-- `end_day` gathers final status, appends reflection prompts, and attempts to commit `userdata`.
-- `update_tasks` runs the same read-only status collectors as the daybook flow, classifies new work signals, updates `userdata/signals.yaml`, and can append to `userdata/proposed-tasks.yaml` (it does not modify `tasks.yaml` automatically). **After a successful (non-dry) run,** it **walks any pending rows in** `proposed-tasks.yaml` in the terminal: create a real task, link to an existing task, dismiss, or skip. Use `--no-resolve` to skip that step, and `--dry-run` to avoid writing and skip the review.
-- `validate` checks user data schemas and references.
-- `list-recipes` shows reusable recipes available in this checkout or fork.
-- `serve` runs a small local web UI (JSON APIs for planning input, saved plan, delegations).
-- `plan show` prints the structured daily plan YAML from `userdata/plans/` (after `start_day`).
-- `recent_activity` collects **activity** from enabled directives over a lookback window (via each collector’s `CollectActivity` implementation), then asks the configured AI provider to summarize into `userdata/recent-activity/<date>.md`. Use `--days N` for lookback; without it, a TTY prompts (default 7). `--date` sets the output filename only; collection uses the current time. **`manual` directives are skipped** in activity mode. Per-collector behavior: **local-git** — commits and reflog since the window; **github/github-enterprise** — PRs and issues with `updated:` in range; **github-activity** — user-scoped search (`author`, `reviewed-by`, `involves`) with `updated:`; **gitea** — repos whose `updated_at` is in range; **jira** — JQL plus `updated >= "<since>"`; **google-calendar** — iCal events whose `DTSTART` falls in `[since, now]`; **slack** placeholder returns no rows.
-
-## AI providers
-
-Configure `userdata/config.yaml`:
+Example:
 
 ```yaml
 ai:
-  provider: rule-based   # or ollama, cursor
+  provider: ollama   # or cursor, rule-based
   ollama:
     base_url: http://127.0.0.1:11434
     model: llama3
+
+code_home: /Users/me/Code
+
+directives:
+  - id: local-git
+    name: Local repos
+    collector: local-git
+    enabled: true
+  - id: github-me
+    name: GitHub
+    collector: github-activity
+    enabled: true
+    target:
+      username: MyGitHubUser
+    config:
+      base_url: https://github.com
+    credential_refs:
+      token: SLAKKR_GITHUB_TOKEN
 ```
 
-Ollama must return a single JSON object matching the planning schema (see `internal/ai`). The rule-based provider remains the default for tests and offline use.
+## Modes
 
-## Scripts
+| Mode | Lookback | Behavior |
+|------|----------|----------|
+| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | Optional “priorities today” prompt; AI output should use `## Yesterday` and `## Today`. |
+| `recent-activity` | `--days N` (default 7, or prompt) | Summarize activity; grouped markdown. |
+| `custom-prompt` | `--days N` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions. |
 
-The `scripts/` wrappers match the initial product sketch:
+Run without `--mode` on a TTY to pick interactively.
 
-```sh
-scripts/setup
-scripts/configure_host
-scripts/add_project
-scripts/add_task
-scripts/start_day
-scripts/update_status
-scripts/update_tasks
-scripts/end_day
-scripts/recent_activity
-```
+### Common flags
 
-## AI Boundary
+- `--userdata DIR` (default `userdata`)
+- `--out PATH` — default `userdata/output/<date>-<mode>.md`
+- `--no-save` — stdout only
+- `--date YYYY-MM-DD` — label for default output filename only
 
-Deterministic code loads YAML, validates schemas, discovers recipes, gathers status, writes daybook files, and commits user data. AI providers synthesize that bounded context into plans, reflection questions, and delegation suggestions. The default provider is rule-based and deterministic for tests; `internal/ai` also supports **Ollama** (HTTP) and **Cursor** (`cursor-agent` CLI). See [docs/MCP.md](docs/MCP.md) for optional MCP evaluation.
+## AI providers
 
-For **streaming Ollama output**, **read-only collectors**, and consistent terminal behavior, see [docs/Best Practices.md](docs/Best%20Practices.md).
+- **`rule-based`**: Deterministic markdown (no network); good for tests.
+- **`ollama`**: HTTP chat to Ollama; streams to stderr when connected to a TTY.
+- **`cursor`**: Shells out to `cursor-agent -p <payload>` (override with `ai.cursor.command` / `args`).
+
+## Collectors
+
+All collectors run in **date range** mode (`since` → `until`). Implemented: `local-git` (commits + reflog), `github` / `github-enterprise`, `github-activity`, `gitea`, `jira`, `google-calendar`. Manual / slack collectors were removed.
+
+## Layout
+
+- `userdata/config.yaml` — only required config file.
+- `userdata/output/` — saved markdown.
+- `userdata/.cache/ai-debug/` — optional Ollama request/response logs.
+
+The `userdata/` directory is gitignored; initialize by running the CLI once or copy a config by hand.

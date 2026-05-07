@@ -34,6 +34,7 @@ func (c GiteaCollector) client() *http.Client {
 	return http.DefaultClient
 }
 
+// Collect keeps repositories whose updated_at is on or after opts.Since.
 func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	owner := strings.TrimSpace(directive.Target["owner"])
@@ -44,80 +45,11 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 		return nil, fmt.Errorf("target.owner is required")
 	}
 	tokenKey := directive.CredentialRefs["token"]
-	token := userdata.ResolveEnv(opts.UserdataDir, tokenKey)
-	if token == "" {
-		return nil, fmt.Errorf("gitea token missing (set %s in environment or userdata/.env)", tokenKey)
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
 	}
-	u, err := url.Parse(base)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("invalid base_url")
-	}
-	apiBase := strings.TrimRight(u.String(), "/")
-
-	repos, err := c.fetchReposForOwner(ctx, apiBase, owner, token)
-	if err != nil {
-		return nil, err
-	}
-	now := c.Clock()
-	items := make([]StatusItem, 0, len(repos))
-	for _, r := range repos {
-		title := r.FullName
-		if title == "" {
-			title = r.Name
-		}
-		summary := fmt.Sprintf("updated=%s branch=%s", r.Updated, r.DefaultBranch)
-		if r.Private {
-			summary += " private=true"
-		}
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
-			Source:      "gitea",
-			Kind:        "repository",
-			Title:       title,
-			Summary:     summary,
-			URL:         r.HTMLURL,
-			Severity:    "info",
-			ObservedAt:  now,
-			Fields: map[string]string{
-				"name":             r.Name,
-				"full_name":        r.FullName,
-				"updated_at":       r.Updated,
-				"default_branch":   r.DefaultBranch,
-				"private":          fmt.Sprintf("%t", r.Private),
-				"owner":            owner,
-				"gitea_base":       apiBase,
-				"credential_scope": tokenKey,
-			},
-		})
-	}
-	if len(items) == 0 {
-		return []StatusItem{{
-			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
-			Source:      "gitea",
-			Kind:        "repository_list",
-			Title:       directive.Name,
-			Summary:     fmt.Sprintf("No repositories returned for owner %q (check owner name and token access).", owner),
-			Severity:    "info",
-			ObservedAt:  now,
-		}}, nil
-	}
-	return items, nil
-}
-
-// CollectActivity keeps only repositories whose updated_at is on or after `since`.
-func (c GiteaCollector) CollectActivity(ctx context.Context, directive userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error) {
-	base := strings.TrimSpace(directive.Config["base_url"])
-	owner := strings.TrimSpace(directive.Target["owner"])
-	if base == "" {
-		return nil, fmt.Errorf("config.base_url is required")
-	}
-	if owner == "" {
-		return nil, fmt.Errorf("target.owner is required")
-	}
-	tokenKey := directive.CredentialRefs["token"]
-	token := userdata.ResolveEnv(opts.UserdataDir, tokenKey)
+	token := userdata.ResolveEnv(userdataDir, tokenKey)
 	if token == "" {
 		return nil, fmt.Errorf("gitea token missing (set %s in environment or userdata/.env)", tokenKey)
 	}
@@ -130,7 +62,14 @@ func (c GiteaCollector) CollectActivity(ctx context.Context, directive userdata.
 	if err != nil {
 		return nil, err
 	}
+	since := time.Time{}
+	if opts != nil {
+		since = opts.Since
+	}
 	now := c.Clock()
+	if opts != nil {
+		now = opts.windowEnd(c.Clock)
+	}
 	var items []StatusItem
 	for _, r := range repos {
 		updatedAt, err := parseGiteaTime(r.Updated)

@@ -16,14 +16,6 @@ type GitHubCollector struct {
 	Clock func() time.Time
 }
 
-type ghPR struct {
-	Title          string `json:"title"`
-	URL            string `json:"url"`
-	State          string `json:"state"`
-	IsDraft        bool   `json:"isDraft"`
-	ReviewDecision string `json:"reviewDecision"`
-}
-
 type ghPRActivity struct {
 	Number         int    `json:"number"`
 	Title          string `json:"title"`
@@ -43,60 +35,20 @@ type ghIssueActivity struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
-func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+// Collect lists PRs and issues updated since opts.Since for the repo (read-only gh invocations).
+func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	repo := directive.Target["repo"]
 	if repo == "" {
 		return nil, fmt.Errorf("target.repo is required")
 	}
-	args := []string{"pr", "list", "--repo", repo, "--json", "title,url,state,isDraft,reviewDecision", "--limit", "20"}
-	if baseURL := directive.Config["base_url"]; baseURL != "" && !isGitHubDotCom(baseURL) {
-		args = append([]string{"--hostname", hostname(baseURL)}, args...)
-	}
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-	var prs []ghPR
-	if err := json.Unmarshal(output, &prs); err != nil {
-		return nil, err
-	}
-	items := make([]StatusItem, 0, len(prs))
-	for _, pr := range prs {
-		severity := "info"
-		if pr.IsDraft {
-			severity = "info"
-		} else if pr.ReviewDecision == "CHANGES_REQUESTED" {
-			severity = "warning"
-		}
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			ProjectID:   directive.ProjectID,
-			Source:      directive.Collector,
-			Kind:        "pull_request",
-			Title:       pr.Title,
-			Summary:     fmt.Sprintf("state=%s draft=%t review=%s", pr.State, pr.IsDraft, pr.ReviewDecision),
-			URL:         pr.URL,
-			Severity:    severity,
-			ObservedAt:  c.Clock(),
-			Fields: map[string]string{
-				"repo":            repo,
-				"state":           pr.State,
-				"review_decision": pr.ReviewDecision,
-			},
-		})
-	}
-	return items, nil
-}
-
-// CollectActivity lists PRs and issues updated since `since` for the repo (read-only gh invocations).
-func (c GitHubCollector) CollectActivity(ctx context.Context, directive userdata.Directive, since time.Time, opts *CollectOpts) ([]StatusItem, error) {
-	_ = opts
-	repo := directive.Target["repo"]
-	if repo == "" {
-		return nil, fmt.Errorf("target.repo is required")
+	since := time.Time{}
+	if opts != nil {
+		since = opts.Since
 	}
 	now := c.Clock()
+	if opts != nil {
+		now = opts.windowEnd(c.Clock)
+	}
 	dateStr := since.Format("2006-01-02")
 	search := "updated:>=" + dateStr
 	hostArgs := []string(nil)
