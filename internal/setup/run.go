@@ -415,7 +415,7 @@ func manageCollectors(cfg *userdata.ConfigFile, model configschema.Model, survey
 		}
 	}
 
-	return reconfigureExistingDirectives(cfg, model, surveyOpt, errOut)
+	return nil
 }
 
 func collectorLabel(br configschema.CollectorBranch) string {
@@ -432,68 +432,6 @@ func hasEnabledDirective(cfg *userdata.ConfigFile, collector string) bool {
 		}
 	}
 	return false
-}
-
-func reconfigureExistingDirectives(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey.AskOpt, errOut *os.File) error {
-	type item struct {
-		idx   int
-		label string
-	}
-	var items []item
-	for i := range cfg.Directives {
-		d := &cfg.Directives[i]
-		if !d.Enabled {
-			continue
-		}
-		label := fmt.Sprintf("%s — %s (%s)", d.ID, d.Name, d.Collector)
-		items = append(items, item{idx: i, label: label})
-	}
-	if len(items) == 0 {
-		return nil
-	}
-
-	options := make([]string, 0, len(items))
-	for _, it := range items {
-		options = append(options, it.label)
-	}
-
-	var chosen []string
-	prompt := &survey.MultiSelect{
-		Message: "Reconfigure any directives? (space to toggle, enter to skip)",
-		Options: options,
-	}
-	if err := survey.AskOne(prompt, &chosen, surveyOpt); err != nil {
-		return err
-	}
-	if len(chosen) == 0 {
-		return nil
-	}
-
-	branchByCollector := make(map[string]configschema.CollectorBranch, len(model.Collectors))
-	for _, br := range model.Collectors {
-		branchByCollector[br.Collector] = br
-	}
-
-	chosenSet := make(map[string]bool, len(chosen))
-	for _, l := range chosen {
-		chosenSet[l] = true
-	}
-
-	for _, it := range items {
-		if !chosenSet[it.label] {
-			continue
-		}
-		d := &cfg.Directives[it.idx]
-		br, ok := branchByCollector[d.Collector]
-		if !ok {
-			continue
-		}
-		fmt.Fprintf(errOut, "\n— %s (%s) —\n", d.Name, d.ID)
-		if err := promptDirectiveFields(d, br, surveyOpt); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func indicesForCollector(cfg *userdata.ConfigFile, collector string) []int {
@@ -557,7 +495,10 @@ func promptDirectiveFields(d *userdata.Directive, br configschema.CollectorBranc
 		}
 		if strings.HasPrefix(sel, "code_home") {
 			d.Paths = nil
-			ch := d.CodeHome
+			ch := strings.TrimSpace(d.CodeHome)
+			if ch == "" {
+				ch = strings.TrimSpace(os.Getenv("CODE_HOME"))
+			}
 			var v string
 			for {
 				if err := survey.AskOne(&survey.Input{Message: "Directory to scan (code_home)", Default: ch}, &v, surveyOpt); err != nil {
