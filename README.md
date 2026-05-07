@@ -30,9 +30,19 @@ Config shape is validated at runtime against [`jsonschema/config.schema.json`](j
 
 Single file: `ai` and `directives`.
 
-- **`ai.activity_formatter`** (optional): How activity is aggregated for the model and rule-based output. **`repo-chronological`** (default)—group by `repository`, chronological lines per repo. **`json-signal-list`**—full `statuses` as a structured JSON array (heavier payload; debugging).
 - **`directives`**: Collector, target, config, `credential_refs` for secrets in `userdata/.env`.
 - **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory’s immediate children that contain `.git`.
+
+### Activity formatter (`ai.activity_formatter`)
+
+Optional field on **`ai`**. It chooses how raw collector rows are turned into the **activity text** that is injected into model prompts and into **`rule-based`** markdown—the same shaping runs for every provider.
+
+| Value | What you get |
+|-------|----------------|
+| **`repo-chronological`** (default) | Markdown grouped by `repository`: a heading per repo (repos sorted alphabetically), signals in time order within each repo, one compact line per signal (RFC3339 time, source, kind-specific summary). Rows without a repository go under a **`(no repository)`** section. **`collector_error`** rows are listed last under **`Collector errors`**. In **`daily-plan`** and **`custom-prompt`**, repo headings use `###` so they nest under the outer `##` sections; **`recent-activity`** uses `##` for repos at the top level. |
+| **`json-signal-list`** | The full collected status list as indented JSON (every field on each item). Heavier prompts; useful for debugging or when you want structured input. |
+
+If you omit **`activity_formatter`**, it defaults to **`repo-chronological`**. Values are compared case-insensitively; underscores are treated like hyphens (for example `repo_chronological` works).
 
 Example:
 
