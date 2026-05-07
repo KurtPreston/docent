@@ -54,8 +54,10 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		env = append(env, "GITHUB_TOKEN="+token)
 	}
 	var items []StatusItem
-	trySearch := func(kind, query, itemKind, jsonFields string) error {
-		args := []string{"search", kind, query, "--limit", "25", "--json", jsonFields}
+	trySearch := func(kind string, filterArgs []string, queryForSummary, itemKind, jsonFields string) error {
+		args := []string{"search", kind}
+		args = append(args, filterArgs...)
+		args = append(args, "--limit", "25", "--json", jsonFields)
 		if host != "" && host != "github.com" {
 			args = append([]string{"--hostname", host}, args...)
 		}
@@ -83,12 +85,12 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 				Source:      directive.Collector,
 				Kind:        itemKind,
 				Title:       row.Title,
-				Summary:     fmt.Sprintf("%s state=%s updated=%s", query, row.State, row.UpdatedAt),
+				Summary:     fmt.Sprintf("%s state=%s updated=%s", queryForSummary, row.State, row.UpdatedAt),
 				URL:         row.URL,
 				Severity:    "info",
 				ObservedAt:  obs.UTC(),
 				Fields: map[string]string{
-					"query":      query,
+					"query":      queryForSummary,
 					"username":   user,
 					"host":       host,
 					"state":      row.State,
@@ -99,13 +101,32 @@ func (c GitHubActivityCollector) Collect(ctx context.Context, directive userdata
 		}
 		return nil
 	}
-	if err := trySearch("prs", fmt.Sprintf("author:%s updated:>=%s", user, dateStr), "authored_pr", "title,url,state,updatedAt,closedAt"); err != nil {
+	updatedFilter := ">=" + dateStr
+	if err := trySearch(
+		"prs",
+		[]string{"--author", user, "--updated", updatedFilter},
+		fmt.Sprintf("author:%s updated:>=%s", user, dateStr),
+		"authored_pr",
+		"title,url,state,updatedAt,closedAt",
+	); err != nil {
 		return nil, err
 	}
-	if err := trySearch("prs", fmt.Sprintf("reviewed-by:%s updated:>=%s", user, dateStr), "reviewed_pr", "title,url,state,updatedAt"); err != nil {
+	if err := trySearch(
+		"prs",
+		[]string{"--reviewed-by", user, "--updated", updatedFilter},
+		fmt.Sprintf("reviewed-by:%s updated:>=%s", user, dateStr),
+		"reviewed_pr",
+		"title,url,state,updatedAt",
+	); err != nil {
 		return nil, err
 	}
-	if err := trySearch("issues", fmt.Sprintf("involves:%s updated:>=%s", user, dateStr), "involved_issue", "title,url,state,updatedAt"); err != nil {
+	if err := trySearch(
+		"issues",
+		[]string{"--involves", user, "--updated", updatedFilter},
+		fmt.Sprintf("involves:%s updated:>=%s", user, dateStr),
+		"involved_issue",
+		"title,url,state,updatedAt",
+	); err != nil {
 		return nil, err
 	}
 	return items, nil
