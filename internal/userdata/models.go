@@ -57,7 +57,7 @@ func (e ValidationError) Error() string {
 func (f ConfigFile) Validate() error {
 	var problems []string
 	if f.AI.Provider != "" && !validAIProvider(f.AI.Provider) {
-		problems = append(problems, "ai.provider is invalid")
+		problems = append(problems, fmt.Sprintf("ai.provider %q is invalid (expected one of: ollama, cursor, rule-based)", f.AI.Provider))
 	}
 	seen := map[string]bool{}
 	for i, d := range f.Directives {

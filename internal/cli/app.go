@@ -103,6 +103,9 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if err := mergeDirectivesFromLegacyFile(*userdataDir, &cfg); err != nil {
 		return err
 	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("%s: %w", cfgSource, err)
+	}
 	if len(cfg.Directives) == 0 {
 		return fmt.Errorf("no directives in %s: add a `directives:` list", cfgSource)
 	}
@@ -128,10 +131,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	provider := ai.SelectProvider(cfg.AI, a.AI)
-	_, useOllama := provider.(ai.OllamaProvider)
-	stream := a.Err
-	if !useOllama {
-		stream = nil
+	var stream io.Writer
+	switch provider.(type) {
+	case ai.OllamaProvider, ai.CursorCLIProvider:
+		stream = a.Err
 	}
 
 	debugDir := filepath.Join(*userdataDir, ".cache", "ai-debug")

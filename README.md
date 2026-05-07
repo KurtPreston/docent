@@ -70,7 +70,7 @@ Run without `--mode` on a TTY to pick interactively.
 
 - **`rule-based`**: Deterministic markdown (no network); good for tests.
 - **`ollama`**: HTTP chat to Ollama; streams to stderr when connected to a TTY.
-- **`cursor`**: Shells out to `cursor-agent -p <payload>` (override with `ai.cursor.command` / `args`).
+- **`cursor`**: Shells out to `cursor-agent` (override with `ai.cursor.command` / `args`). Each call runs from a fresh temp directory in read-only `--mode=ask` with `--sandbox=enabled`, so the agent cannot edit files or run shell commands. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
 
 ## Collectors
 
