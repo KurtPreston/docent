@@ -222,6 +222,10 @@ func pickActivityFormatter(cfg *userdata.ConfigFile, model configschema.Model, s
 			continue
 		}
 		def := activityFormatterSurveyDefault(tf, cfg.AI.ActivityFormatter)
+		if tf.SkipSetupPrompt {
+			cfg.AI.ActivityFormatter = def
+			continue
+		}
 		var choice string
 		p := &survey.Select{
 			Message: tf.Prompt,
@@ -397,7 +401,7 @@ func manageCollectors(cfg *userdata.ConfigFile, model configschema.Model, survey
 				Config:         map[string]string{},
 				CredentialRefs: map[string]string{},
 			}
-			if err := promptDirectiveIdentity(&d, br, surveyOpt); err != nil {
+			if err := promptDirectiveIdentity(&d, br, model, surveyOpt); err != nil {
 				return err
 			}
 			if err := promptDirectiveFields(&d, br, surveyOpt); err != nil {
@@ -502,26 +506,34 @@ func indicesForCollector(cfg *userdata.ConfigFile, collector string) []int {
 	return ix
 }
 
-func promptDirectiveIdentity(d *userdata.Directive, br configschema.CollectorBranch, surveyOpt survey.AskOpt) error {
+func promptDirectiveIdentity(d *userdata.Directive, br configschema.CollectorBranch, model configschema.Model, surveyOpt survey.AskOpt) error {
 	idDef := br.DefaultID
 	if strings.TrimSpace(d.ID) != "" {
 		idDef = d.ID
 	}
-	var id string
-	if err := survey.AskOne(&survey.Input{Message: "Directive id (lowercase, digits, hyphens)", Default: idDef}, &id, surveyOpt); err != nil {
-		return err
+	if model.SkipDirectiveIDSetupPrompt {
+		d.ID = strings.TrimSpace(idDef)
+	} else {
+		var id string
+		if err := survey.AskOne(&survey.Input{Message: "Directive id (lowercase, digits, hyphens)", Default: idDef}, &id, surveyOpt); err != nil {
+			return err
+		}
+		d.ID = strings.TrimSpace(id)
 	}
-	d.ID = strings.TrimSpace(id)
 
 	nameDef := br.DisplayName
 	if strings.TrimSpace(d.Name) != "" {
 		nameDef = d.Name
 	}
-	var name string
-	if err := survey.AskOne(&survey.Input{Message: "Short label / name", Default: nameDef}, &name, surveyOpt); err != nil {
-		return err
+	if model.SkipDirectiveNameSetupPrompt {
+		d.Name = strings.TrimSpace(nameDef)
+	} else {
+		var name string
+		if err := survey.AskOne(&survey.Input{Message: "Short label / name", Default: nameDef}, &name, surveyOpt); err != nil {
+			return err
+		}
+		d.Name = strings.TrimSpace(name)
 	}
-	d.Name = strings.TrimSpace(name)
 	return nil
 }
 

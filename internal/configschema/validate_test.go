@@ -38,11 +38,17 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 				if len(tf.Enum) != 2 {
 					t.Fatalf("activity_formatter enums: %+v", tf.Enum)
 				}
+				if !tf.SkipSetupPrompt {
+					t.Fatal("expected activity_formatter x-slakkr-setup-skip-prompt")
+				}
 			}
 		}
 	}
 	if !foundFormatter {
 		t.Fatal("expected activity_formatter TopLevelFields on ai branches")
+	}
+	if !m.SkipDirectiveIDSetupPrompt || !m.SkipDirectiveNameSetupPrompt {
+		t.Fatalf("directive identity skip flags: id=%v name=%v", m.SkipDirectiveIDSetupPrompt, m.SkipDirectiveNameSetupPrompt)
 	}
 }
 

@@ -25,9 +25,12 @@ func WizardModel() (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	skipID, skipName := parseDirectiveIdentitySetup(defs)
 	return Model{
-		AIProviders: aiProviders,
-		Collectors:  collectors,
+		AIProviders:                  aiProviders,
+		Collectors:                   collectors,
+		SkipDirectiveIDSetupPrompt:   skipID,
+		SkipDirectiveNameSetupPrompt: skipName,
 	}, nil
 }
 
@@ -114,12 +117,31 @@ func extractAITopLevelEnumFields(branch *AIProviderBranch, bm map[string]any) {
 			def = opts[0]
 		}
 		branch.TopLevelFields = append(branch.TopLevelFields, AIField{
-			Key:     key,
-			Prompt:  strAnnotation(vm, "x-slakkr-prompt", key),
-			Default: def,
-			Enum:    opts,
+			Key:             key,
+			Prompt:          strAnnotation(vm, "x-slakkr-prompt", key),
+			Default:         def,
+			Enum:            opts,
+			SkipSetupPrompt: boolAnnotation(vm, "x-slakkr-setup-skip-prompt"),
 		})
 	}
+}
+
+func parseDirectiveIdentitySetup(defs map[string]any) (skipID, skipName bool) {
+	base, ok := defs["directiveBase"].(map[string]any)
+	if !ok {
+		return false, false
+	}
+	props, ok := base["properties"].(map[string]any)
+	if !ok {
+		return false, false
+	}
+	if idm, ok := props["id"].(map[string]any); ok {
+		skipID = boolAnnotation(idm, "x-slakkr-setup-skip-prompt")
+	}
+	if nm, ok := props["name"].(map[string]any); ok {
+		skipName = boolAnnotation(nm, "x-slakkr-setup-skip-prompt")
+	}
+	return skipID, skipName
 }
 
 func extractAIFields(objSchema map[string]any) []AIField {
@@ -342,4 +364,9 @@ func strAnnotation(vm map[string]any, key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func boolAnnotation(vm map[string]any, key string) bool {
+	b, ok := vm[key].(bool)
+	return ok && b
 }
