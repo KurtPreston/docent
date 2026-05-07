@@ -3,13 +3,10 @@ package userdata
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
 const DefaultDir = "userdata"
-
-var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // ConfigFile is the single userdata configuration file: AI + directives.
 type ConfigFile struct {
@@ -55,44 +52,17 @@ func (e ValidationError) Error() string {
 
 func (f ConfigFile) Validate() error {
 	var problems []string
-	if f.AI.Provider != "" && !validAIProvider(f.AI.Provider) {
-		problems = append(problems, fmt.Sprintf("ai.provider %q is invalid (expected one of: ollama, cursor, rule-based)", f.AI.Provider))
-	}
 	seen := map[string]bool{}
 	for i, d := range f.Directives {
 		path := fmt.Sprintf("directives[%d]", i)
-		problems = append(problems, validateID(path+".id", d.ID)...)
-		if d.Name == "" {
-			problems = append(problems, path+".name is required")
-		}
-		if d.Collector == "" {
-			problems = append(problems, path+".collector is required")
-		}
 		if seen[d.ID] {
-			problems = append(problems, path+".id is duplicated")
+			problems = append(problems, fmt.Sprintf("%s.id is duplicated (%q)", path, d.ID))
 		}
-		seen[d.ID] = true
+		if d.ID != "" {
+			seen[d.ID] = true
+		}
 	}
 	return validationResult(problems)
-}
-
-func validAIProvider(p string) bool {
-	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), "_", "-")) {
-	case "ollama", "cursor", "rule-based":
-		return true
-	default:
-		return false
-	}
-}
-
-func validateID(field, id string) []string {
-	if id == "" {
-		return []string{field + " is required"}
-	}
-	if !idPattern.MatchString(id) {
-		return []string{field + " must match " + idPattern.String()}
-	}
-	return nil
 }
 
 func validationResult(problems []string) error {

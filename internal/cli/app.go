@@ -16,6 +16,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/kurt/slakkr-ai/internal/ai"
 	"github.com/kurt/slakkr-ai/internal/collectors"
+	"github.com/kurt/slakkr-ai/internal/configschema"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 	"github.com/kurt/slakkr-ai/internal/workflow"
 	"golang.org/x/term"
@@ -347,7 +348,13 @@ func loadConfigFromPath(path string) (userdata.ConfigFile, error) {
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return cfg, nil
 	}
+	if err := configschema.ValidateYAML(content); err != nil {
+		return cfg, userdata.ValidationError{Problems: configschema.ValidationProblems(err)}
+	}
 	if err := yaml.Unmarshal(content, &cfg); err != nil {
+		return cfg, err
+	}
+	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

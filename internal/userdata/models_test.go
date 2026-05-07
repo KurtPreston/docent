@@ -1,6 +1,11 @@
 package userdata
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/kurt/slakkr-ai/internal/configschema"
+	"gopkg.in/yaml.v3"
+)
 
 func TestConfigValidateDirectives(t *testing.T) {
 	cfg := ConfigFile{
@@ -21,15 +26,30 @@ func TestConfigValidateDirectives(t *testing.T) {
 	}
 }
 
-func TestValidAIProvider(t *testing.T) {
+func TestAIProfilesAgainstSchema(t *testing.T) {
 	for _, p := range []string{"ollama", "cursor", "rule-based"} {
 		cfg := ConfigFile{AI: AIConfig{Provider: p}}
-		if err := cfg.Validate(); err != nil {
-			t.Fatalf("%q: %v", p, err)
+		if p == "ollama" {
+			cfg.AI.Ollama.BaseURL = "http://127.0.0.1:11434"
+			cfg.AI.Ollama.Model = "llama3"
+		}
+		if p == "cursor" {
+			cfg.AI.Cursor.Command = "cursor-agent"
+		}
+		raw, err := yaml.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := configschema.ValidateYAML(raw); err != nil {
+			t.Fatalf("%q: %v (%v)", p, err, configschema.ValidationProblems(err))
 		}
 	}
 	bad := ConfigFile{AI: AIConfig{Provider: "unknown"}}
-	if err := bad.Validate(); err == nil {
-		t.Fatal("expected invalid provider")
+	raw, err := yaml.Marshal(bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configschema.ValidateYAML(raw); err == nil {
+		t.Fatal("expected schema rejection for unknown ai.provider")
 	}
 }

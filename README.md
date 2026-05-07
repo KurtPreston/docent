@@ -13,6 +13,19 @@ go run ./cmd/slakkr --mode recent-activity --days 3
 
 Or use [`scripts/slakkr`](scripts/slakkr) from the repo root.
 
+## Setup
+
+Bootstrap or refresh `userdata/config.yaml` and reconcile secret placeholders in `userdata/.env`:
+
+```sh
+./scripts/setup
+# or: go run ./cmd/slakkr-setup --userdata userdata
+```
+
+The wizard picks an AI provider (cursor / ollama / offline `rule-based`), walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
+
+Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`internal/configschema/config.schema.json`](internal/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
+
 ## Configuration (`userdata/config.yaml`)
 
 Single file: `ai` and `directives`.
@@ -24,6 +37,7 @@ Single file: `ai` and `directives`.
 Example:
 
 ```yaml
+# yaml-language-server: $schema=../jsonschema/config.schema.json
 ai:
   provider: ollama   # or cursor, rule-based
   ollama:
@@ -79,7 +93,9 @@ All collectors run in **date range** mode (`since` → `until`). Implemented: `l
 ## Layout
 
 - `userdata/config.yaml` — only required config file.
+- `userdata/.env` — secret values referenced by `credential_refs` (optional).
 - `userdata/output/` — saved markdown.
 - `userdata/.cache/ai-debug/` — optional Ollama request/response logs.
+- `jsonschema/config.schema.json` — JSON Schema for `userdata/config.yaml` (canonical copy alongside embedded duplicate).
 
-The `userdata/` directory is gitignored; initialize by running the CLI once or copy a config by hand.
+The `userdata/` directory is gitignored; initialize with [`scripts/setup`](scripts/setup), run the CLI once (minimal default config), or copy an example by hand.

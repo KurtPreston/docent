@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kurt/slakkr-ai/internal/configschema"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,8 +38,24 @@ func (s Store) ConfigPath() string {
 
 func (s Store) LoadConfig() (ConfigFile, error) {
 	var file ConfigFile
-	err := readYAML(s.ConfigPath(), &file)
-	return file, err
+	path := s.ConfigPath()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return file, err
+	}
+	if len(bytes.TrimSpace(content)) == 0 {
+		return file, nil
+	}
+	if err := configschema.ValidateYAML(content); err != nil {
+		return file, ValidationError{Problems: configschema.ValidationProblems(err)}
+	}
+	if err := yaml.Unmarshal(content, &file); err != nil {
+		return file, err
+	}
+	if err := file.Validate(); err != nil {
+		return file, err
+	}
+	return file, nil
 }
 
 func (s Store) SaveConfig(file ConfigFile) error {
@@ -60,21 +77,13 @@ func writeDefaultYAML(path string, value any) error {
 	return writeYAML(path, value)
 }
 
-func readYAML(path string, out any) error {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if len(bytes.TrimSpace(content)) == 0 {
-		return nil
-	}
-	return yaml.Unmarshal(content, out)
-}
-
 func writeYAML(path string, value any) error {
 	content, err := yaml.Marshal(value)
 	if err != nil {
 		return err
+	}
+	if err := configschema.ValidateYAML(content); err != nil {
+		return ValidationError{Problems: configschema.ValidationProblems(err)}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
