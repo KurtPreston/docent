@@ -69,7 +69,6 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry := &Registry{collectors: map[string]Collector{}, clock: clock}
 	registry.Register("local-git", LocalGitCollector{Clock: clock})
 	registry.Register("github", GitHubCollector{Clock: clock})
-	registry.Register("github-activity", GitHubActivityCollector{Clock: clock})
 	registry.Register("github-enterprise", GitHubCollector{Clock: clock})
 	registry.Register("gitea", GiteaCollector{Clock: clock, HTTP: nil})
 	registry.Register("jira", JiraCollector{Clock: clock, HTTP: nil})

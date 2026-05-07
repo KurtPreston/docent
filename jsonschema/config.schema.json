@@ -150,9 +150,6 @@
               "$ref": "#/$defs/directive.github-enterprise"
             },
             {
-              "$ref": "#/$defs/directive.github-activity"
-            },
-            {
               "$ref": "#/$defs/directive.gitea"
             },
             {
@@ -221,98 +218,16 @@
           "type": "string",
           "const": "github",
           "x-slakkr-default-id": "github",
-          "x-slakkr-display-name": "GitHub repo (PRs/issues)"
-        },
-        "target": {
-          "type": "object",
-          "properties": {
-            "repo": {
-              "type": "string",
-              "minLength": 1,
-              "x-slakkr-prompt": "Repository (org/repo)"
-            }
-          },
-          "required": ["repo"],
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "config": {
-          "type": "object",
-          "properties": {
-            "base_url": {
-              "type": "string",
-              "x-slakkr-prompt": "GitHub host URL (optional for github.com)",
-              "x-slakkr-validator": "url"
-            }
-          },
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      },
-      "required": ["collector", "target"]
-    },
-    "directive.github-enterprise": {
-      "type": "object",
-      "properties": {
-        "collector": {
-          "type": "string",
-          "const": "github-enterprise",
-          "x-slakkr-default-id": "github-enterprise",
-          "x-slakkr-display-name": "GitHub Enterprise repo"
-        },
-        "target": {
-          "type": "object",
-          "properties": {
-            "repo": {
-              "type": "string",
-              "minLength": 1,
-              "x-slakkr-prompt": "Repository (org/repo)"
-            }
-          },
-          "required": ["repo"],
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "config": {
-          "type": "object",
-          "properties": {
-            "base_url": {
-              "type": "string",
-              "minLength": 1,
-              "x-slakkr-prompt": "GitHub Enterprise base URL",
-              "x-slakkr-validator": "url"
-            }
-          },
-          "required": ["base_url"],
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      },
-      "required": ["collector", "target", "config"]
-    },
-    "directive.github-activity": {
-      "type": "object",
-      "properties": {
-        "collector": {
-          "type": "string",
-          "const": "github-activity",
-          "x-slakkr-default-id": "github-activity",
-          "x-slakkr-display-name": "GitHub activity (user)"
+          "x-slakkr-display-name": "GitHub activity"
         },
         "target": {
           "type": "object",
           "properties": {
             "username": {
               "type": "string",
-              "minLength": 1,
-              "x-slakkr-prompt": "GitHub username"
+              "x-slakkr-prompt": "GitHub username (leave empty for authenticated user)"
             }
           },
-          "required": ["username"],
           "additionalProperties": {
             "type": "string"
           }
@@ -345,7 +260,60 @@
           }
         }
       },
-      "required": ["collector", "target"]
+      "required": ["collector"]
+    },
+    "directive.github-enterprise": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "github-enterprise",
+          "x-slakkr-default-id": "github-enterprise",
+          "x-slakkr-display-name": "GitHub Enterprise activity"
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string",
+              "x-slakkr-prompt": "GitHub Enterprise username (leave empty for authenticated user)"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "minLength": 1,
+              "x-slakkr-prompt": "GitHub Enterprise base URL",
+              "x-slakkr-validator": "url"
+            }
+          },
+          "required": ["base_url"],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "credential_refs": {
+          "type": "object",
+          "properties": {
+            "token": {
+              "type": "string",
+              "x-slakkr-secret": true,
+              "x-slakkr-default": "SLAKKR_GITHUB_TOKEN",
+              "x-slakkr-prompt": "Env var for GitHub token (optional; gh auth also works)"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["collector", "config"]
     },
     "directive.gitea": {
       "type": "object",
@@ -361,11 +329,9 @@
           "properties": {
             "owner": {
               "type": "string",
-              "minLength": 1,
-              "x-slakkr-prompt": "User or organization name"
+              "x-slakkr-prompt": "User or organization (leave empty for authenticated user)"
             }
           },
-          "required": ["owner"],
           "additionalProperties": {
             "type": "string"
           }
@@ -402,7 +368,7 @@
           }
         }
       },
-      "required": ["collector", "target", "config", "credential_refs"]
+      "required": ["collector", "config", "credential_refs"]
     },
     "directive.jira": {
       "type": "object",
@@ -429,7 +395,7 @@
             },
             "query": {
               "type": "string",
-              "x-slakkr-prompt": "Optional base JQL (updated filter is appended)"
+              "x-slakkr-prompt": "Optional JQL filter (default: issues you assign/report/watch)"
             }
           },
           "required": ["base_url", "email"],

@@ -293,8 +293,145 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 
 func manageCollectors(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey.AskOpt, errOut *os.File) error {
 	fmt.Fprintf(errOut, "\n=== Collectors ===\n")
+
+	options := make([]string, 0, len(model.Collectors))
+	labelToBranch := make(map[string]configschema.CollectorBranch, len(model.Collectors))
+	var defaults []string
 	for _, br := range model.Collectors {
-		if err := manageOneCollector(cfg, br, surveyOpt, errOut); err != nil {
+		label := collectorLabel(br)
+		options = append(options, label)
+		labelToBranch[label] = br
+		if hasEnabledDirective(cfg, br.Collector) {
+			defaults = append(defaults, label)
+		}
+	}
+
+	var chosen []string
+	prompt := &survey.MultiSelect{
+		Message: "Collectors to enable (space to toggle, enter to confirm)",
+		Options: options,
+		Default: defaults,
+	}
+	if err := survey.AskOne(prompt, &chosen, surveyOpt); err != nil {
+		return err
+	}
+
+	chosenSet := make(map[string]bool, len(chosen))
+	for _, l := range chosen {
+		if br, ok := labelToBranch[l]; ok {
+			chosenSet[br.Collector] = true
+		}
+	}
+
+	for i := range cfg.Directives {
+		if !chosenSet[cfg.Directives[i].Collector] {
+			cfg.Directives[i].Enabled = false
+		}
+	}
+
+	for _, br := range model.Collectors {
+		if !chosenSet[br.Collector] {
+			continue
+		}
+		ix := indicesForCollector(cfg, br.Collector)
+		if len(ix) == 0 {
+			fmt.Fprintf(errOut, "\n— %s (%s) —\n", br.DisplayName, br.Collector)
+			d := userdata.Directive{
+				Collector:      br.Collector,
+				Enabled:        true,
+				Target:         map[string]string{},
+				Config:         map[string]string{},
+				CredentialRefs: map[string]string{},
+			}
+			if err := promptDirectiveIdentity(&d, br, surveyOpt); err != nil {
+				return err
+			}
+			if err := promptDirectiveFields(&d, br, surveyOpt); err != nil {
+				return err
+			}
+			cfg.Directives = append(cfg.Directives, d)
+			continue
+		}
+		for _, i := range ix {
+			cfg.Directives[i].Enabled = true
+		}
+	}
+
+	return reconfigureExistingDirectives(cfg, model, surveyOpt, errOut)
+}
+
+func collectorLabel(br configschema.CollectorBranch) string {
+	if br.DisplayName == "" || br.DisplayName == br.Collector {
+		return br.Collector
+	}
+	return fmt.Sprintf("%s (%s)", br.DisplayName, br.Collector)
+}
+
+func hasEnabledDirective(cfg *userdata.ConfigFile, collector string) bool {
+	for _, d := range cfg.Directives {
+		if d.Collector == collector && d.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func reconfigureExistingDirectives(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey.AskOpt, errOut *os.File) error {
+	type item struct {
+		idx   int
+		label string
+	}
+	var items []item
+	for i := range cfg.Directives {
+		d := &cfg.Directives[i]
+		if !d.Enabled {
+			continue
+		}
+		label := fmt.Sprintf("%s — %s (%s)", d.ID, d.Name, d.Collector)
+		items = append(items, item{idx: i, label: label})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	options := make([]string, 0, len(items))
+	for _, it := range items {
+		options = append(options, it.label)
+	}
+
+	var chosen []string
+	prompt := &survey.MultiSelect{
+		Message: "Reconfigure any directives? (space to toggle, enter to skip)",
+		Options: options,
+	}
+	if err := survey.AskOne(prompt, &chosen, surveyOpt); err != nil {
+		return err
+	}
+	if len(chosen) == 0 {
+		return nil
+	}
+
+	branchByCollector := make(map[string]configschema.CollectorBranch, len(model.Collectors))
+	for _, br := range model.Collectors {
+		branchByCollector[br.Collector] = br
+	}
+
+	chosenSet := make(map[string]bool, len(chosen))
+	for _, l := range chosen {
+		chosenSet[l] = true
+	}
+
+	for _, it := range items {
+		if !chosenSet[it.label] {
+			continue
+		}
+		d := &cfg.Directives[it.idx]
+		br, ok := branchByCollector[d.Collector]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(errOut, "\n— %s (%s) —\n", d.Name, d.ID)
+		if err := promptDirectiveFields(d, br, surveyOpt); err != nil {
 			return err
 		}
 	}
@@ -309,81 +446,6 @@ func indicesForCollector(cfg *userdata.ConfigFile, collector string) []int {
 		}
 	}
 	return ix
-}
-
-func manageOneCollector(cfg *userdata.ConfigFile, br configschema.CollectorBranch, surveyOpt survey.AskOpt, errOut *os.File) error {
-	ix := indicesForCollector(cfg, br.Collector)
-	fmt.Fprintf(errOut, "\n— %s (%s) —\n", br.DisplayName, br.Collector)
-
-	if len(ix) == 0 {
-		var enable bool
-		q := &survey.Confirm{Message: fmt.Sprintf("Enable %s?", br.DisplayName), Default: false}
-		if err := survey.AskOne(q, &enable, surveyOpt); err != nil {
-			return err
-		}
-		if !enable {
-			return nil
-		}
-		d := userdata.Directive{
-			Collector:      br.Collector,
-			Enabled:        true,
-			Target:         map[string]string{},
-			Config:         map[string]string{},
-			CredentialRefs: map[string]string{},
-		}
-		if err := promptDirectiveIdentity(&d, br, surveyOpt); err != nil {
-			return err
-		}
-		if err := promptDirectiveFields(&d, br, surveyOpt); err != nil {
-			return err
-		}
-		cfg.Directives = append(cfg.Directives, d)
-		return nil
-	}
-
-	for _, i := range ix {
-		d := &cfg.Directives[i]
-		var enabled bool
-		q := &survey.Confirm{Message: fmt.Sprintf("Enable directive %q (%s)?", d.Name, d.ID), Default: d.Enabled}
-		if err := survey.AskOne(q, &enabled, surveyOpt); err != nil {
-			return err
-		}
-		d.Enabled = enabled
-		var edit bool
-		eq := &survey.Confirm{Message: fmt.Sprintf("Edit settings for %q?", d.ID), Default: false}
-		if err := survey.AskOne(eq, &edit, surveyOpt); err != nil {
-			return err
-		}
-		if edit {
-			if err := promptDirectiveFields(d, br, surveyOpt); err != nil {
-				return err
-			}
-		}
-	}
-
-	var addAnother bool
-	aq := &survey.Confirm{Message: fmt.Sprintf("Add another %s directive?", br.DisplayName), Default: false}
-	if err := survey.AskOne(aq, &addAnother, surveyOpt); err != nil {
-		return err
-	}
-	if !addAnother {
-		return nil
-	}
-	d := userdata.Directive{
-		Collector:      br.Collector,
-		Enabled:        true,
-		Target:         map[string]string{},
-		Config:         map[string]string{},
-		CredentialRefs: map[string]string{},
-	}
-	if err := promptDirectiveIdentity(&d, br, surveyOpt); err != nil {
-		return err
-	}
-	if err := promptDirectiveFields(&d, br, surveyOpt); err != nil {
-		return err
-	}
-	cfg.Directives = append(cfg.Directives, d)
-	return nil
 }
 
 func promptDirectiveIdentity(d *userdata.Directive, br configschema.CollectorBranch, surveyOpt survey.AskOpt) error {

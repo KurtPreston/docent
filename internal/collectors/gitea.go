@@ -35,14 +35,14 @@ func (c GiteaCollector) client() *http.Client {
 }
 
 // Collect keeps repositories whose updated_at is on or after opts.Since.
+// When target.owner is empty, the authenticated user is resolved via
+// /api/v1/user and used as the owner so the directive defaults to the
+// caller's own repositories.
 func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	owner := strings.TrimSpace(directive.Target["owner"])
 	if base == "" {
 		return nil, fmt.Errorf("config.base_url is required")
-	}
-	if owner == "" {
-		return nil, fmt.Errorf("target.owner is required")
 	}
 	tokenKey := directive.CredentialRefs["token"]
 	userdataDir := ""
@@ -58,6 +58,13 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 		return nil, fmt.Errorf("invalid base_url")
 	}
 	apiBase := strings.TrimRight(u.String(), "/")
+	if owner == "" {
+		login, err := c.fetchAuthenticatedLogin(ctx, apiBase, token)
+		if err != nil {
+			return nil, fmt.Errorf("resolve authenticated gitea user: %w", err)
+		}
+		owner = login
+	}
 	repos, err := c.fetchReposForOwner(ctx, apiBase, owner, token)
 	if err != nil {
 		return nil, err
@@ -122,6 +129,38 @@ func parseGiteaTime(s string) (time.Time, error) {
 		return t, nil
 	}
 	return time.Parse("2006-01-02T15:04:05Z07:00", s)
+}
+
+func (c GiteaCollector) fetchAuthenticatedLogin(ctx context.Context, apiBase, token string) (string, error) {
+	rawURL := apiBase + "/api/v1/user"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Accept", "application/json")
+	res, err := c.client().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return "", fmt.Errorf("gitea %s: %s", res.Status, strings.TrimSpace(string(body)))
+	}
+	var who struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(body, &who); err != nil {
+		return "", fmt.Errorf("parse gitea user: %w", err)
+	}
+	if strings.TrimSpace(who.Login) == "" {
+		return "", fmt.Errorf("gitea user response missing login")
+	}
+	return who.Login, nil
 }
 
 func (c GiteaCollector) fetchReposForOwner(ctx context.Context, apiBase, owner, token string) ([]giteaRepo, error) {

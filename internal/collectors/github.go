@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -12,35 +13,60 @@ import (
 	"github.com/kurt/slakkr-ai/internal/userdata"
 )
 
+// GitHubCollector returns activity (PRs, issues, comments, commits) authored
+// by, reviewed by, or commented on by a user. When target.username is empty,
+// the GitHub search literal "@me" is used so that the authenticated `gh` user
+// is queried. The same struct backs both the `github` and `github-enterprise`
+// directive types; enterprise hosts route requests via config.base_url.
 type GitHubCollector struct {
 	Clock func() time.Time
 }
 
-type ghPRActivity struct {
-	Number         int    `json:"number"`
-	Title          string `json:"title"`
-	URL            string `json:"url"`
-	State          string `json:"state"`
-	IsDraft        bool   `json:"isDraft"`
-	ReviewDecision string `json:"reviewDecision"`
-	UpdatedAt      string `json:"updatedAt"`
-	MergedAt       string `json:"mergedAt"`
+type ghSearchActivityRow struct {
+	Title      string `json:"title"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	UpdatedAt  string `json:"updatedAt"`
+	ClosedAt   string `json:"closedAt"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
 }
 
-type ghIssueActivity struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	State     string `json:"state"`
-	UpdatedAt string `json:"updatedAt"`
+type ghSearchCommitRow struct {
+	SHA        string `json:"sha"`
+	URL        string `json:"url"`
+	Repository struct {
+		FullName string `json:"fullName"`
+	} `json:"repository"`
+	Commit struct {
+		Message string `json:"message"`
+		Author  struct {
+			Date string `json:"date"`
+		} `json:"author"`
+	} `json:"commit"`
 }
 
-// Collect lists PRs and issues updated since opts.Since for the repo (read-only gh invocations).
+// Collect runs scoped GitHub search queries for PR/issue/comment/commit
+// activity in opts.Since → window end.
 func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	repo := directive.Target["repo"]
-	if repo == "" {
-		return nil, fmt.Errorf("target.repo is required")
+	user := strings.TrimSpace(directive.Target["username"])
+	if user == "" {
+		user = "@me"
 	}
+
+	tokenKey := directive.CredentialRefs["token"]
+	token := ""
+	if opts != nil {
+		token = userdata.ResolveEnv(opts.UserdataDir, tokenKey)
+	}
+
+	baseURL := strings.TrimSpace(directive.Config["base_url"])
+	if baseURL == "" {
+		baseURL = "https://github.com"
+	}
+	host := hostname(baseURL)
+
 	since := time.Time{}
 	if opts != nil {
 		since = opts.Since
@@ -50,96 +76,177 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		now = opts.windowEnd(c.Clock)
 	}
 	dateStr := since.Format("2006-01-02")
-	search := "updated:>=" + dateStr
-	hostArgs := []string(nil)
-	if baseURL := directive.Config["base_url"]; baseURL != "" && !isGitHubDotCom(baseURL) {
-		hostArgs = []string{"--hostname", hostname(baseURL)}
+	updatedFilter := ">=" + dateStr
+
+	env := os.Environ()
+	if token != "" {
+		env = append(env, "GITHUB_TOKEN="+token)
 	}
+
 	var items []StatusItem
-	runGh := func(args []string) ([]byte, error) {
-		full := append(append([]string(nil), hostArgs...), args...)
-		cmd := exec.CommandContext(ctx, "gh", full...)
-		out, err := cmd.CombinedOutput()
+
+	trySearch := func(kind string, filterArgs []string, queryForSummary, itemKind, jsonFields string) error {
+		args := []string{"search", kind}
+		args = append(args, filterArgs...)
+		args = append(args, "--limit", "25", "--json", jsonFields)
+		if host != "" && host != "github.com" {
+			args = append([]string{"--hostname", host}, args...)
+		}
+		cmd := exec.CommandContext(ctx, "gh", args...)
+		cmd.Env = env
+		out, err := cmd.Output()
 		if err != nil {
-			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(full, " "), err, strings.TrimSpace(string(out)))
+			if exit, ok := err.(*exec.ExitError); ok {
+				return fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
+			}
+			return fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
 		}
-		return out, nil
+		var rows []ghSearchActivityRow
+		if err := json.Unmarshal(out, &rows); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			obs, err := time.Parse(time.RFC3339, strings.TrimSpace(row.UpdatedAt))
+			if err != nil || obs.Before(since) || obs.After(now) {
+				continue
+			}
+			repo := strings.TrimSpace(row.Repository.NameWithOwner)
+			if repo == "" {
+				repo = gitHubOwnerRepoFromURL(row.URL)
+			}
+			items = append(items, StatusItem{
+				DirectiveID: directive.ID,
+				Repository:  repo,
+				Source:      directive.Collector,
+				Kind:        itemKind,
+				Title:       row.Title,
+				Summary:     fmt.Sprintf("%s state=%s updated=%s", queryForSummary, row.State, row.UpdatedAt),
+				URL:         row.URL,
+				Severity:    "info",
+				ObservedAt:  obs.UTC(),
+				Fields: map[string]string{
+					"query":      queryForSummary,
+					"username":   user,
+					"host":       host,
+					"repo":       repo,
+					"state":      row.State,
+					"updated_at": row.UpdatedAt,
+					"closed_at":  row.ClosedAt,
+				},
+			})
+		}
+		return nil
 	}
-	prArgs := []string{"pr", "list", "--repo", repo, "--state", "all", "--search", search, "--json", "number,title,url,state,isDraft,reviewDecision,updatedAt,mergedAt", "--limit", "50"}
-	prOut, err := runGh(prArgs)
-	if err != nil {
+
+	trySearchCommits := func(queryForSummary, itemKind string) error {
+		args := []string{"search", "commits", "--author", user, "--author-date", updatedFilter, "--limit", "25", "--json", "sha,url,repository,commit"}
+		if host != "" && host != "github.com" {
+			args = append([]string{"--hostname", host}, args...)
+		}
+		cmd := exec.CommandContext(ctx, "gh", args...)
+		cmd.Env = env
+		out, err := cmd.Output()
+		if err != nil {
+			if exit, ok := err.(*exec.ExitError); ok {
+				return fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
+			}
+			return fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+		}
+		var rows []ghSearchCommitRow
+		if err := json.Unmarshal(out, &rows); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			obs, err := time.Parse(time.RFC3339, strings.TrimSpace(row.Commit.Author.Date))
+			if err != nil || obs.Before(since) || obs.After(now) {
+				continue
+			}
+			msg := strings.TrimSpace(row.Commit.Message)
+			title := msg
+			if i := strings.IndexByte(msg, '\n'); i >= 0 {
+				title = strings.TrimSpace(msg[:i])
+			}
+			if title == "" {
+				title = row.SHA
+			}
+			repo := strings.TrimSpace(row.Repository.FullName)
+			items = append(items, StatusItem{
+				DirectiveID: directive.ID,
+				Repository:  repo,
+				Source:      directive.Collector,
+				Kind:        itemKind,
+				Title:       title,
+				Summary:     fmt.Sprintf("%s repo=%s sha=%s authored=%s", queryForSummary, repo, row.SHA, row.Commit.Author.Date),
+				URL:         row.URL,
+				Severity:    "info",
+				ObservedAt:  obs.UTC(),
+				Fields: map[string]string{
+					"query":       queryForSummary,
+					"username":    user,
+					"host":        host,
+					"repo":        repo,
+					"sha":         row.SHA,
+					"authored_at": row.Commit.Author.Date,
+				},
+			})
+		}
+		return nil
+	}
+
+	if err := trySearch(
+		"prs",
+		[]string{"--author", user, "--updated", updatedFilter},
+		fmt.Sprintf("author:%s updated:>=%s", user, dateStr),
+		"authored_pr",
+		"title,url,state,updatedAt,closedAt,repository",
+	); err != nil {
 		return nil, err
 	}
-	var prs []ghPRActivity
-	if err := json.Unmarshal(prOut, &prs); err != nil {
+	if err := trySearch(
+		"prs",
+		[]string{"--reviewed-by", user, "--updated", updatedFilter},
+		fmt.Sprintf("reviewed-by:%s updated:>=%s", user, dateStr),
+		"reviewed_pr",
+		"title,url,state,updatedAt,repository",
+	); err != nil {
 		return nil, err
 	}
-	for _, pr := range prs {
-		obs, err := time.Parse(time.RFC3339, strings.TrimSpace(pr.UpdatedAt))
-		if err != nil || obs.Before(since) || obs.After(now) {
-			continue
-		}
-		severity := "info"
-		if !pr.IsDraft && pr.ReviewDecision == "CHANGES_REQUESTED" && strings.EqualFold(pr.State, "open") {
-			severity = "warning"
-		}
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			Repository:  repo,
-			Source:      directive.Collector,
-			Kind:        "pull_request_activity",
-			Title:       pr.Title,
-			Summary:     fmt.Sprintf("state=%s draft=%t review=%s updated=%s", pr.State, pr.IsDraft, pr.ReviewDecision, pr.UpdatedAt),
-			URL:         pr.URL,
-			Severity:    severity,
-			ObservedAt:  obs.UTC(),
-			Fields: map[string]string{
-				"repo":             repo,
-				"state":            pr.State,
-				"review_decision":  pr.ReviewDecision,
-				"updated_at":       pr.UpdatedAt,
-				"merged_at":        pr.MergedAt,
-				"number":           fmt.Sprintf("%d", pr.Number),
-			},
-		})
-	}
-	issueArgs := []string{"issue", "list", "--repo", repo, "--state", "all", "--search", search, "--json", "number,title,url,state,updatedAt", "--limit", "50"}
-	issueOut, err := runGh(issueArgs)
-	if err != nil {
+	if err := trySearch(
+		"issues",
+		[]string{"--involves", user, "--updated", updatedFilter},
+		fmt.Sprintf("involves:%s updated:>=%s", user, dateStr),
+		"involved_issue",
+		"title,url,state,updatedAt,repository",
+	); err != nil {
 		return nil, err
 	}
-	var issues []ghIssueActivity
-	if err := json.Unmarshal(issueOut, &issues); err != nil {
+	// GitHub issue search requires is:issue or is:pull-request in the query; --include-prs
+	// does not satisfy that, so split issues vs PRs (gh search prs scopes to pull requests).
+	if err := trySearch(
+		"issues",
+		[]string{"is:issue", "--commenter", user, "--updated", updatedFilter},
+		fmt.Sprintf("is:issue commenter:%s updated:>=%s", user, dateStr),
+		"left_comment",
+		"title,url,state,updatedAt,repository",
+	); err != nil {
 		return nil, err
 	}
-	for _, iss := range issues {
-		obs, err := time.Parse(time.RFC3339, strings.TrimSpace(iss.UpdatedAt))
-		if err != nil || obs.Before(since) || obs.After(now) {
-			continue
-		}
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			Repository:  repo,
-			Source:      directive.Collector,
-			Kind:        "issue_activity",
-			Title:       iss.Title,
-			Summary:     fmt.Sprintf("state=%s updated=%s", iss.State, iss.UpdatedAt),
-			URL:         iss.URL,
-			Severity:    "info",
-			ObservedAt:  obs.UTC(),
-			Fields: map[string]string{
-				"repo":       repo,
-				"state":      iss.State,
-				"updated_at": iss.UpdatedAt,
-				"number":     fmt.Sprintf("%d", iss.Number),
-			},
-		})
+	if err := trySearch(
+		"prs",
+		[]string{"--commenter", user, "--updated", updatedFilter},
+		fmt.Sprintf("is:pull-request commenter:%s updated:>=%s", user, dateStr),
+		"left_comment",
+		"title,url,state,updatedAt,repository",
+	); err != nil {
+		return nil, err
+	}
+	if err := trySearchCommits(
+		fmt.Sprintf("author:%s author-date:>=%s", user, dateStr),
+		"github_commit",
+	); err != nil {
+		return nil, err
 	}
 	return items, nil
-}
-
-func isGitHubDotCom(raw string) bool {
-	return hostname(raw) == "github.com"
 }
 
 func hostname(raw string) string {
@@ -148,4 +255,16 @@ func hostname(raw string) string {
 		return raw
 	}
 	return parsed.Hostname()
+}
+
+func gitHubOwnerRepoFromURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Path == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
 }

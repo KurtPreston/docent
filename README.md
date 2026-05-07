@@ -50,14 +50,11 @@ directives:
     collector: local-git
     enabled: true
     code_home: /Users/me/Code
-  - id: github-me
+  - id: github
     name: GitHub
-    collector: github-activity
+    collector: github
     enabled: true
-    target:
-      username: MyGitHubUser
-    config:
-      base_url: https://github.com
+    # target.username is optional; omit to track the authenticated `gh` user (@me).
     credential_refs:
       token: SLAKKR_GITHUB_TOKEN
 ```
@@ -88,7 +85,15 @@ Run without `--mode` on a TTY to pick interactively.
 
 ## Collectors
 
-All collectors run in **date range** mode (`since` → `until`). Implemented: `local-git` (commits + reflog), `github` / `github-enterprise`, `github-activity`, `gitea`, `jira`, `google-calendar`. Manual / slack collectors were removed.
+All collectors run in **date range** mode (`since` → `until`). Implemented:
+
+- `local-git` — commits + reflog under `code_home` or explicit `paths`.
+- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty).
+- `gitea` — repos updated under `target.owner`; defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty.
+- `jira` — issues you assign / report / watch (override with `config.query` for project- or label-scoped JQL).
+- `google-calendar` — events from a secret iCal URL.
+
+Manual / slack collectors were removed.
 
 ## Layout
 

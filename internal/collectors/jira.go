@@ -134,10 +134,15 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	return items, nil
 }
 
+// buildJiraActivityJQL composes the JQL that the directive runs. When the
+// directive supplies its own `query`, it is preserved as a sub-clause and the
+// caller can scope freely (e.g. to a project). When omitted, the default
+// scope is "issues that involve the authenticated user" so the directive
+// behaves like a personal activity feed instead of a global tenant scan.
 func buildJiraActivityJQL(base string, since time.Time) string {
 	date := since.Format("2006-01-02")
 	if strings.TrimSpace(base) == "" {
-		return fmt.Sprintf(`updated >= "%s" ORDER BY updated DESC`, date)
+		return fmt.Sprintf(`(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= "%s" ORDER BY updated DESC`, date)
 	}
 	return fmt.Sprintf(`(%s) AND updated >= "%s" ORDER BY updated DESC`, strings.TrimSpace(base), date)
 }

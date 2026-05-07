@@ -27,7 +27,7 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Collectors) != 7 {
+	if len(m.Collectors) != 6 {
 		t.Fatalf("collectors: got %d", len(m.Collectors))
 	}
 }
@@ -41,8 +41,6 @@ directives:
     name: GH E
     collector: github-enterprise
     enabled: true
-    target:
-      repo: a/b
     config: {}
 `
 	err := configschema.ValidateYAML([]byte(yamlDoc))
@@ -64,14 +62,10 @@ directives:
     name: One
     collector: github
     enabled: true
-    target:
-      repo: x/y
   - id: a
     name: Two
     collector: github
     enabled: false
-    target:
-      repo: z/w
 `
 	if err := configschema.ValidateYAML([]byte(yamlDoc)); err != nil {
 		t.Fatalf("schema layer should accept duplicate ids: %v", err)
@@ -111,7 +105,18 @@ directives:
 `, "REPO_PLACEHOLDER", repoDir),
 		},
 		{
-			name: "github",
+			name: "github-default-user",
+			yaml: `
+ai:
+  provider: rule-based
+directives:
+  - id: github
+    name: GitHub
+    collector: github
+    enabled: true`,
+		},
+		{
+			name: "github-explicit-user",
 			yaml: `
 ai:
   provider: rule-based
@@ -121,7 +126,9 @@ directives:
     collector: github
     enabled: true
     target:
-      repo: org/hello-world`,
+      username: someone-else
+    credential_refs:
+      token: SLAKKR_GITHUB_TOKEN`,
 		},
 		{
 			name: "github-enterprise",
@@ -133,26 +140,26 @@ directives:
     name: GHE
     collector: github-enterprise
     enabled: true
-    target:
-      repo: org/repo
     config:
       base_url: https://github.enterprise.example`,
 		},
 		{
-			name: "github-activity",
+			name: "gitea-default-user",
 			yaml: `
 ai:
   provider: rule-based
 directives:
-  - id: github-activity
-    name: Act
-    collector: github-activity
+  - id: gitea
+    name: Gitea
+    collector: gitea
     enabled: true
-    target:
-      username: tester`,
+    config:
+      base_url: https://gitea.example
+    credential_refs:
+      token: SLAKKR_GITEA_TOKEN`,
 		},
 		{
-			name: "gitea",
+			name: "gitea-explicit-owner",
 			yaml: `
 ai:
   provider: rule-based
@@ -162,7 +169,7 @@ directives:
     collector: gitea
     enabled: true
     target:
-      owner: me
+      owner: some-org
     config:
       base_url: https://gitea.example
     credential_refs:
