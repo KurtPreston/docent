@@ -15,11 +15,10 @@ Or use [`scripts/slakkr`](scripts/slakkr) from the repo root.
 
 ## Configuration (`userdata/config.yaml`)
 
-Single file: optional `code_home`, `ai`, and `directives`.
+Single file: `ai` and `directives`.
 
-- **`code_home`**: Parent directory whose immediate subfolders with `.git` are scanned by `local-git` directives (unless the directive lists explicit `paths`).
-- **`CODE_HOME`**: Environment variable used when `code_home` is empty in config.
-- **`directives`**: Same shape as before (collector, target, config, `credential_refs` for secrets in `userdata/.env`).
+- **`directives`**: Collector, target, config, `credential_refs` for secrets in `userdata/.env`.
+- **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory’s immediate children that contain `.git`.
 - **Legacy**: If `directives` is missing but `userdata/directives.yaml` exists, directives are loaded from there once.
 
 Example:
@@ -31,13 +30,12 @@ ai:
     base_url: http://127.0.0.1:11434
     model: llama3
 
-code_home: /Users/me/Code
-
 directives:
   - id: local-git
     name: Local repos
     collector: local-git
     enabled: true
+    code_home: /Users/me/Code
   - id: github-me
     name: GitHub
     collector: github-activity

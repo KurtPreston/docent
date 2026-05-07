@@ -176,14 +176,10 @@ func localGitRepoDirs(directive userdata.Directive, opts *CollectOpts, expand fu
 	if len(dirs) > 0 {
 		return dirs, nil
 	}
-	codeHome := ""
-	if opts != nil {
-		codeHome = strings.TrimSpace(opts.CodeHome)
-	}
+	codeHome := expand(strings.TrimSpace(directive.CodeHome))
 	if codeHome == "" {
-		return nil, fmt.Errorf("local-git: set code_home in config or paths on the directive")
+		return nil, fmt.Errorf("local-git: set code_home or paths on the directive")
 	}
-	codeHome = expand(codeHome)
 	entries, err := os.ReadDir(codeHome)
 	if err != nil {
 		return nil, err

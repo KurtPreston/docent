@@ -39,9 +39,8 @@ func TestRegistrySkipsDisabled(t *testing.T) {
 	items, err := r.Collect(context.Background(), []userdata.Directive{
 		{ID: "x", Name: "X", Collector: "local-git", Enabled: false},
 	}, &CollectOpts{
-		Since:    time.Unix(0, 0).UTC(),
-		Until:    time.Unix(1, 0).UTC(),
-		CodeHome: t.TempDir(),
+		Since: time.Unix(0, 0).UTC(),
+		Until: time.Unix(1, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)

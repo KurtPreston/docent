@@ -2,8 +2,6 @@ package workflow
 
 import (
 	"context"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/collectors"
@@ -24,13 +22,8 @@ func CollectStatuses(ctx context.Context, d Deps, cfg userdata.ConfigFile, userd
 	if expand == nil {
 		expand = func(s string) string { return s }
 	}
-	codeHome := strings.TrimSpace(cfg.CodeHome)
-	if codeHome == "" {
-		codeHome = strings.TrimSpace(os.Getenv("CODE_HOME"))
-	}
 	opts := &collectors.CollectOpts{
 		UserdataDir:       userdataDir,
-		CodeHome:          codeHome,
 		ExpandRepoPath:    expand,
 		OnDirectiveUpdate: d.OnDirectiveUpdate,
 		Since:             since,

@@ -26,10 +26,9 @@ type StatusItem struct {
 	ChangeState    string            `json:"change_state,omitempty"`
 }
 
-// CollectOpts carries resolution data for collectors (local-git code_home, env resolution, time window).
+// CollectOpts carries env resolution and the collection time window.
 type CollectOpts struct {
 	UserdataDir       string
-	CodeHome          string // default scan root for local-git when directive.Paths is empty
 	ExpandRepoPath    func(string) string
 	OnDirectiveUpdate func(DirectiveProgress)
 	Since             time.Time

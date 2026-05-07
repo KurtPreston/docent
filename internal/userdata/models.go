@@ -11,9 +11,8 @@ const DefaultDir = "userdata"
 
 var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// ConfigFile is the single userdata configuration file: AI + optional code_home + directives.
+// ConfigFile is the single userdata configuration file: AI + directives.
 type ConfigFile struct {
-	CodeHome   string      `yaml:"code_home,omitempty"`
 	AI         AIConfig    `yaml:"ai,omitempty"`
 	Directives []Directive `yaml:"directives,omitempty"`
 }
@@ -24,7 +23,8 @@ type Directive struct {
 	Collector      string            `yaml:"collector"`
 	Enabled        bool              `yaml:"enabled"`
 	ProjectID      string            `yaml:"project_id,omitempty"` // optional label for grouping in reports
-	Paths          []string          `yaml:"paths,omitempty"`      // local-git: explicit repo paths; if empty, scan code_home
+	CodeHome       string            `yaml:"code_home,omitempty"`  // local-git: parent dir of immediate child repos when paths empty
+	Paths          []string          `yaml:"paths,omitempty"`      // local-git: explicit repo roots; if empty, use code_home scan
 	Target         map[string]string `yaml:"target,omitempty"`
 	Config         map[string]string `yaml:"config,omitempty"`
 	CredentialRefs map[string]string `yaml:"credential_refs,omitempty"`
