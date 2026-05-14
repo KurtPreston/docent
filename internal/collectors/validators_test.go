@@ -248,7 +248,7 @@ func TestJiraValidateRejectsHTMLResponse(t *testing.T) {
 
 func TestJiraValidatePATAuthSucceeds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/rest/api/3/myself" {
+		if r.URL.Path != "/rest/api/2/myself" {
 			http.NotFound(w, r)
 			return
 		}

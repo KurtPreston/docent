@@ -88,7 +88,7 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	if opts != nil {
 		now = opts.windowEnd(c.Clock)
 	}
-	api := strings.TrimRight(base, "/") + "/rest/api/3/search"
+	api := strings.TrimRight(base, "/") + "/rest/api/2/search"
 	q := url.Values{}
 	q.Set("jql", effective)
 	q.Set("maxResults", "50")
@@ -155,7 +155,7 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 
 // ValidateDirective checks base_url is well-formed, the configured credential
 // (PAT preferred, else email+token) resolves to non-empty values, and the
-// credential can reach `/rest/api/3/myself`.
+// credential can reach `/rest/api/2/myself`.
 func (c JiraCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	if base == "" {
@@ -221,7 +221,7 @@ func (c JiraCollector) ValidateDirective(ctx context.Context, directive userdata
 
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	api := strings.TrimRight(base, "/") + "/rest/api/3/myself"
+	api := strings.TrimRight(base, "/") + "/rest/api/2/myself"
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, api, nil)
 	if err != nil {
 		return []ValidationIssue{{
