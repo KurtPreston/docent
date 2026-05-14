@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -43,6 +44,9 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 				Message:     fmt.Sprintf("%q not found on PATH", cmd),
 				Remediation: "install cursor-agent (https://docs.cursor.com/cli) or set ai.cursor.command to a binary on PATH",
 			}}
+		}
+		if iss := validateCursorAuth(ctx, cmd); iss != nil {
+			return []Issue{*iss}
 		}
 		return nil
 	case "ollama":
@@ -90,4 +94,76 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 			Remediation: "set ai.provider to one of: cursor, ollama, rule-based",
 		}}
 	}
+}
+
+// cursorAuthStatus mirrors the JSON shape of `cursor-agent status --format json`.
+// Only the fields slakkr cares about are decoded; extras are ignored.
+type cursorAuthStatus struct {
+	IsAuthenticated bool   `json:"isAuthenticated"`
+	Status          string `json:"status"`
+	Message         string `json:"message"`
+}
+
+// cursorStatusRunner runs the cursor-agent auth-status probe. It is exposed as
+// a package-level variable so tests can stub the actual exec without needing a
+// real cursor-agent binary on PATH.
+var cursorStatusRunner = func(ctx context.Context, cmd string) ([]byte, error) {
+	return exec.CommandContext(ctx, cmd, "status", "--format", "json").Output()
+}
+
+// validateCursorAuth verifies the user is logged in to cursor-agent. It runs
+// `<cmd> status --format json` with a short timeout and inspects
+// `isAuthenticated`. Returns nil when authenticated. When the probe itself
+// fails (binary doesn't speak the status protocol, network issue, etc.) a
+// softer "could not verify" issue is returned so users with custom wrappers
+// aren't blocked outright.
+func validateCursorAuth(ctx context.Context, cmd string) *Issue {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	out, err := cursorStatusRunner(probeCtx, cmd)
+	if err != nil {
+		detail := err.Error()
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+				detail = firstLine(stderr)
+			}
+		}
+		return &Issue{
+			Provider:    "cursor",
+			Field:       "ai.cursor.command",
+			Message:     fmt.Sprintf("could not verify %s auth: %s", cmd, detail),
+			Remediation: fmt.Sprintf("run `%s status` manually to debug, or `%s login` if signed out", cmd, cmd),
+		}
+	}
+
+	var status cursorAuthStatus
+	if err := json.Unmarshal(out, &status); err != nil {
+		return &Issue{
+			Provider:    "cursor",
+			Field:       "ai.cursor.command",
+			Message:     fmt.Sprintf("could not parse %s status output: %v", cmd, err),
+			Remediation: fmt.Sprintf("run `%s status --format json` manually to debug", cmd),
+		}
+	}
+	if !status.IsAuthenticated {
+		msg := strings.TrimSpace(status.Message)
+		if msg == "" {
+			msg = "not logged in"
+		}
+		return &Issue{
+			Provider:    "cursor",
+			Field:       "ai.cursor.command",
+			Message:     fmt.Sprintf("%s reports %s", cmd, msg),
+			Remediation: fmt.Sprintf("run `%s login` to authenticate", cmd),
+		}
+	}
+	return nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }
