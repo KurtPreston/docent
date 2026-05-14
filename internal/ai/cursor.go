@@ -13,12 +13,12 @@ import (
 
 // CursorCLIProvider shells out to cursor-agent (or Command) with a single prompt payload.
 //
-// Each invocation runs from a freshly created temp directory and (by default)
-// uses cursor-agent's read-only `ask` mode plus `--sandbox enabled`, so the
-// agent cannot edit files or run shell commands. The temp directory is
-// removed after the call returns. This is defense in depth: slakkr only ever
-// asks the model to convert structured activity below into Markdown, so the
-// agent should never need to touch the filesystem or execute anything.
+// Each invocation runs from a freshly created temp directory and uses
+// cursor-agent's read-only `ask` mode, so the agent cannot edit files or
+// run shell commands. The temp directory is removed after the call
+// returns. slakkr only ever asks the model to convert the structured
+// activity below into Markdown, so the agent should never need to touch
+// the filesystem or execute anything.
 type CursorCLIProvider struct {
 	Command string
 	// Formatter shapes how statuses are appended to prompts (defaults to repo-chronological).
@@ -44,15 +44,20 @@ func (p CursorCLIProvider) command() string {
 }
 
 // defaultArgs returns the flag set passed to cursor-agent when Args is empty.
-// `--mode=ask` is read-only, `--sandbox=enabled` blocks shell tools,
-// `--trust` auto-approves the (empty, ephemeral) workspace, and `--force`
-// prevents headless hangs on any approval prompt that does slip through.
+// `--mode=ask` is read-only (no file edits, no shell), `--trust`
+// auto-approves the (empty, ephemeral) workspace, and `--force` prevents
+// headless hangs on any approval prompt that does slip through.
+//
+// `--sandbox=enabled` is intentionally omitted: it's host-dependent
+// (needs sandbox-exec on macOS / a working unprivileged-userns + AppArmor
+// stack on Linux) and `--mode=ask` already blocks the only behaviors the
+// sandbox would constrain. Users who want the extra layer can opt in via
+// `ai.cursor.args` in userdata/config.yaml.
 func defaultCursorArgs() []string {
 	return []string{
 		"-p",
 		"--output-format=text",
 		"--mode=ask",
-		"--sandbox=enabled",
 		"--trust",
 		"--force",
 	}
