@@ -57,6 +57,33 @@ type Collector interface {
 	Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
 }
 
+// ValidationIssue describes a single problem with a directive's configuration
+// or runtime environment that would prevent (or degrade) collection. Validators
+// return zero or more issues; an empty slice means the directive looks ready.
+type ValidationIssue struct {
+	DirectiveID string
+	Description string // directive Name, populated by Registry.Validate when blank
+	Collector   string // collector name, populated by Registry.Validate when blank
+	Field       string // optional pointer to the offending config field
+	Message     string
+	Remediation string
+}
+
+// ValidateOpts mirrors the parts of CollectOpts validators need (env lookup
+// against userdata/.env and the same path expansion as collection).
+type ValidateOpts struct {
+	UserdataDir    string
+	ExpandRepoPath func(string) string
+}
+
+// Validator is optionally implemented by Collectors. ValidateDirective inspects
+// a directive's environment (config, credentials, on-disk paths, network auth)
+// and reports user-facing issues with remediation hints. It must not write to
+// stdout/stderr; surface findings through the returned slice instead.
+type Validator interface {
+	ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue
+}
+
 type Registry struct {
 	collectors map[string]Collector
 	clock      func() time.Time
@@ -121,6 +148,74 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive,
 		all = append(all, results[i].items...)
 	}
 	return all, nil
+}
+
+// Validate runs every enabled directive's Validator (if its collector
+// implements one) in parallel and returns the aggregated issues, sorted to
+// match the directive order in the input slice for stable output.
+func (r *Registry) Validate(ctx context.Context, directives []userdata.Directive, opts *ValidateOpts) []ValidationIssue {
+	type bucket struct {
+		index int
+		items []ValidationIssue
+	}
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		buckets []bucket
+	)
+	for i, d := range directives {
+		if !d.Enabled {
+			continue
+		}
+		index := i
+		directive := d
+		collector, ok := r.collectors[directive.Collector]
+		if !ok {
+			mu.Lock()
+			buckets = append(buckets, bucket{index: index, items: []ValidationIssue{{
+				DirectiveID: directive.ID,
+				Description: directive.Name,
+				Collector:   directive.Collector,
+				Message:     fmt.Sprintf("unknown collector %q", directive.Collector),
+				Remediation: "fix the directive's `collector` field or register a custom collector",
+			}}})
+			mu.Unlock()
+			continue
+		}
+		validator, ok := collector.(Validator)
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			items := validator.ValidateDirective(ctx, directive, opts)
+			if len(items) == 0 {
+				return
+			}
+			for j := range items {
+				if items[j].DirectiveID == "" {
+					items[j].DirectiveID = directive.ID
+				}
+				if items[j].Description == "" {
+					items[j].Description = directive.Name
+				}
+				if items[j].Collector == "" {
+					items[j].Collector = directive.Collector
+				}
+			}
+			mu.Lock()
+			buckets = append(buckets, bucket{index: index, items: items})
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].index < buckets[j].index })
+	var all []ValidationIssue
+	for _, b := range buckets {
+		all = append(all, b.items...)
+	}
+	return all
 }
 
 func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, opts *CollectOpts) []StatusItem {

@@ -82,6 +82,12 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 	if token != "" {
 		env = append(env, "GITHUB_TOKEN="+token)
 	}
+	// `gh search` (and most other `gh` commands) target the host indicated by
+	// the GH_HOST environment variable; the `--hostname` flag is only honored
+	// by a handful of commands like `gh auth` and `gh api`.
+	if host != "" && host != "github.com" {
+		env = append(env, "GH_HOST="+host)
+	}
 
 	var items []StatusItem
 
@@ -89,9 +95,6 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		args := []string{"search", kind}
 		args = append(args, filterArgs...)
 		args = append(args, "--limit", "25", "--json", jsonFields)
-		if host != "" && host != "github.com" {
-			args = append([]string{"--hostname", host}, args...)
-		}
 		cmd := exec.CommandContext(ctx, "gh", args...)
 		cmd.Env = env
 		out, err := cmd.Output()
@@ -140,9 +143,6 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 
 	trySearchCommits := func(queryForSummary, itemKind string) error {
 		args := []string{"search", "commits", "--author", user, "--author-date", updatedFilter, "--limit", "25", "--json", "sha,url,repository,commit"}
-		if host != "" && host != "github.com" {
-			args = append([]string{"--hostname", host}, args...)
-		}
 		cmd := exec.CommandContext(ctx, "gh", args...)
 		cmd.Env = env
 		out, err := cmd.Output()
@@ -247,6 +247,68 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		return nil, err
 	}
 	return items, nil
+}
+
+// ValidateDirective checks that `gh` is installed, the optional token env var
+// is populated, and `gh auth status` succeeds for the target host.
+func (c GitHubCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
+	var issues []ValidationIssue
+	if _, err := exec.LookPath("gh"); err != nil {
+		return []ValidationIssue{{
+			Field:       "gh",
+			Message:     "`gh` CLI not found on PATH",
+			Remediation: "install GitHub CLI (https://cli.github.com/) and run `gh auth login`",
+		}}
+	}
+
+	baseURL := strings.TrimSpace(directive.Config["base_url"])
+	if baseURL == "" {
+		baseURL = "https://github.com"
+	}
+	host := hostname(baseURL)
+
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
+	}
+
+	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
+	tokenVal := ""
+	if tokenKey != "" {
+		tokenVal = userdata.ResolveEnv(userdataDir, tokenKey)
+		if tokenVal == "" {
+			issues = append(issues, ValidationIssue{
+				Field:       "credential_refs.token",
+				Message:     fmt.Sprintf("token env %q is empty", tokenKey),
+				Remediation: fmt.Sprintf("set %s in your environment or in %s/.env", tokenKey, userdataDir),
+			})
+		}
+	}
+
+	args := []string{"auth", "status"}
+	if host != "" && host != "github.com" {
+		args = append(args, "--hostname", host)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, "gh", args...)
+	env := os.Environ()
+	if tokenVal != "" {
+		env = append(env, "GITHUB_TOKEN="+tokenVal)
+	}
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		remediation := "run `gh auth login`"
+		if host != "" && host != "github.com" {
+			remediation = fmt.Sprintf("run `gh auth login --hostname %s`", host)
+		}
+		issues = append(issues, ValidationIssue{
+			Field:       "gh auth",
+			Message:     fmt.Sprintf("`gh %s` failed: %s", strings.Join(args, " "), strings.TrimSpace(string(out))),
+			Remediation: remediation,
+		})
+	}
+	return issues
 }
 
 func hostname(raw string) string {

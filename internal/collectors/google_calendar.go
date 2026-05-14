@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -95,6 +96,76 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 		})
 	}
 	return items, nil
+}
+
+// ValidateDirective checks that an iCal URL is configured (either inline or
+// via credential_refs) and that the URL responds with a 2xx GET.
+func (c GoogleCalendarCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
+	rawURL := strings.TrimSpace(directive.Config["ical_url"])
+	if rawURL == "" {
+		rawURL = strings.TrimSpace(directive.Config["url"])
+	}
+	tokenKey := strings.TrimSpace(directive.CredentialRefs["ical_url"])
+	if tokenKey == "" {
+		tokenKey = strings.TrimSpace(directive.CredentialRefs["url"])
+	}
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
+	}
+	if tokenKey != "" {
+		if v := userdata.ResolveEnv(userdataDir, tokenKey); v != "" {
+			rawURL = v
+		} else if rawURL == "" {
+			return []ValidationIssue{{
+				Field:       "credential_refs.ical_url",
+				Message:     fmt.Sprintf("iCal URL env %q is empty", tokenKey),
+				Remediation: fmt.Sprintf("set %s in your environment or in %s/.env", tokenKey, userdataDir),
+			}}
+		}
+	}
+	if rawURL == "" {
+		return []ValidationIssue{{
+			Field:       "config.ical_url",
+			Message:     "no iCal URL configured",
+			Remediation: "set config.ical_url or credential_refs.ical_url to the secret iCal address from Google Calendar settings",
+		}}
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return []ValidationIssue{{
+			Field:       "ical_url",
+			Message:     "iCal URL is not a valid URL",
+			Remediation: "copy the secret iCal address from Google Calendar settings (Integrate calendar)",
+		}}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return []ValidationIssue{{
+			Field:       "ical_url",
+			Message:     fmt.Sprintf("iCal probe request build failed: %v", err),
+			Remediation: "verify the iCal URL",
+		}}
+	}
+	res, err := c.client().Do(req)
+	if err != nil {
+		return []ValidationIssue{{
+			Field:       "ical_url",
+			Message:     fmt.Sprintf("iCal probe failed: %v", err),
+			Remediation: "verify network connectivity and the iCal URL",
+		}}
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return []ValidationIssue{{
+			Field:       "ical_url",
+			Message:     calendarIcalHTTPError(res).Error(),
+			Remediation: "re-copy the secret iCal address from Google Calendar settings (Integrate calendar)",
+		}}
+	}
+	return nil
 }
 
 func calendarIcalHTTPError(res *http.Response) error {

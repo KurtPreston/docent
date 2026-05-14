@@ -119,6 +119,59 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	return items, nil
 }
 
+// ValidateDirective checks base_url is a valid URL, the token env value is
+// populated, and the configured token can reach `/api/v1/user`.
+func (c GiteaCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
+	var issues []ValidationIssue
+	base := strings.TrimSpace(directive.Config["base_url"])
+	if base == "" {
+		return []ValidationIssue{{
+			Field:       "config.base_url",
+			Message:     "Gitea base_url is required",
+			Remediation: "set config.base_url to your Gitea server (e.g. https://gitea.example.com)",
+		}}
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return []ValidationIssue{{
+			Field:       "config.base_url",
+			Message:     fmt.Sprintf("base_url %q is not a valid URL", base),
+			Remediation: "use the form https://gitea.example.com (no trailing /api/v1)",
+		}}
+	}
+	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
+	if tokenKey == "" {
+		return []ValidationIssue{{
+			Field:       "credential_refs.token",
+			Message:     "Gitea token credential is not configured",
+			Remediation: "add credential_refs.token (e.g. SLAKKR_GITEA_TOKEN) and put the value in userdata/.env",
+		}}
+	}
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
+	}
+	token := userdata.ResolveEnv(userdataDir, tokenKey)
+	if token == "" {
+		return []ValidationIssue{{
+			Field:       "credential_refs.token",
+			Message:     fmt.Sprintf("Gitea token env %q is empty", tokenKey),
+			Remediation: fmt.Sprintf("set %s in your environment or in %s/.env", tokenKey, userdataDir),
+		}}
+	}
+	apiBase := strings.TrimRight(u.String(), "/")
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := c.fetchAuthenticatedLogin(probeCtx, apiBase, token); err != nil {
+		issues = append(issues, ValidationIssue{
+			Field:       "auth",
+			Message:     fmt.Sprintf("Gitea auth probe failed: %v", err),
+			Remediation: fmt.Sprintf("verify %s is reachable and %s has read access to your account", apiBase, tokenKey),
+		})
+	}
+	return issues
+}
+
 func parseGiteaTime(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {

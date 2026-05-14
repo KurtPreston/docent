@@ -69,6 +69,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	noPrompt := fs.Bool("no-prompt", false, "skip priorities prompt (daily-plan)")
 	promptFlag := fs.String("prompt", "", "custom prompt text")
 	promptFile := fs.String("prompt-file", "", "read custom prompt from file")
+	checkOnly := fs.Bool("check", false, "validate every enabled directive and exit without collecting data")
+	skipCheck := fs.Bool("skip-check", false, "skip the pre-flight directive validation that runs alongside the interactive menu")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -111,6 +113,27 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("no directives in %s: add a `directives:` list", cfgSource)
 	}
 
+	expand := expandRepoPathFromStdin(a.In)
+	validateOpts := &collectors.ValidateOpts{
+		UserdataDir:    *userdataDir,
+		ExpandRepoPath: expand,
+	}
+
+	if *checkOnly {
+		issues := runFullValidation(ctx, a.Reg, cfg, validateOpts)
+		a.renderValidationIssues(issues)
+		if len(issues) > 0 {
+			return fmt.Errorf("%d validation issue(s)", len(issues))
+		}
+		fmt.Fprintln(a.Out, "All enabled directives passed validation.")
+		return nil
+	}
+
+	var validation *validationRunner
+	if !*skipCheck {
+		validation = startValidation(ctx, a.Reg, cfg, validateOpts)
+	}
+
 	mode := strings.TrimSpace(*modeFlag)
 	if mode == "" {
 		if !a.stdinIsTerminal() {
@@ -142,7 +165,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(debugDir, 0o755); err != nil {
 		return err
 	}
-	expand := expandRepoPathFromStdin(a.In)
 
 	until := a.Now()
 	var since time.Time
@@ -240,6 +262,24 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	default:
 		return fmt.Errorf("unknown mode %q (expected daily-plan, recent-activity, custom-prompt)", mode)
+	}
+
+	if validation != nil {
+		issues := validation.Wait(ctx)
+		if len(issues) > 0 {
+			a.renderValidationIssues(issues)
+			if !a.stdinIsTerminal() {
+				return fmt.Errorf("%d directive validation issue(s); rerun with --skip-check to ignore or --check for a focused report", len(issues))
+			}
+			prompter := StdioPrompter{In: a.In, Out: a.Out}
+			proceed, err := prompter.Confirm("Proceed despite validation warnings?", false)
+			if err != nil {
+				return err
+			}
+			if !proceed {
+				return fmt.Errorf("aborted: validation reported %d issue(s)", len(issues))
+			}
+		}
 	}
 
 	progress := newDirectiveProgressTable(a.Out)
@@ -403,6 +443,98 @@ func expandRepoPathFromStdin(in io.Reader) func(string) string {
 		}
 		return abs
 	}
+}
+
+type validationRunner struct {
+	done   chan struct{}
+	issues []collectors.ValidationIssue
+	cancel context.CancelFunc
+}
+
+// startValidation runs Registry.Validate and ai.Validate on a background
+// goroutine so the interactive menu can collect user input while validators
+// probe dependencies, credentials, and the configured AI provider in parallel.
+// The returned runner is later joined with Wait, which blocks until validation
+// finishes (or ctx is cancelled).
+func startValidation(parent context.Context, reg *collectors.Registry, cfg userdata.ConfigFile, opts *collectors.ValidateOpts) *validationRunner {
+	ctx, cancel := context.WithCancel(parent)
+	r := &validationRunner{done: make(chan struct{}), cancel: cancel}
+	go func() {
+		defer close(r.done)
+		r.issues = runFullValidation(ctx, reg, cfg, opts)
+	}()
+	return r
+}
+
+// runFullValidation joins the AI provider check with the directive checks,
+// returning AI issues first (they apply globally) followed by per-directive
+// issues in directive order.
+func runFullValidation(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigFile, opts *collectors.ValidateOpts) []collectors.ValidationIssue {
+	aiCh := make(chan []collectors.ValidationIssue, 1)
+	go func() {
+		raw := ai.Validate(ctx, cfg.AI, nil)
+		aiCh <- aiIssuesAsValidation(raw)
+	}()
+	directiveIssues := reg.Validate(ctx, cfg.Directives, opts)
+	aiIssues := <-aiCh
+	return append(aiIssues, directiveIssues...)
+}
+
+func aiIssuesAsValidation(issues []ai.Issue) []collectors.ValidationIssue {
+	if len(issues) == 0 {
+		return nil
+	}
+	out := make([]collectors.ValidationIssue, 0, len(issues))
+	for _, iss := range issues {
+		out = append(out, collectors.ValidationIssue{
+			DirectiveID: "ai",
+			Description: "AI provider",
+			Collector:   "ai/" + iss.Provider,
+			Field:       iss.Field,
+			Message:     iss.Message,
+			Remediation: iss.Remediation,
+		})
+	}
+	return out
+}
+
+func (r *validationRunner) Wait(ctx context.Context) []collectors.ValidationIssue {
+	if r == nil {
+		return nil
+	}
+	select {
+	case <-r.done:
+		return r.issues
+	case <-ctx.Done():
+		r.cancel()
+		<-r.done
+		return r.issues
+	}
+}
+
+func (a *App) renderValidationIssues(issues []collectors.ValidationIssue) {
+	if len(issues) == 0 {
+		return
+	}
+	fmt.Fprintln(a.Out, "Validation warnings:")
+	for _, iss := range issues {
+		label := strings.TrimSpace(iss.DirectiveID)
+		if d := strings.TrimSpace(iss.Description); d != "" && d != label {
+			label = fmt.Sprintf("%s (%s)", label, d)
+		}
+		if label == "" {
+			label = iss.Collector
+		}
+		field := ""
+		if strings.TrimSpace(iss.Field) != "" {
+			field = fmt.Sprintf(" [%s]", iss.Field)
+		}
+		fmt.Fprintf(a.Out, "  ! %s [%s]%s: %s\n", label, iss.Collector, field, iss.Message)
+		if rem := strings.TrimSpace(iss.Remediation); rem != "" {
+			fmt.Fprintf(a.Out, "      -> %s\n", rem)
+		}
+	}
+	fmt.Fprintln(a.Out)
 }
 
 func (a *App) stdinIsTerminal() bool {

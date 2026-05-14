@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -47,5 +48,61 @@ func TestRegistrySkipsDisabled(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("expected no items, got %d", len(items))
+	}
+}
+
+type stubValidator struct {
+	Issues []ValidationIssue
+	Err    error
+	Calls  int
+}
+
+func (s *stubValidator) Collect(_ context.Context, _ userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+	return nil, nil
+}
+
+func (s *stubValidator) ValidateDirective(_ context.Context, d userdata.Directive, _ *ValidateOpts) []ValidationIssue {
+	s.Calls++
+	out := make([]ValidationIssue, len(s.Issues))
+	copy(out, s.Issues)
+	for i := range out {
+		// Leave DirectiveID/Collector/Description blank to confirm Registry.Validate fills them in.
+		out[i].Message = fmt.Sprintf("%s: %s", d.ID, out[i].Message)
+	}
+	return out
+}
+
+func TestRegistryValidateAggregates(t *testing.T) {
+	r := NewRegistry(time.Now)
+	stub := &stubValidator{Issues: []ValidationIssue{{Field: "x", Message: "boom", Remediation: "fix it"}}}
+	r.Register("stubby", stub)
+
+	issues := r.Validate(context.Background(), []userdata.Directive{
+		{ID: "a", Name: "Alpha", Collector: "stubby", Enabled: true},
+		{ID: "b", Name: "Beta", Collector: "stubby", Enabled: false},
+		{ID: "c", Name: "Gamma", Collector: "stubby", Enabled: true},
+		{ID: "d", Name: "Delta", Collector: "nope", Enabled: true},
+	}, &ValidateOpts{})
+
+	if stub.Calls != 2 {
+		t.Fatalf("expected validator called twice (enabled directives only), got %d", stub.Calls)
+	}
+	if len(issues) != 3 {
+		t.Fatalf("expected 3 issues (a, c, d), got %d: %#v", len(issues), issues)
+	}
+	wantOrder := []string{"a", "c", "d"}
+	for i, want := range wantOrder {
+		if issues[i].DirectiveID != want {
+			t.Fatalf("issue %d: directive id = %q, want %q", i, issues[i].DirectiveID, want)
+		}
+		if issues[i].Description == "" {
+			t.Fatalf("issue %d: description not populated", i)
+		}
+		if issues[i].Collector == "" {
+			t.Fatalf("issue %d: collector not populated", i)
+		}
+	}
+	if got := issues[2].Message; got == "" {
+		t.Fatalf("expected unknown-collector message, got empty")
 	}
 }

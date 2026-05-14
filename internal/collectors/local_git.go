@@ -271,6 +271,10 @@ func defaultExpandRepoPath(opts *CollectOpts) func(string) string {
 	if opts != nil && opts.ExpandRepoPath != nil {
 		return opts.ExpandRepoPath
 	}
+	return fallbackExpandRepoPath()
+}
+
+func fallbackExpandRepoPath() func(string) string {
 	return func(s string) string {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -284,12 +288,155 @@ func defaultExpandRepoPath(opts *CollectOpts) func(string) string {
 	}
 }
 
+// ValidateDirective checks the `git` binary is present, that at least one
+// repository (via `paths` or `code_home`) resolves on disk, and that `git`
+// itself accepts each repository. The git probe catches the failure modes that
+// would otherwise surface as the opaque "exit status 128" during Collect:
+// safe.directory ownership errors, permission denials, and corrupt repos.
+func (c LocalGitCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
+	if _, err := exec.LookPath("git"); err != nil {
+		return []ValidationIssue{{
+			Field:       "git",
+			Message:     "`git` binary not found on PATH",
+			Remediation: "install git (e.g. `apt install git`, `brew install git`)",
+		}}
+	}
+	expand := fallbackExpandRepoPath()
+	if opts != nil && opts.ExpandRepoPath != nil {
+		expand = opts.ExpandRepoPath
+	}
+	var (
+		issues   []ValidationIssue
+		resolved []string
+		seen     = map[string]bool{}
+	)
+	for _, raw := range directive.Paths {
+		p := expand(strings.TrimSpace(raw))
+		if p == "" {
+			continue
+		}
+		st, err := os.Stat(p)
+		if err != nil || !st.IsDir() {
+			issues = append(issues, ValidationIssue{
+				Field:       "paths",
+				Message:     fmt.Sprintf("path %s does not exist or is not a directory", p),
+				Remediation: "remove the entry or correct the path",
+			})
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(p, ".git")); err != nil {
+			issues = append(issues, ValidationIssue{
+				Field:       "paths",
+				Message:     fmt.Sprintf("%s is not a git working tree (missing .git)", p),
+				Remediation: "point to a directory containing .git, or drop this entry",
+			})
+			continue
+		}
+		if !seen[p] {
+			seen[p] = true
+			resolved = append(resolved, p)
+		}
+	}
+	if len(resolved) == 0 {
+		codeHome := expand(strings.TrimSpace(directive.CodeHome))
+		if codeHome == "" {
+			return append(issues, ValidationIssue{
+				Field:       "code_home",
+				Message:     "neither `paths` nor `code_home` is set",
+				Remediation: "set `code_home` to a parent of your repo clones, or list `paths` explicitly",
+			})
+		}
+		st, err := os.Stat(codeHome)
+		if err != nil || !st.IsDir() {
+			return append(issues, ValidationIssue{
+				Field:       "code_home",
+				Message:     fmt.Sprintf("code_home %s does not exist or is not a directory", codeHome),
+				Remediation: "create the directory or update code_home to a real path",
+			})
+		}
+		entries, err := os.ReadDir(codeHome)
+		if err != nil {
+			return append(issues, ValidationIssue{
+				Field:       "code_home",
+				Message:     fmt.Sprintf("cannot read code_home %s: %v", codeHome, err),
+				Remediation: "ensure the directory is readable",
+			})
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			cand := filepath.Join(codeHome, e.Name())
+			if _, err := os.Stat(filepath.Join(cand, ".git")); err != nil {
+				continue
+			}
+			abs := expand(cand)
+			if !seen[abs] {
+				seen[abs] = true
+				resolved = append(resolved, abs)
+			}
+		}
+		if len(resolved) == 0 {
+			return append(issues, ValidationIssue{
+				Field:       "code_home",
+				Message:     fmt.Sprintf("no git repositories found under %s", codeHome),
+				Remediation: "clone repos into code_home or point it at a directory of repos",
+			})
+		}
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for _, dir := range resolved {
+		// Mirror the command shape Collect uses so failures here line up with
+		// what would have surfaced as `exit status 128` during collection
+		// (safe.directory ownership errors, empty repos with no commits,
+		// corrupt refs, permission denials).
+		cmd := exec.CommandContext(probeCtx, "git", "-C", dir, "log", "--all", "--max-count=1", "--format=%H")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			continue
+		}
+		stderr := strings.TrimSpace(string(out))
+		rem := fmt.Sprintf("run `git -C %s log --all --max-count=1` to see the underlying error", dir)
+		switch {
+		case strings.Contains(stderr, "safe.directory"):
+			rem = fmt.Sprintf("run `git config --global --add safe.directory %s` (or fix ownership of %s)", dir, dir)
+		case strings.Contains(stderr, "not a git repository"):
+			rem = fmt.Sprintf("remove %s from paths or delete its .git folder if no longer needed", dir)
+		case strings.Contains(stderr, "does not have any commits yet"), strings.Contains(stderr, "bad default revision"):
+			rem = fmt.Sprintf("repo %s has no commits yet; ignore it or make an initial commit", dir)
+		case strings.Contains(stderr, "Permission denied"):
+			rem = fmt.Sprintf("ensure the current user can read %s/.git", dir)
+		}
+		msg := fmt.Sprintf("git rejected %s", dir)
+		if stderr != "" {
+			msg = fmt.Sprintf("%s: %s", msg, stderr)
+		}
+		issues = append(issues, ValidationIssue{
+			Field:       "git",
+			Message:     msg,
+			Remediation: rem,
+		})
+	}
+	return issues
+}
+
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		// Surface git's stderr so callers (and the user) don't see an opaque
+		// `exit status 128`; the stderr typically explains the actual cause
+		// (safe.directory, missing commits, bad refs, etc).
+		if exit, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(exit.Stderr))
+			if stderr != "" {
+				return "", fmt.Errorf("git %s in %s: %w: %s", strings.Join(args, " "), dir, err, stderr)
+			}
+		}
+		return "", fmt.Errorf("git %s in %s: %w", strings.Join(args, " "), dir, err)
 	}
 	return string(out), nil
 }
