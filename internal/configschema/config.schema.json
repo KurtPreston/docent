@@ -92,13 +92,15 @@
                 "command": {
                   "type": "string",
                   "x-slakkr-prompt": "cursor-agent command",
-                  "x-slakkr-default": "cursor-agent"
+                  "x-slakkr-default": "cursor-agent",
+                  "x-slakkr-setup-skip-prompt": true
                 },
                 "args": {
                   "type": "array",
                   "items": {
                     "type": "string"
-                  }
+                  },
+                  "x-slakkr-setup-skip-prompt": true
                 }
               },
               "additionalProperties": false
@@ -406,7 +408,7 @@
           "type": "string",
           "const": "jira",
           "x-slakkr-default-id": "jira",
-          "x-slakkr-display-name": "Jira Cloud"
+          "x-slakkr-display-name": "Jira"
         },
         "config": {
           "type": "object",
@@ -417,55 +419,31 @@
               "x-slakkr-prompt": "Jira site base URL",
               "x-slakkr-validator": "url"
             },
-            "email": {
-              "type": "string",
-              "minLength": 1,
-              "x-slakkr-prompt": "Atlassian account email (API token auth)"
-            },
             "query": {
               "type": "string",
               "x-slakkr-prompt": "Optional JQL filter (default: issues you assign/report/watch)"
             }
           },
-          "required": ["base_url", "email"],
+          "required": ["base_url"],
           "additionalProperties": {
             "type": "string"
           }
         },
         "credential_refs": {
           "type": "object",
-          "oneOf": [
-            {
-              "properties": {
-                "token": {
-                  "type": "string",
-                  "minLength": 1,
-                  "x-slakkr-secret": true,
-                  "x-slakkr-default": "SLAKKR_JIRA_TOKEN",
-                  "x-slakkr-prompt": "Env var for Jira API token"
-                }
-              },
-              "required": ["token"],
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            {
-              "properties": {
-                "pat": {
-                  "type": "string",
-                  "minLength": 1,
-                  "x-slakkr-secret": true,
-                  "x-slakkr-default": "SLAKKR_JIRA_PAT",
-                  "x-slakkr-prompt": "Env var for Jira PAT (alternative to token)"
-                }
-              },
-              "required": ["pat"],
-              "additionalProperties": {
-                "type": "string"
-              }
+          "properties": {
+            "pat": {
+              "type": "string",
+              "minLength": 1,
+              "x-slakkr-secret": true,
+              "x-slakkr-default": "SLAKKR_JIRA_PAT",
+              "x-slakkr-prompt": "Env var for Jira Personal Access Token"
             }
-          ]
+          },
+          "required": ["pat"],
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": ["collector", "config", "credential_refs"]

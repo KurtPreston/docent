@@ -53,21 +53,36 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 		since = opts.Since
 	}
 	effective := buildJiraActivityJQL(jql, since)
-	email := strings.TrimSpace(directive.Config["email"])
-	tokenKey := directive.CredentialRefs["token"]
-	if tokenKey == "" {
-		tokenKey = directive.CredentialRefs["pat"]
-	}
 	userdataDir := ""
 	if opts != nil {
 		userdataDir = opts.UserdataDir
 	}
-	token := userdata.ResolveEnv(userdataDir, tokenKey)
-	if token == "" {
-		return nil, fmt.Errorf("jira token missing (set credential_refs token in userdata/.env)")
-	}
-	if email == "" {
-		return nil, fmt.Errorf("config.email is required for Jira Cloud API token auth")
+	// Prefer Personal Access Token (Bearer auth). Fall back to email + API
+	// token (Basic auth) for legacy Atlassian Cloud configs.
+	patKey := strings.TrimSpace(directive.CredentialRefs["pat"])
+	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
+	email := strings.TrimSpace(directive.Config["email"])
+	var (
+		secret    string
+		useBearer bool
+	)
+	switch {
+	case patKey != "":
+		secret = userdata.ResolveEnv(userdataDir, patKey)
+		if secret == "" {
+			return nil, fmt.Errorf("jira pat env %q is empty", patKey)
+		}
+		useBearer = true
+	case tokenKey != "":
+		secret = userdata.ResolveEnv(userdataDir, tokenKey)
+		if secret == "" {
+			return nil, fmt.Errorf("jira token env %q is empty", tokenKey)
+		}
+		if email == "" {
+			return nil, fmt.Errorf("config.email is required for Jira API token (Basic) auth")
+		}
+	default:
+		return nil, fmt.Errorf("jira credential missing (set credential_refs.pat in userdata/.env)")
 	}
 	now := c.Clock()
 	if opts != nil {
@@ -83,7 +98,11 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth(email, token)
+	if useBearer {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	} else {
+		req.SetBasicAuth(email, secret)
+	}
 	req.Header.Set("Accept", "application/json")
 	res, err := c.client().Do(req)
 	if err != nil {

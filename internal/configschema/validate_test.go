@@ -246,7 +246,7 @@ directives:
       token: SLAKKR_GITEA_TOKEN`,
 		},
 		{
-			name: "jira-token",
+			name: "jira-pat",
 			yaml: `
 ai:
   provider: rule-based
@@ -257,10 +257,9 @@ directives:
     enabled: true
     config:
       base_url: https://your-domain.atlassian.net
-      email: me@example.com
       query: project = FOO
     credential_refs:
-      token: SLAKKR_JIRA_TOKEN`,
+      pat: SLAKKR_JIRA_PAT`,
 		},
 		{
 			name: "google-calendar-env",
