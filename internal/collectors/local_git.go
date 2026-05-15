@@ -51,6 +51,14 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 	var out []StatusItem
 	commitTimes := map[string]time.Time{}
 	for _, abs := range dirs {
+		// A freshly-initialised repo (e.g. `git init` with no commits) makes
+		// `git log --all` / `git reflog` exit 128 with "your current branch
+		// '<name>' does not have any commits yet". Treat that as "nothing to
+		// report" rather than failing the entire directive: one empty repo
+		// under code_home shouldn't sabotage every other repo's collection.
+		if !localGitRepoHasCommits(ctx, abs) {
+			continue
+		}
 		repoLabel := localGitRepositoryKey(ctx, abs)
 		matcher := newLocalGitSelfMatcher(ctx, abs, globalEmail, currentUser)
 
@@ -608,6 +616,25 @@ func currentOSUsername() string {
 		return strings.TrimSpace(cu.Username)
 	}
 	return ""
+}
+
+// localGitRepoHasCommits reports whether the repo's HEAD resolves to a commit.
+// Returns false only for the "unborn HEAD" case (post-`git init`, pre-first-
+// commit) so callers can skip empty repos without swallowing real failures.
+// `git rev-parse --verify --quiet HEAD` exits 1 for an unborn HEAD and 128 for
+// genuine repo problems (corruption, safe.directory, missing .git) — only the
+// exit-1 signal counts as empty; everything else returns true so the
+// subsequent `git log` call in Collect can resurface the real error.
+func localGitRepoHasCommits(ctx context.Context, repoDir string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-parse", "--verify", "--quiet", "HEAD")
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+		return false
+	}
+	return true
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {

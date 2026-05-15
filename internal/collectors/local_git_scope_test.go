@@ -127,3 +127,72 @@ func TestLocalGitCollectScopes(t *testing.T) {
 		t.Errorf("scope=all expected 3 commits (all refs), got %d: %#v", got, allItems)
 	}
 }
+
+// TestLocalGitCollectSkipsEmptyRepo verifies that a freshly-initialised repo
+// with no commits yet is silently skipped instead of failing the whole
+// directive. Empty repos surfaced as `git reflog ... exit status 128: fatal:
+// your current branch '<name>' does not have any commits yet` before this was
+// handled.
+func TestLocalGitCollectSkipsEmptyRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	codeHome := t.TempDir()
+
+	emptyRepo := codeHome + "/empty"
+	if err := os.MkdirAll(emptyRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initEmpty := exec.Command("git", "-C", emptyRepo, "init", "--initial-branch=main", ".")
+	if out, err := initEmpty.CombinedOutput(); err != nil {
+		t.Fatalf("git init empty: %v\n%s", err, out)
+	}
+
+	goodRepo := codeHome + "/good"
+	if err := os.MkdirAll(goodRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitGood := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", goodRepo}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_DATE=2026-05-13T12:00:00+00:00",
+			"GIT_COMMITTER_DATE=2026-05-13T12:00:00+00:00",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	gitGood("init", "--initial-branch=main", ".")
+	gitGood("config", "user.name", "Kurt")
+	gitGood("config", "user.email", "kurt@example")
+	gitGood("commit", "--allow-empty", "-m", "initial")
+
+	directive := userdata.Directive{
+		ID: "lg", Name: "Local", Collector: "local-git", Enabled: true,
+		CodeHome: codeHome,
+	}
+	clock := func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) }
+	c := LocalGitCollector{Clock: clock}
+
+	items, err := c.Collect(context.Background(), directive, &CollectOpts{
+		Since: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Until: clock(),
+		Scope: ScopeAll,
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v (empty repo should be skipped, not fail directive)", err)
+	}
+	hasGoodCommit := false
+	for _, it := range items {
+		if it.Kind == "commit" {
+			hasGoodCommit = true
+		}
+		if strings.Contains(it.Fields["path"], "/empty") {
+			t.Errorf("empty repo leaked an item: %+v", it)
+		}
+	}
+	if !hasGoodCommit {
+		t.Errorf("expected at least one commit from the good repo, got items=%#v", items)
+	}
+}
