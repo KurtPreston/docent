@@ -77,14 +77,14 @@ Modes are declarative: every run is described by an `ExecutionMode` value that b
 | Mode | Lookback | Scope | Behavior |
 |------|----------|-------|----------|
 | `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | `involved` | AI output should use `## Yesterday` and `## Today`. Pulls your own activity plus PRs/issues you reviewed, were assigned, or were mentioned in (see *Scope semantics* below). |
-| `recent-activity` | `--days N` (default 7, or prompt) | `involved` | Summarize activity; grouped markdown. Same scope coverage as `daily-plan`. |
+| `recent-activity` | `--days N` (default 7, or prompt) | prompt (default `involved`) | Summarize activity; grouped markdown. The scope picker lets you broaden to `all` or narrow to `self` per run. |
 | `custom-prompt` | `--days N` | `involved` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions over the same `involved` set. Override with `scope: all` on a user-declared mode if you want everything. |
 
 Run without `--mode` on a TTY to pick interactively.
 
 ### Declaring your own modes
 
-Add `execution_modes:` to `userdata/config.yaml`. Any property you omit is asked at runtime (or filled from CLI flags); set the ones you want to lock in:
+Add `execution_modes:` to `userdata/config.yaml`. Any property you omit is asked at runtime (or filled from CLI flags) — including `scope`, which becomes an interactive picker (defaulting to `involved`) when left unset. Set the ones you want to lock in:
 
 ```yaml
 execution_modes:

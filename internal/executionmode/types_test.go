@@ -97,7 +97,8 @@ func TestBuiltinModesValid(t *testing.T) {
 			t.Fatalf("builtin %s invalid: %v", m.ID, err)
 		}
 	}
-	// Daily-plan should not declare days, recent-activity should default to 7.
+	// Daily-plan uses previous-weekday; recent-activity intentionally
+	// leaves Lookback nil so Resolve prompts the user (defaulting to 7).
 	for _, m := range modes {
 		switch m.ID {
 		case BuiltinDailyPlan:
@@ -111,11 +112,14 @@ func TestBuiltinModesValid(t *testing.T) {
 				t.Fatalf("daily-plan scope: %q", m.Scope)
 			}
 		case BuiltinRecentActivity:
-			if m.Lookback == nil || m.Lookback.Kind != LookbackKindDays || m.Lookback.Days != 7 {
-				t.Fatalf("recent-activity lookback: %+v", m.Lookback)
+			if m.Lookback != nil {
+				t.Fatalf("recent-activity should leave Lookback nil so the user is asked, got %+v", m.Lookback)
 			}
-			if m.Scope != ScopeInvolved {
-				t.Fatalf("recent-activity scope: %q", m.Scope)
+			if m.Prompt == nil {
+				t.Fatal("recent-activity should have prompt")
+			}
+			if m.Scope != ScopeUnset {
+				t.Fatalf("recent-activity should leave Scope unset so the user is asked, got %q", m.Scope)
 			}
 		case BuiltinCustomPrompt:
 			if m.Prompt != nil {

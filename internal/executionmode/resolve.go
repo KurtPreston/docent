@@ -9,8 +9,15 @@ import (
 
 // Prompter is the minimal interactive surface Resolve needs to ask the user
 // for missing properties. cli.StdioPrompter satisfies it.
+//
+// Ask requests a free-form string (with an optional default rendered as
+// "[default]"). Select renders a menu of options with one of them
+// pre-highlighted as the default; the returned string MUST be one of the
+// provided options (StdioPrompter uses survey.Select under the hood, which
+// enforces this).
 type Prompter interface {
 	Ask(prompt, defaultValue string) (string, error)
+	Select(prompt string, options []string, defaultValue string) (string, error)
 }
 
 // ResolveOpts carries everything Resolve needs that isn't part of the
@@ -67,6 +74,11 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 		return ResolvedRun{}, err
 	}
 
+	scope, err := resolveScope(mode.Scope, opts)
+	if err != nil {
+		return ResolvedRun{}, err
+	}
+
 	instruction, err := resolveInstruction(mode.Prompt, opts)
 	if err != nil {
 		return ResolvedRun{}, err
@@ -75,11 +87,6 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 	formatter := strings.TrimSpace(mode.Formatter)
 	if formatter == "" {
 		formatter = strings.TrimSpace(opts.ConfigActivityFormatter)
-	}
-
-	scope := mode.Scope
-	if scope == ScopeUnset {
-		scope = ScopeInvolved
 	}
 
 	return ResolvedRun{
@@ -118,6 +125,62 @@ func resolveLookback(l *Lookback, opts ResolveOpts, now time.Time) (time.Time, i
 	default:
 		return time.Time{}, 0, fmt.Errorf("unknown lookback kind %q", l.Kind)
 	}
+}
+
+// resolveScope picks the collection scope for a run. When the mode pinned
+// a scope (anything but ScopeUnset) we honor it verbatim. When it left the
+// scope unset we prompt the user via opts.Prompter — defaulting the cursor
+// to ScopeInvolved — so the interactive flow can broaden or narrow data
+// collection per run. Non-interactive callers (Prompter == nil) silently
+// inherit ScopeInvolved, preserving the historical default.
+func resolveScope(declared Scope, opts ResolveOpts) (Scope, error) {
+	if declared != ScopeUnset {
+		return declared, nil
+	}
+	if opts.Prompter == nil {
+		return ScopeInvolved, nil
+	}
+	labels, byLabel, defaultLabel := scopeMenu(ScopeInvolved)
+	pick, err := opts.Prompter.Select("Scope", labels, defaultLabel)
+	if err != nil {
+		return "", err
+	}
+	pick = strings.TrimSpace(pick)
+	if s, ok := byLabel[pick]; ok {
+		return s, nil
+	}
+	// Fallback for prompters (tests, custom scripting) that return a bare
+	// scope string rather than the descriptive label.
+	if raw := Scope(pick); raw.Validate() == nil && raw != ScopeUnset {
+		return raw, nil
+	}
+	return "", fmt.Errorf("invalid scope choice %q", pick)
+}
+
+// scopeMenu returns the labels shown in the interactive scope picker, a
+// lookup table from label back to Scope, and the label corresponding to
+// the requested default. Labels embed a short description so users who
+// haven't read the README still get a sense of what each option collects.
+func scopeMenu(defaultScope Scope) (labels []string, byLabel map[string]Scope, defaultLabel string) {
+	items := []struct {
+		scope Scope
+		desc  string
+	}{
+		{ScopeSelf, "only my own activity"},
+		{ScopeInvolved, "my activity plus adjacent context (reviews, mentions, assignments)"},
+		{ScopeAll, "every signal in the window (broadened by followed_repos / followed_projects)"},
+	}
+	labels = make([]string, 0, len(items))
+	byLabel = make(map[string]Scope, len(items))
+	for _, it := range items {
+		label := fmt.Sprintf("%s — %s", it.scope, it.desc)
+		labels = append(labels, label)
+		byLabel[label] = it.scope
+		if it.scope == defaultScope {
+			defaultLabel = label
+		}
+	}
+	return labels, byLabel, defaultLabel
 }
 
 func resolveInstruction(p *Prompt, opts ResolveOpts) (string, error) {

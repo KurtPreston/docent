@@ -11,9 +11,12 @@ const (
 
 // BuiltinModes returns the three built-in execution modes in canonical
 // menu order. Returned values are fresh on each call, so callers may mutate
-// them without affecting future loads. All three default to ScopeInvolved
-// so the user sees their own activity plus adjacent context (PR reviews on
-// their PRs, comments on their issues, branches they've touched, etc.).
+// them without affecting future loads.
+//
+// `daily-plan` and `custom-prompt` pin Scope to ScopeInvolved because they
+// have a single intended audience (the user's own day). `recent-activity`
+// leaves Scope unset on purpose so Resolve prompts for it interactively,
+// letting the user broaden to `all` or narrow to `self` on a per-run basis.
 func BuiltinModes() []ExecutionMode {
 	return []ExecutionMode{
 		{
@@ -24,11 +27,14 @@ func BuiltinModes() []ExecutionMode {
 			Scope:    ScopeInvolved,
 		},
 		{
-			ID:       BuiltinRecentActivity,
-			Name:     "Recent activity",
-			Lookback: &Lookback{Kind: LookbackKindDays, Days: 7},
-			Prompt:   &Prompt{Instruction: recentActivityInstruction},
-			Scope:    ScopeInvolved,
+			ID:   BuiltinRecentActivity,
+			Name: "Recent activity",
+			// Lookback and Scope intentionally left nil/unset: Resolve
+			// prompts the user for days (default 7) and scope (default
+			// involved) at runtime, matching the README's "default 7,
+			// or prompt" lookback and the documented behavior that any
+			// property a mode omits is asked interactively.
+			Prompt: &Prompt{Instruction: recentActivityInstruction},
 		},
 		{
 			ID:       BuiltinCustomPrompt,

@@ -7,14 +7,36 @@ import (
 	"time"
 )
 
-// scriptedPrompter answers Ask() calls from a queue of canned responses.
+// scriptedPrompter answers Ask() and Select() calls from a shared queue of
+// canned responses. Select records the *label* it returned in selectPicks
+// so tests can assert on the choice that was made; when the canned answer
+// happens to be a bare scope id like "all", the resolver also accepts it
+// (see resolveScope's fallback branch).
 type scriptedPrompter struct {
-	answers []string
-	calls   []string
+	answers     []string
+	calls       []string
+	selectCalls []selectCall
+}
+
+type selectCall struct {
+	prompt       string
+	options      []string
+	defaultValue string
 }
 
 func (p *scriptedPrompter) Ask(prompt, defaultValue string) (string, error) {
 	p.calls = append(p.calls, prompt)
+	if len(p.answers) == 0 {
+		return defaultValue, nil
+	}
+	ans := p.answers[0]
+	p.answers = p.answers[1:]
+	return ans, nil
+}
+
+func (p *scriptedPrompter) Select(prompt string, options []string, defaultValue string) (string, error) {
+	p.calls = append(p.calls, prompt)
+	p.selectCalls = append(p.selectCalls, selectCall{prompt: prompt, options: options, defaultValue: defaultValue})
 	if len(p.answers) == 0 {
 		return defaultValue, nil
 	}
@@ -63,7 +85,9 @@ func TestResolvePreviousWeekdayFromMonday(t *testing.T) {
 	}
 }
 
-func TestResolveRecentActivityUsesBuiltinDefault(t *testing.T) {
+func TestResolveRecentActivityNoPrompterUsesDefaultSeven(t *testing.T) {
+	// Without a Prompter (e.g. non-interactive invocation with no --days
+	// flag), recent-activity falls back to the documented 7-day default.
 	mode := mustFindBuiltin(t, BuiltinRecentActivity)
 	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
 	res, err := Resolve(mode, ResolveOpts{Now: now})
@@ -76,6 +100,93 @@ func TestResolveRecentActivityUsesBuiltinDefault(t *testing.T) {
 	want := now.Add(-7 * 24 * time.Hour)
 	if !res.Since.Equal(want) {
 		t.Fatalf("since: got %v want %v", res.Since, want)
+	}
+}
+
+func TestResolveRecentActivityPromptsForDaysAndScope(t *testing.T) {
+	// Interactive runs (Prompter set, --days unset, scope unset) must ask
+	// the user for both the lookback window and the collection scope. This
+	// is the documented "default 7, or prompt" lookback plus the
+	// "ExecutionMode without scope → prompt" behavior.
+	mode := mustFindBuiltin(t, BuiltinRecentActivity)
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+	prompter := &scriptedPrompter{answers: []string{"14", "all"}}
+	res, err := Resolve(mode, ResolveOpts{Now: now, Prompter: prompter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.LookbackDays != 14 {
+		t.Fatalf("expected 14 days from prompt, got %d", res.LookbackDays)
+	}
+	if res.Scope != ScopeAll {
+		t.Fatalf("expected scope=all from prompt, got %q", res.Scope)
+	}
+	if len(prompter.calls) != 2 {
+		t.Fatalf("expected days + scope prompts, got %v", prompter.calls)
+	}
+	if !strings.Contains(strings.ToLower(prompter.calls[0]), "lookback") {
+		t.Fatalf("first prompt should be lookback, got %q", prompter.calls[0])
+	}
+	if !strings.Contains(strings.ToLower(prompter.calls[1]), "scope") {
+		t.Fatalf("second prompt should be scope, got %q", prompter.calls[1])
+	}
+	if len(prompter.selectCalls) != 1 {
+		t.Fatalf("expected exactly one Select call (for scope), got %d", len(prompter.selectCalls))
+	}
+	sc := prompter.selectCalls[0]
+	if !strings.HasPrefix(sc.defaultValue, string(ScopeInvolved)) {
+		t.Fatalf("scope select default should be the involved label, got %q", sc.defaultValue)
+	}
+	wantOptions := []Scope{ScopeSelf, ScopeInvolved, ScopeAll}
+	if len(sc.options) != len(wantOptions) {
+		t.Fatalf("scope menu options: got %v want %v", sc.options, wantOptions)
+	}
+	for i, want := range wantOptions {
+		if !strings.HasPrefix(sc.options[i], string(want)) {
+			t.Fatalf("scope option %d: got %q want prefix %q", i, sc.options[i], want)
+		}
+	}
+}
+
+func TestResolveRecentActivityScopePromptDefaultsToInvolved(t *testing.T) {
+	// When the user accepts the highlighted default in the scope menu
+	// (Select returns its defaultValue label verbatim), the resolver maps
+	// it back to ScopeInvolved.
+	mode := mustFindBuiltin(t, BuiltinRecentActivity)
+	prompter := &scriptedPrompter{} // empty queue → Select returns defaultValue
+	res, err := Resolve(mode, ResolveOpts{
+		Now:      time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC),
+		Prompter: prompter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scope != ScopeInvolved {
+		t.Fatalf("default scope: got %q want involved", res.Scope)
+	}
+	if res.LookbackDays != 7 {
+		t.Fatalf("default lookback days: got %d want 7", res.LookbackDays)
+	}
+}
+
+func TestResolveRecentActivityDaysFlagSkipsLookbackPrompt(t *testing.T) {
+	// --days N is an explicit override and must short-circuit the lookback
+	// prompt. The scope prompt still fires because scope is unset; an
+	// empty answer queue lets it accept the involved default.
+	mode := mustFindBuiltin(t, BuiltinRecentActivity)
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+	prompter := &scriptedPrompter{}
+	res, err := Resolve(mode, ResolveOpts{Now: now, Prompter: prompter, DaysOverride: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.LookbackDays != 3 {
+		t.Fatalf("expected 3 days from override, got %d", res.LookbackDays)
+	}
+	for _, c := range prompter.calls {
+		if strings.Contains(strings.ToLower(c), "lookback") {
+			t.Fatalf("--days override should skip lookback prompt, got %q", c)
+		}
 	}
 }
 
@@ -222,7 +333,8 @@ func TestResolvePropagatesPrompterError(t *testing.T) {
 
 type errorPrompter struct{ err error }
 
-func (e errorPrompter) Ask(string, string) (string, error) { return "", e.err }
+func (e errorPrompter) Ask(string, string) (string, error)             { return "", e.err }
+func (e errorPrompter) Select(string, []string, string) (string, error) { return "", e.err }
 
 func mustFindBuiltin(t *testing.T, id string) ExecutionMode {
 	t.Helper()
