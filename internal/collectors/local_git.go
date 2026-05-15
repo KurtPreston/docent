@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,11 +34,14 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		return nil, err
 	}
 	sinceISO := since.UTC().Format(time.RFC3339)
+	globalEmail := strings.ToLower(strings.TrimSpace(gitConfigValue(ctx, "", "--global", "user.email")))
+	currentUser := strings.ToLower(strings.TrimSpace(currentOSUsername()))
 	var out []StatusItem
 	commitTimes := map[string]time.Time{}
 	for _, abs := range dirs {
 		repoLabel := localGitRepositoryKey(ctx, abs)
-		logOut, err := gitOutput(ctx, abs, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%s")
+		matcher := newLocalGitSelfMatcher(ctx, abs, globalEmail, currentUser)
+		logOut, err := gitOutput(ctx, abs, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%ae%x09%s")
 		if err != nil {
 			return nil, err
 		}
@@ -46,14 +50,15 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 			if line == "" {
 				continue
 			}
-			parts := strings.Split(line, "\t")
-			if len(parts) < 4 {
+			parts := strings.SplitN(line, "\t", 5)
+			if len(parts) < 5 {
 				continue
 			}
 			hash := strings.TrimSpace(parts[0])
 			iso := strings.TrimSpace(parts[1])
 			author := strings.TrimSpace(parts[2])
-			subject := strings.TrimSpace(parts[3])
+			email := strings.TrimSpace(parts[3])
+			subject := strings.TrimSpace(parts[4])
 			obs, err := time.Parse(time.RFC3339, iso)
 			if err != nil {
 				if obs, err = time.Parse("2006-01-02 15:04:05 -0700", strings.ReplaceAll(iso, "T", " ")); err != nil {
@@ -71,6 +76,14 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 			if len(dirs) > 1 {
 				title = fmt.Sprintf("(%s) %s", filepath.Base(abs), subject)
 			}
+			authorIdentity := author
+			if email != "" {
+				if author != "" {
+					authorIdentity = fmt.Sprintf("%s <%s>", author, email)
+				} else {
+					authorIdentity = email
+				}
+			}
 			out = append(out, StatusItem{
 				DirectiveID: directive.ID,
 				Repository:  repoLabel,
@@ -80,13 +93,16 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 				Summary:     fmt.Sprintf("%s %s — %s", short, author, iso),
 				Severity:    "info",
 				ObservedAt:  obs.UTC(),
+				Author:      authorIdentity,
+				IsSelf:      matcher.Match(author, email),
 				Fields: map[string]string{
-					"path":       abs,
-					"hash":       hash,
-					"short_hash": short,
-					"author":     author,
-					"iso":        iso,
-					"subject":    subject,
+					"path":         abs,
+					"hash":         hash,
+					"short_hash":   short,
+					"author":       author,
+					"author_email": email,
+					"iso":          iso,
+					"subject":      subject,
 				},
 			})
 		}
@@ -140,6 +156,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 				Summary:     short,
 				Severity:    "info",
 				ObservedAt:  obs.UTC(),
+				IsSelf:      true,
 				Fields: map[string]string{
 					"path":       abs,
 					"hash":       hash,
@@ -420,6 +437,78 @@ func (c LocalGitCollector) ValidateDirective(ctx context.Context, directive user
 		})
 	}
 	return issues
+}
+
+// localGitSelfMatcher decides whether a commit's author belongs to the
+// configured user. A commit matches when its author email equals either
+// the per-repo or global `user.email`, or when the OS username appears
+// (case-insensitive) anywhere in the author name. All comparisons are
+// case-insensitive; empty matchers are simply skipped.
+type localGitSelfMatcher struct {
+	repoEmail   string
+	globalEmail string
+	user        string
+}
+
+func newLocalGitSelfMatcher(ctx context.Context, repoDir, globalEmail, currentUser string) localGitSelfMatcher {
+	return localGitSelfMatcher{
+		repoEmail:   strings.ToLower(strings.TrimSpace(gitConfigValue(ctx, repoDir, "--local", "user.email"))),
+		globalEmail: globalEmail,
+		user:        currentUser,
+	}
+}
+
+func (m localGitSelfMatcher) Match(name, email string) bool {
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e != "" {
+		if m.repoEmail != "" && e == m.repoEmail {
+			return true
+		}
+		if m.globalEmail != "" && e == m.globalEmail {
+			return true
+		}
+	}
+	if m.user != "" {
+		n := strings.ToLower(strings.TrimSpace(name))
+		if n != "" && strings.Contains(n, m.user) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitConfigValue runs `git config <scope> <key>` and returns the trimmed value.
+// Errors (missing key, missing repo, no git binary) collapse to "" so callers
+// can treat the absence the same as any other empty matcher.
+func gitConfigValue(ctx context.Context, repoDir string, scope, key string) string {
+	args := []string{}
+	if repoDir != "" {
+		args = append(args, "-C", repoDir)
+	}
+	args = append(args, "config")
+	if scope != "" {
+		args = append(args, scope)
+	}
+	args = append(args, "--get", key)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func currentOSUsername() string {
+	if u := strings.TrimSpace(os.Getenv("USER")); u != "" {
+		return u
+	}
+	if u := strings.TrimSpace(os.Getenv("USERNAME")); u != "" {
+		return u
+	}
+	if cu, err := user.Current(); err == nil {
+		return strings.TrimSpace(cu.Username)
+	}
+	return ""
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {

@@ -296,6 +296,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 	progress.Done()
 
+	// daily-plan and recent-activity focus on the user's own contributions.
+	// collector_error rows always pass through FilterToSelf so failures stay
+	// visible. custom-prompt keeps the unfiltered list — the user provides
+	// their own framing. A future repo-activity mode will skip this filter.
+	switch mode {
+	case ModeDailyPlan, ModeRecentActivity:
+		statuses = collectors.FilterToSelf(statuses)
+	}
+
 	var md string
 	switch mode {
 	case ModeDailyPlan:

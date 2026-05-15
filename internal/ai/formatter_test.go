@@ -40,7 +40,12 @@ func TestRepoChronologicalFormatter(t *testing.T) {
 
 func TestJSONSignalListFormatter(t *testing.T) {
 	items := []collectors.StatusItem{{
-		Source: "s", Kind: "k", Title: "t", ObservedAt: time.Unix(1, 0).UTC(),
+		Source:     "s",
+		Kind:       "k",
+		Title:      "t",
+		ObservedAt: time.Unix(1, 0).UTC(),
+		Author:     "kurt@example.com",
+		IsSelf:     true,
 	}}
 	raw, err := (JSONSignalListFormatter{}).Format(items)
 	if err != nil {
@@ -48,6 +53,9 @@ func TestJSONSignalListFormatter(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"source"`) || !strings.Contains(raw, `"kind"`) {
 		t.Fatal(raw)
+	}
+	if !strings.Contains(raw, `"author"`) || !strings.Contains(raw, `"is_self": true`) {
+		t.Fatalf("expected author and is_self in JSON output:\n%s", raw)
 	}
 }
 

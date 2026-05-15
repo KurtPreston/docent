@@ -142,6 +142,7 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 			URL:         web,
 			Severity:    sev,
 			ObservedAt:  obs.UTC(),
+			IsSelf:      true,
 			Fields: map[string]string{
 				"key":      iss.Key,
 				"status":   iss.Fields.Status.Name,

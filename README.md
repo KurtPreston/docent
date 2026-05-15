@@ -74,11 +74,25 @@ directives:
 
 | Mode | Lookback | Behavior |
 |------|----------|----------|
-| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | Optional “priorities today” prompt; AI output should use `## Yesterday` and `## Today`. |
-| `recent-activity` | `--days N` (default 7, or prompt) | Summarize activity; grouped markdown. |
-| `custom-prompt` | `--days N` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions. |
+| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | Optional “priorities today” prompt; AI output should use `## Yesterday` and `## Today`. **Scoped to your own contributions** (see *Self-only scoping* below). |
+| `recent-activity` | `--days N` (default 7, or prompt) | Summarize activity; grouped markdown. **Scoped to your own contributions.** |
+| `custom-prompt` | `--days N` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions. Receives the unfiltered status list. |
 
 Run without `--mode` on a TTY to pick interactively.
+
+### Self-only scoping
+
+`daily-plan` and `recent-activity` filter the collected status list down to entries each collector flagged as **your own** activity (`is_self: true`). `custom-prompt` skips the filter so you can ask cross-cutting questions. `collector_error` rows always pass through so collection failures stay visible.
+
+How each collector decides "self":
+
+- **`local-git`**: a commit is yours when its author email equals the per-repo `git config user.email`, the global `git config --global user.email`, **or** when `$USER` (e.g. `kpreston`) appears anywhere in the author name (case-insensitive). Reflog rows are always yours (they record your local checkout actions).
+- **`github` / `github-enterprise`**: every result is yours by construction (search queries are scoped to `--author`, `--reviewed-by`, `--commenter`, `--involves` for the configured user / `@me`).
+- **`gitea`**: repos returned for the resolved owner (defaults to the authenticated user via `/api/v1/user`).
+- **`jira`**: default JQL scopes to issues you assign / report / watch.
+- **`google-calendar`**: events from your secret iCal feed.
+
+A future `repo-activity` mode will surface everyone's contributions on the configured repos (separate from your personal feed).
 
 ### Common flags
 

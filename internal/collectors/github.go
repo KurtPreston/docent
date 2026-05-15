@@ -127,6 +127,8 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 				URL:         row.URL,
 				Severity:    "info",
 				ObservedAt:  obs.UTC(),
+				Author:      user,
+				IsSelf:      true,
 				Fields: map[string]string{
 					"query":      queryForSummary,
 					"username":   user,
@@ -180,6 +182,8 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 				URL:         row.URL,
 				Severity:    "info",
 				ObservedAt:  obs.UTC(),
+				Author:      user,
+				IsSelf:      true,
 				Fields: map[string]string{
 					"query":       queryForSummary,
 					"username":    user,

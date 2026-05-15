@@ -92,6 +92,7 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 			Summary:     ev.start.Format(time.RFC3339),
 			Severity:    "info",
 			ObservedAt:  ev.start.UTC(),
+			IsSelf:      true,
 			Fields:      fields,
 		})
 	}

@@ -10,6 +10,23 @@ import (
 	"github.com/kurt/slakkr-ai/internal/userdata"
 )
 
+// FilterToSelf keeps only items the collector flagged as the configured
+// user's own activity. collector_error rows always pass through so failures
+// stay visible in self-only modes (daily-plan, recent-activity); the input
+// order is preserved for callers that already sorted the slice.
+func FilterToSelf(items []StatusItem) []StatusItem {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]StatusItem, 0, len(items))
+	for _, item := range items {
+		if item.IsSelf || item.Kind == "collector_error" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 type StatusItem struct {
 	DirectiveID    string            `json:"directive_id"`
 	Repository     string            `json:"repository,omitempty"` // grouping key when known (e.g. org/repo, local folder name)
@@ -24,6 +41,8 @@ type StatusItem struct {
 	StableID       string            `json:"stable_id,omitempty"`
 	AttentionClass string            `json:"attention_class,omitempty"`
 	ChangeState    string            `json:"change_state,omitempty"`
+	Author         string            `json:"author,omitempty"`  // best-effort actor identity (email, login, or "name <email>")
+	IsSelf         bool              `json:"is_self,omitempty"` // true when collector confirms this is the configured user's own activity
 }
 
 // CollectOpts carries env resolution and the collection time window.
@@ -246,6 +265,7 @@ func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, o
 			Summary:     err.Error(),
 			Severity:    "error",
 			ObservedAt:  r.clock(),
+			IsSelf:      true,
 		}}
 	}
 	if opts != nil && opts.OnDirectiveUpdate != nil {

@@ -105,6 +105,8 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 			URL:         r.HTMLURL,
 			Severity:    "info",
 			ObservedAt:  updatedAt.UTC(),
+			Author:      owner,
+			IsSelf:      true,
 			Fields: map[string]string{
 				"name":           r.Name,
 				"full_name":      r.FullName,
