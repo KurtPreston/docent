@@ -13,9 +13,77 @@
       "items": {
         "$ref": "#/$defs/directiveItem"
       }
+    },
+    "execution_modes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/executionMode"
+      }
     }
   },
   "$defs": {
+    "executionMode": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "lookback": {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["days", "previous-weekday"]
+            },
+            "days": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "kind": { "const": "days" }
+              },
+              "required": ["days"]
+            },
+            {
+              "properties": {
+                "kind": { "const": "previous-weekday" }
+              },
+              "not": { "required": ["days"] }
+            }
+          ]
+        },
+        "formatter": {
+          "type": "string",
+          "enum": ["repo-chronological", "json-signal-list"]
+        },
+        "prompt": {
+          "type": "object",
+          "required": ["instruction"],
+          "additionalProperties": false,
+          "properties": {
+            "instruction": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["self", "repo", "all"]
+        }
+      }
+    },
     "ai": {
       "type": "object",
       "oneOf": [

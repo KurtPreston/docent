@@ -1,36 +1,50 @@
 package ai
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 	"time"
 )
 
-// BuildRecentActivityPrompt serializes input for LLM providers using the configured formatter.
-func BuildRecentActivityPrompt(instruction string, in RecentActivityInput, formatter ActivityFormatter) (string, error) {
+// BuildPrompt assembles the message body sent to an LLM provider for one
+// run: the mode-supplied instruction, ground-truth hint, the time window,
+// and the formatted activity body. The formatter is responsible for the
+// activity body's structure (Markdown headings or JSON).
+//
+// LLM providers append no per-mode framing of their own; everything the
+// model sees comes from `instruction` plus the activity body that follows.
+// For modes whose deterministic rule-based rendering nests activity under a
+// `## Yesterday` / `## Activity` heading (daily-plan, custom-prompt), the
+// formatter passed in here should already have been depth-adjusted via
+// NestRepoChronologicalDepth — otherwise repo headings will collide with
+// any sections the model is asked to produce.
+func BuildPrompt(instruction string, in RunInput, formatter ActivityFormatter) (string, error) {
 	body, err := formatter.Format(in.Statuses)
 	if err != nil {
 		return "", err
 	}
-	var buf bytes.Buffer
-	buf.WriteString(instruction)
+	var buf strings.Builder
+	buf.WriteString(strings.TrimRight(instruction, "\n"))
 	buf.WriteString("\n\n")
 	buf.WriteString(groundTruthHint(formatter))
 	buf.WriteString(" Return only a single Markdown document (no JSON). Do not wrap the entire answer in a code fence.\n")
 	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
-	appendRecentActivityWindowMeta(&buf, in)
+	appendWindowMeta(&buf, in)
 	buf.WriteString(body)
 	return buf.String(), nil
 }
 
-func appendRecentActivityWindowMeta(w *bytes.Buffer, in RecentActivityInput) {
-	fmt.Fprintf(w, "Window: %s — %s\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
-	fmt.Fprintf(w, "Lookback: %d calendar day(s)\n\n", in.LookbackDays)
+func appendWindowMeta(buf *strings.Builder, in RunInput) {
+	fmt.Fprintf(buf, "Window: %s — %s\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
+	if in.LookbackDays > 0 {
+		fmt.Fprintf(buf, "Lookback: %d calendar day(s)\n", in.LookbackDays)
+	}
+	buf.WriteString("\n")
 }
 
-// RenderDailyPlanMarkdown renders a deterministic two-section document for rule-based mode.
-func RenderDailyPlanMarkdown(in DailyPlanInput, formatter ActivityFormatter) string {
+// RenderDailyPlanMarkdown renders the deterministic two-section document
+// previously produced by the rule-based daily-plan path.
+func RenderDailyPlanMarkdown(in RunInput, formatter ActivityFormatter) string {
 	nestedFmt := NestRepoChronologicalDepth(formatter)
 	body, err := nestedFmt.Format(in.Statuses)
 	if err != nil {
@@ -39,9 +53,6 @@ func RenderDailyPlanMarkdown(in DailyPlanInput, formatter ActivityFormatter) str
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Daily plan\n\n")
 	fmt.Fprintf(&b, "_Window: %s — %s_\n\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
-	if strings.TrimSpace(in.UserPriorities) != "" {
-		fmt.Fprintf(&b, "**Your priorities:** %s\n\n", strings.TrimSpace(in.UserPriorities))
-	}
 	fmt.Fprintf(&b, "## Yesterday\n\n")
 	fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(body, "\n"))
 	fmt.Fprintf(&b, "## Today\n\n")
@@ -51,16 +62,66 @@ func RenderDailyPlanMarkdown(in DailyPlanInput, formatter ActivityFormatter) str
 	return b.String()
 }
 
-// RenderRecentActivityMarkdown deterministically renders statuses via the formatter.
-func RenderRecentActivityMarkdown(in RecentActivityInput, formatter ActivityFormatter) string {
+// RenderRecentActivityMarkdown deterministically renders statuses via the
+// formatter under a single `# Recent activity` heading.
+func RenderRecentActivityMarkdown(in RunInput, formatter ActivityFormatter) string {
 	body, err := formatter.Format(in.Statuses)
 	if err != nil {
 		body = fmt.Sprintf("_formatter error: %v_", err)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Recent activity (%s — %s)\n\n", in.Since.Format("2006-01-02"), in.Now.Format("2006-01-02"))
-	fmt.Fprintf(&b, "_lookback: %d day(s)_\n\n", in.LookbackDays)
+	if in.LookbackDays > 0 {
+		fmt.Fprintf(&b, "_lookback: %d day(s)_\n\n", in.LookbackDays)
+	}
 	fmt.Fprintf(&b, "%s\n", strings.TrimRight(body, "\n"))
+	return b.String()
+}
+
+// RenderCustomPromptMarkdown deterministically renders the user-prompt mode
+// (instruction at the top, activity nested under `## Activity (ground truth)`).
+func RenderCustomPromptMarkdown(in RunInput, formatter ActivityFormatter) string {
+	nestedFmt := NestRepoChronologicalDepth(formatter)
+	body, err := nestedFmt.Format(in.Statuses)
+	if err != nil {
+		body = fmt.Sprintf("_formatter error: %v_", err)
+	}
+	var b strings.Builder
+	b.WriteString("# Custom report\n\n")
+	b.WriteString(strings.TrimRight(in.Instruction, "\n"))
+	b.WriteString("\n\n## Activity (ground truth)\n\n")
+	b.WriteString(strings.TrimRight(body, "\n"))
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// RenderGenericMarkdown is the fallback rule-based renderer used for
+// user-declared execution modes: the mode's display name as the H1, the
+// instruction (when present) as a blockquote-style preamble, and the
+// activity body nested under `## Activity`.
+func RenderGenericMarkdown(in RunInput, formatter ActivityFormatter) string {
+	nestedFmt := NestRepoChronologicalDepth(formatter)
+	body, err := nestedFmt.Format(in.Statuses)
+	if err != nil {
+		body = fmt.Sprintf("_formatter error: %v_", err)
+	}
+	title := strings.TrimSpace(in.ModeName)
+	if title == "" {
+		title = strings.TrimSpace(in.ModeID)
+	}
+	if title == "" {
+		title = "Report"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	fmt.Fprintf(&b, "_Window: %s — %s_\n\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
+	if s := strings.TrimSpace(in.Instruction); s != "" {
+		b.WriteString(s)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("## Activity\n\n")
+	b.WriteString(strings.TrimRight(body, "\n"))
+	b.WriteByte('\n')
 	return b.String()
 }
 
@@ -69,53 +130,6 @@ func groundTruthHint(formatter ActivityFormatter) string {
 		return "Use the structured JSON activity array below as ground truth."
 	}
 	return "Use the aggregated activity timeline below as ground truth (Markdown headings separate repositories; lines are chronological within each)."
-}
-
-// BuildDailyPlanPrompt builds the user message for LLM daily plan generation.
-func BuildDailyPlanPrompt(instruction string, in DailyPlanInput, formatter ActivityFormatter) (string, error) {
-	nestedFmt := NestRepoChronologicalDepth(formatter)
-	body, err := nestedFmt.Format(in.Statuses)
-	if err != nil {
-		return "", err
-	}
-	var buf strings.Builder
-	buf.WriteString(instruction)
-	buf.WriteString("\n\n")
-	buf.WriteString(groundTruthHint(formatter))
-	buf.WriteString(" Return only a single Markdown document with exactly these sections: `## Yesterday` then `## Today`.\n")
-	buf.WriteString("Do not invent work not present in the input.\n")
-	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
-
-	fmt.Fprintf(&buf, "Window: %s — %s\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
-	if strings.TrimSpace(in.UserPriorities) != "" {
-		fmt.Fprintf(&buf, "Your priorities: %s\n\n", strings.TrimSpace(in.UserPriorities))
-	}
-	buf.WriteString(body)
-	return buf.String(), nil
-}
-
-// BuildCustomPromptPayload builds the user message for custom prompt mode.
-func BuildCustomPromptPayload(userPrompt string, in CustomPromptInput, formatter ActivityFormatter) (string, error) {
-	nestedFmt := NestRepoChronologicalDepth(formatter)
-	body, err := nestedFmt.Format(in.Statuses)
-	if err != nil {
-		return "", err
-	}
-	var buf strings.Builder
-	buf.WriteString("The user request is below.\n")
-	buf.WriteString("\nUser request:\n")
-	buf.WriteString(strings.TrimRight(userPrompt, "\n"))
-	buf.WriteString("\n\n")
-	buf.WriteString(groundTruthHint(formatter))
-	buf.WriteString(" Follow the user's instructions accordingly.\n\n")
-	buf.WriteString("Return only a single Markdown document (no JSON). Do not wrap the entire answer in a code fence.\n")
-	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
-
-	fmt.Fprintf(&buf, "Window: %s — %s\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
-	fmt.Fprintf(&buf, "Lookback: %d calendar day(s)\n\n", in.LookbackDays)
-
-	buf.WriteString(body)
-	return buf.String(), nil
 }
 
 // StripMarkdownFence removes a leading ```markdown / ``` wrapper if the model added one.

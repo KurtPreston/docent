@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,17 +16,11 @@ import (
 	"github.com/kurt/slakkr-ai/internal/ai"
 	"github.com/kurt/slakkr-ai/internal/collectors"
 	"github.com/kurt/slakkr-ai/internal/configschema"
+	"github.com/kurt/slakkr-ai/internal/executionmode"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 	"github.com/kurt/slakkr-ai/internal/workflow"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
-)
-
-// Mode names for CLI and output filenames.
-const (
-	ModeDailyPlan      = "daily-plan"
-	ModeRecentActivity = "recent-activity"
-	ModeCustomPrompt   = "custom-prompt"
 )
 
 type App struct {
@@ -59,16 +52,14 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	var configPath string
 	fs.StringVar(&configPath, "config", "", "config file path (default <userdata>/config.yaml)")
 	fs.StringVar(&configPath, "c", "", "shorthand for --config")
-	modeFlag := fs.String("mode", "", "daily-plan | recent-activity | custom-prompt")
+	modeFlag := fs.String("mode", "", "execution mode id (built-in: daily-plan, recent-activity, custom-prompt; plus any user-declared)")
 	outPath := fs.String("out", "", "output markdown path (default userdata/output/<date>-<mode>.md; if the file exists, -2, -3, … are appended before the extension)")
 	noSave := fs.Bool("no-save", false, "do not write output file")
 	dateStr := fs.String("date", "", "date label YYYY-MM-DD for output filename (default today)")
 
-	days := fs.Int("days", 0, "lookback days (recent-activity & custom-prompt; 0 = prompt or default 7)")
-	priorities := fs.String("priorities", "", "today's priorities (daily-plan)")
-	noPrompt := fs.Bool("no-prompt", false, "skip priorities prompt (daily-plan)")
-	promptFlag := fs.String("prompt", "", "custom prompt text")
-	promptFile := fs.String("prompt-file", "", "read custom prompt from file")
+	days := fs.Int("days", 0, "lookback days override (0 = use mode default or prompt)")
+	promptFlag := fs.String("prompt", "", "instruction override for the LLM (replaces the mode's prompt for this run)")
+	promptFile := fs.String("prompt-file", "", "read instruction override from file")
 	checkOnly := fs.Bool("check", false, "validate every enabled directive and exit without collecting data")
 	skipCheck := fs.Bool("skip-check", false, "skip the pre-flight directive validation that runs alongside the interactive menu")
 
@@ -113,6 +104,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return fmt.Errorf("no directives in %s: add a `directives:` list", cfgSource)
 	}
 
+	modes, err := executionmode.Load(executionmode.BuiltinModes(), cfg.ExecutionModes)
+	if err != nil {
+		return fmt.Errorf("%s: %w", cfgSource, err)
+	}
+
 	expand := expandRepoPathFromStdin(a.In)
 	validateOpts := &collectors.ValidateOpts{
 		UserdataDir:    *userdataDir,
@@ -134,17 +130,32 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		validation = startValidation(ctx, a.Reg, cfg, validateOpts)
 	}
 
-	mode := strings.TrimSpace(*modeFlag)
-	if mode == "" {
+	modeID := strings.TrimSpace(*modeFlag)
+	if modeID == "" {
 		if !a.stdinIsTerminal() {
 			return fmt.Errorf("--mode is required when stdin is not a TTY")
 		}
+		labels := make([]string, len(modes))
+		for i, m := range modes {
+			labels[i] = formatModeOption(m)
+		}
+		var pick string
 		if err := survey.AskOne(&survey.Select{
 			Message: "Choose mode",
-			Options: []string{ModeDailyPlan, ModeRecentActivity, ModeCustomPrompt},
-		}, &mode, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
+			Options: labels,
+		}, &pick, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
 			return err
 		}
+		modeID = modeIDFromOption(pick)
+	}
+
+	mode, ok := executionmode.Find(modes, modeID)
+	if !ok {
+		available := make([]string, len(modes))
+		for i, m := range modes {
+			available[i] = m.ID
+		}
+		return fmt.Errorf("unknown mode %q (available: %s)", modeID, strings.Join(available, ", "))
 	}
 
 	outDate := strings.TrimSpace(*dateStr)
@@ -166,102 +177,24 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	until := a.Now()
-	var since time.Time
-	var userPriorities string
-	var userPrompt string
-	lookbackDays := *days
+	promptOverride, err := readPromptOverride(*promptFlag, *promptFile)
+	if err != nil {
+		return err
+	}
 
-	switch mode {
-	case ModeDailyPlan:
-		since = PreviousWeekdayStart(until)
-		if !*noPrompt && a.stdinIsTerminal() {
-			p := strings.TrimSpace(*priorities)
-			if p == "" {
-				prompter := StdioPrompter{In: a.In, Out: a.Out}
-				var err error
-				p, err = prompter.Ask("Anything you want to prioritize today? (Enter to skip)", "")
-				if err != nil {
-					return err
-				}
-			}
-			userPriorities = strings.TrimSpace(p)
-		} else {
-			userPriorities = strings.TrimSpace(*priorities)
-		}
-
-	case ModeRecentActivity:
-		if lookbackDays <= 0 {
-			if a.stdinIsTerminal() {
-				prompter := StdioPrompter{In: a.In, Out: a.Out}
-				v, err := prompter.Ask("Lookback days", "7")
-				if err != nil {
-					return err
-				}
-				v = strings.TrimSpace(v)
-				if v == "" {
-					lookbackDays = 7
-				} else {
-					n, err := strconv.Atoi(v)
-					if err != nil || n < 1 {
-						return fmt.Errorf("lookback days must be a positive integer")
-					}
-					lookbackDays = n
-				}
-			} else {
-				lookbackDays = 7
-			}
-		}
-		since = lookbackSince(until, lookbackDays)
-
-	case ModeCustomPrompt:
-		if lookbackDays <= 0 {
-			if a.stdinIsTerminal() {
-				prompter := StdioPrompter{In: a.In, Out: a.Out}
-				v, err := prompter.Ask("Lookback days", "7")
-				if err != nil {
-					return err
-				}
-				v = strings.TrimSpace(v)
-				if v == "" {
-					lookbackDays = 7
-				} else {
-					n, err := strconv.Atoi(v)
-					if err != nil || n < 1 {
-						return fmt.Errorf("lookback days must be a positive integer")
-					}
-					lookbackDays = n
-				}
-			} else {
-				lookbackDays = 7
-			}
-		}
-		since = lookbackSince(until, lookbackDays)
-		userPrompt = strings.TrimSpace(*promptFlag)
-		if pf := strings.TrimSpace(*promptFile); pf != "" {
-			b, err := os.ReadFile(pf)
-			if err != nil {
-				return err
-			}
-			userPrompt = string(b)
-		}
-		if userPrompt == "" {
-			if !a.stdinIsTerminal() {
-				return fmt.Errorf("custom-prompt requires --prompt, --prompt-file, or a TTY")
-			}
-			prompter := StdioPrompter{In: a.In, Out: a.Out}
-			var err error
-			userPrompt, err = prompter.Ask("Your prompt for the model", "")
-			if err != nil {
-				return err
-			}
-		}
-		if strings.TrimSpace(userPrompt) == "" {
-			return fmt.Errorf("custom prompt is empty")
-		}
-
-	default:
-		return fmt.Errorf("unknown mode %q (expected daily-plan, recent-activity, custom-prompt)", mode)
+	var resolvePrompter executionmode.Prompter
+	if a.stdinIsTerminal() {
+		resolvePrompter = StdioPrompter{In: a.In, Out: a.Out}
+	}
+	resolved, err := executionmode.Resolve(mode, executionmode.ResolveOpts{
+		Now:                     a.Now(),
+		Prompter:                resolvePrompter,
+		DaysOverride:            *days,
+		PromptOverride:          promptOverride,
+		ConfigActivityFormatter: cfg.AI.ActivityFormatter,
+	})
+	if err != nil {
+		return err
 	}
 
 	if validation != nil {
@@ -290,55 +223,39 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		Now:               a.Now,
 		ExpandRepoPath:    expand,
 		OnDirectiveUpdate: progress.Update,
-	}, cfg, *userdataDir, since, until)
+	}, cfg, *userdataDir, resolved.Since, resolved.Until, collectors.Scope(resolved.Scope))
 	if err != nil {
 		return err
 	}
 	progress.Done()
 
-	// daily-plan and recent-activity focus on the user's own contributions.
-	// collector_error rows always pass through FilterToSelf so failures stay
-	// visible. custom-prompt keeps the unfiltered list — the user provides
-	// their own framing. A future repo-activity mode will skip this filter.
-	switch mode {
-	case ModeDailyPlan, ModeRecentActivity:
+	// Scope==self keeps only the configured user's activity (today's
+	// daily-plan / recent-activity behavior). collector_error rows always
+	// pass through FilterToSelf so failures stay visible. Other scopes
+	// (repo, all) skip the filter; scope-aware collection inside each
+	// collector is a follow-up effort.
+	if resolved.Scope == executionmode.ScopeSelf {
 		statuses = collectors.FilterToSelf(statuses)
 	}
 
-	var md string
-	switch mode {
-	case ModeDailyPlan:
-		in := ai.DailyPlanInput{
-			Now:            until,
-			Since:          since,
-			UserPriorities: userPriorities,
-			Statuses:       statuses,
-			DebugDir:       debugDir,
-			StreamOut:      stream,
-		}
-		md, err = provider.GenerateDailyPlan(ctx, in)
-	case ModeRecentActivity:
-		in := ai.RecentActivityInput{
-			Now:          until,
-			Since:        since,
-			LookbackDays: lookbackDays,
-			Statuses:     statuses,
-			DebugDir:     debugDir,
-			StreamOut:    stream,
-		}
-		md, err = provider.SummarizeRecentActivity(ctx, in)
-	case ModeCustomPrompt:
-		in := ai.CustomPromptInput{
-			Now:          until,
-			Since:        since,
-			LookbackDays: lookbackDays,
-			UserPrompt:   userPrompt,
-			Statuses:     statuses,
-			DebugDir:     debugDir,
-			StreamOut:    stream,
-		}
-		md, err = provider.RunCustomPrompt(ctx, in)
+	// Per-run provider formatter override: SelectProvider picks formatter
+	// from ai.activity_formatter; ExecutionMode may override it for this
+	// run only.
+	if resolved.Formatter != "" {
+		provider = withFormatter(provider, ai.SelectActivityFormatter(resolved.Formatter))
 	}
+
+	md, err := provider.RunMode(ctx, ai.RunInput{
+		ModeID:       resolved.ModeID,
+		ModeName:     resolved.ModeName,
+		Now:          resolved.Until,
+		Since:        resolved.Since,
+		LookbackDays: resolved.LookbackDays,
+		Instruction:  resolved.Instruction,
+		Statuses:     statuses,
+		DebugDir:     debugDir,
+		StreamOut:    stream,
+	})
 	if err != nil {
 		return err
 	}
@@ -352,7 +269,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 			if err := os.MkdirAll(filepath.Join(*userdataDir, "output"), 0o755); err != nil {
 				return err
 			}
-			out = filepath.Join(*userdataDir, "output", fmt.Sprintf("%s-%s.md", outDate, mode))
+			out = filepath.Join(*userdataDir, "output", fmt.Sprintf("%s-%s.md", outDate, resolved.ModeID))
 		}
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 			return err
@@ -368,6 +285,58 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+// formatModeOption renders an interactive-menu label that includes both the
+// mode's display name and its ID. modeIDFromOption extracts the ID back
+// from such a label.
+func formatModeOption(m executionmode.ExecutionMode) string {
+	name := strings.TrimSpace(m.Name)
+	if name == "" || name == m.ID {
+		return m.ID
+	}
+	return fmt.Sprintf("%s (%s)", name, m.ID)
+}
+
+func modeIDFromOption(option string) string {
+	option = strings.TrimSpace(option)
+	if l := strings.LastIndex(option, "("); l >= 0 && strings.HasSuffix(option, ")") {
+		return strings.TrimSpace(option[l+1 : len(option)-1])
+	}
+	return option
+}
+
+// readPromptOverride combines --prompt and --prompt-file into a single
+// instruction-override string; --prompt-file (when set) takes precedence
+// over --prompt to match the previous custom-prompt semantics.
+func readPromptOverride(promptFlag, promptFile string) (string, error) {
+	if pf := strings.TrimSpace(promptFile); pf != "" {
+		b, err := os.ReadFile(pf)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+	return promptFlag, nil
+}
+
+// withFormatter returns a provider whose ActivityFormatter has been
+// overridden. Only the three concrete provider types in this package are
+// handled; other implementations are returned unchanged.
+func withFormatter(p ai.Provider, f ai.ActivityFormatter) ai.Provider {
+	switch pp := p.(type) {
+	case ai.RuleBasedProvider:
+		pp.Formatter = f
+		return pp
+	case ai.OllamaProvider:
+		pp.Formatter = f
+		return pp
+	case ai.CursorCLIProvider:
+		pp.Formatter = f
+		return pp
+	default:
+		return p
+	}
 }
 
 // uniqueOutputPath returns path if nothing exists at that path yet; otherwise it

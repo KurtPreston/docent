@@ -52,7 +52,27 @@ type CollectOpts struct {
 	OnDirectiveUpdate func(DirectiveProgress)
 	Since             time.Time
 	Until             time.Time // window end; if zero, collectors use their clock
+	// Scope is a placeholder describing how broadly the collector should
+	// gather data (e.g. only the configured user's activity vs. everyone's
+	// activity on the configured repos). Today collectors ignore it; the
+	// CLI uses it only to gate the post-collection FilterToSelf step.
+	// Implementation of distinct scope semantics inside each collector is
+	// a follow-up effort. Mirrors executionmode.Scope without importing
+	// that package to keep the dependency direction.
+	Scope Scope
 }
+
+// Scope mirrors executionmode.Scope; defined here so the collectors package
+// has no upward dependency on executionmode. See executionmode.Scope for
+// the canonical doc comment.
+type Scope string
+
+const (
+	ScopeUnset Scope = ""
+	ScopeSelf  Scope = "self"
+	ScopeRepo  Scope = "repo"
+	ScopeAll   Scope = "all"
+)
 
 func (o *CollectOpts) windowEnd(clock func() time.Time) time.Time {
 	if o != nil && !o.Until.IsZero() {

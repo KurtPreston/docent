@@ -2,47 +2,30 @@ package ai
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/collectors"
 )
 
-// Provider turns collected status rows into Markdown documents.
+// Provider turns a single resolved execution-mode run into a Markdown document.
 type Provider interface {
-	GenerateDailyPlan(ctx context.Context, in DailyPlanInput) (string, error)
-	SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error)
-	RunCustomPrompt(ctx context.Context, in CustomPromptInput) (string, error)
+	RunMode(ctx context.Context, in RunInput) (string, error)
 }
 
-// DailyPlanInput is passed for the daily-plan mode (previous workday window).
-type DailyPlanInput struct {
-	Now            time.Time
-	Since          time.Time
-	UserPriorities string
-	Statuses       []collectors.StatusItem
-	DebugDir       string
-	StreamOut      io.Writer
-}
-
-// RecentActivityInput is passed for recent-activity mode.
-type RecentActivityInput struct {
+// RunInput is everything a provider needs to produce one Markdown document:
+// the LLM instruction text (already resolved by executionmode.Resolve), the
+// time window, the collected statuses, and where to stream/debug.
+//
+// ModeID is provided so the deterministic RuleBasedProvider can preserve the
+// historical per-mode output shape; LLM providers ignore it.
+type RunInput struct {
+	ModeID       string
+	ModeName     string
 	Now          time.Time
 	Since        time.Time
-	LookbackDays int
-	Statuses     []collectors.StatusItem
-	DebugDir     string
-	StreamOut    io.Writer
-}
-
-// CustomPromptInput is passed for custom-prompt mode.
-type CustomPromptInput struct {
-	Now          time.Time
-	Since        time.Time
-	LookbackDays int
-	UserPrompt   string
+	LookbackDays int // 0 when the lookback is not days-based (e.g. previous-weekday)
+	Instruction  string
 	Statuses     []collectors.StatusItem
 	DebugDir     string
 	StreamOut    io.Writer
@@ -60,25 +43,18 @@ func (p RuleBasedProvider) formatterOrDefault() ActivityFormatter {
 	return RepoChronologicalFormatter{HeadingLevel: 2}
 }
 
-func (p RuleBasedProvider) GenerateDailyPlan(_ context.Context, in DailyPlanInput) (string, error) {
-	return RenderDailyPlanMarkdown(in, p.formatterOrDefault()), nil
-}
-
-func (p RuleBasedProvider) SummarizeRecentActivity(_ context.Context, in RecentActivityInput) (string, error) {
-	return RenderRecentActivityMarkdown(in, p.formatterOrDefault()), nil
-}
-
-func (p RuleBasedProvider) RunCustomPrompt(_ context.Context, in CustomPromptInput) (string, error) {
-	nestedFmt := NestRepoChronologicalDepth(p.formatterOrDefault())
-	body, err := nestedFmt.Format(in.Statuses)
-	if err != nil {
-		body = fmt.Sprintf("_formatter error: %v_", err)
+// RunMode dispatches to per-builtin renderers when ModeID matches a known
+// built-in, and falls back to a generic "heading + instruction + activity"
+// layout for user-defined modes.
+func (p RuleBasedProvider) RunMode(_ context.Context, in RunInput) (string, error) {
+	switch in.ModeID {
+	case "daily-plan":
+		return RenderDailyPlanMarkdown(in, p.formatterOrDefault()), nil
+	case "recent-activity":
+		return RenderRecentActivityMarkdown(in, p.formatterOrDefault()), nil
+	case "custom-prompt":
+		return RenderCustomPromptMarkdown(in, p.formatterOrDefault()), nil
+	default:
+		return RenderGenericMarkdown(in, p.formatterOrDefault()), nil
 	}
-	var b strings.Builder
-	b.WriteString("# Custom report\n\n")
-	b.WriteString(in.UserPrompt)
-	b.WriteString("\n\n## Activity (ground truth)\n\n")
-	b.WriteString(strings.TrimRight(body, "\n"))
-	b.WriteByte('\n')
-	return b.String(), nil
 }

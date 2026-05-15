@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 // CursorCLIProvider shells out to cursor-agent (or Command) with a single prompt payload.
@@ -63,31 +62,14 @@ func defaultCursorArgs() []string {
 	}
 }
 
-func (p CursorCLIProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput) (string, error) {
-	instruction := "Create a practical daily plan as Markdown with sections `## Yesterday` and `## Today`, using the aggregated activity below as ground truth."
-	payload, err := BuildDailyPlanPrompt(instruction, in, p.formatterOrDefault())
-	if err != nil {
-		return "", err
+// RunMode builds the prompt payload for the resolved mode and shells out to
+// cursor-agent.
+func (p CursorCLIProvider) RunMode(ctx context.Context, in RunInput) (string, error) {
+	formatter := p.formatterOrDefault()
+	if needsNested(in.ModeID) {
+		formatter = NestRepoChronologicalDepth(formatter)
 	}
-	return p.runMarkdown(ctx, payload, in.StreamOut)
-}
-
-func (p CursorCLIProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
-	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s). Activity below is grouped by Git repository where each item's repository field is set (usually org/repo) and chronological within each group. Treat it as ground truth. Return one Markdown document.",
-		in.LookbackDays,
-		in.Since.Format(time.RFC3339),
-		in.Now.Format(time.RFC3339),
-	)
-	payload, err := BuildRecentActivityPrompt(instruction, in, p.formatterOrDefault())
-	if err != nil {
-		return "", err
-	}
-	return p.runMarkdown(ctx, payload, in.StreamOut)
-}
-
-func (p CursorCLIProvider) RunCustomPrompt(ctx context.Context, in CustomPromptInput) (string, error) {
-	payload, err := BuildCustomPromptPayload(in.UserPrompt, in, p.formatterOrDefault())
+	payload, err := BuildPrompt(in.Instruction, in, formatter)
 	if err != nil {
 		return "", err
 	}

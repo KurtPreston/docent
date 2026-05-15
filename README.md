@@ -72,13 +72,31 @@ directives:
 
 ## Modes
 
-| Mode | Lookback | Behavior |
-|------|----------|----------|
-| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | Optional “priorities today” prompt; AI output should use `## Yesterday` and `## Today`. **Scoped to your own contributions** (see *Self-only scoping* below). |
-| `recent-activity` | `--days N` (default 7, or prompt) | Summarize activity; grouped markdown. **Scoped to your own contributions.** |
-| `custom-prompt` | `--days N` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions. Receives the unfiltered status list. |
+Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, and a placeholder **scope**. Built-in modes ship with the binary; users can declare additional modes in `userdata/config.yaml` under `execution_modes:`.
+
+| Mode | Lookback | Scope | Behavior |
+|------|----------|-------|----------|
+| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | `self` | AI output should use `## Yesterday` and `## Today`. **Scoped to your own contributions** (see *Self-only scoping* below). |
+| `recent-activity` | `--days N` (default 7, or prompt) | `self` | Summarize activity; grouped markdown. **Scoped to your own contributions.** |
+| `custom-prompt` | `--days N` | `all` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions. Receives the unfiltered status list. |
 
 Run without `--mode` on a TTY to pick interactively.
+
+### Declaring your own modes
+
+Add `execution_modes:` to `userdata/config.yaml`. Any property you omit is asked at runtime (or filled from CLI flags); set the ones you want to lock in:
+
+```yaml
+execution_modes:
+  - id: repo-activity
+    name: Repo activity (everyone)
+    lookback: { kind: days, days: 14 }
+    prompt:
+      instruction: "Summarize recent activity across all contributors on the configured repos."
+    scope: repo
+```
+
+A user-declared mode whose `id` matches a built-in (`daily-plan`, etc.) overrides the built-in for that run. The `scope` field is a placeholder for an upcoming collector-side effort: today only `self` has observable behavior (it triggers the same `FilterToSelf` step that drives the built-in self-scoped modes); `repo` and `all` skip the filter but otherwise collect the same data as `self` until per-collector scope support lands.
 
 ### Self-only scoping
 
@@ -101,6 +119,9 @@ A future `repo-activity` mode will surface everyone's contributions on the confi
 - `--out PATH` — default `userdata/output/<date>-<mode>.md`
 - `--no-save` — stdout only
 - `--date YYYY-MM-DD` — label for default output filename only
+- `--mode ID` — execution mode (built-in or from `execution_modes:`); prompts interactively when omitted on a TTY
+- `--days N` — overrides the mode's lookback for this run (always forces a days-based window)
+- `--prompt TEXT` / `--prompt-file PATH` — overrides the mode's instruction for this run
 
 ## AI providers
 

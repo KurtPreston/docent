@@ -4,14 +4,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/kurt/slakkr-ai/internal/executionmode"
 )
 
 const DefaultDir = "userdata"
 
-// ConfigFile is the single userdata configuration file: AI + directives.
+// ConfigFile is the single userdata configuration file: AI + directives +
+// optional user-declared execution modes.
 type ConfigFile struct {
-	AI         AIConfig    `yaml:"ai,omitempty"`
-	Directives []Directive `yaml:"directives,omitempty"`
+	AI             AIConfig                      `yaml:"ai,omitempty"`
+	Directives     []Directive                   `yaml:"directives,omitempty"`
+	ExecutionModes []executionmode.ExecutionMode `yaml:"execution_modes,omitempty"`
 }
 
 type Directive struct {

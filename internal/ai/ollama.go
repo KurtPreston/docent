@@ -57,50 +57,44 @@ func (p OllamaProvider) formatterOrDefault() ActivityFormatter {
 	return SelectActivityFormatter("")
 }
 
-func (p OllamaProvider) GenerateDailyPlan(ctx context.Context, in DailyPlanInput) (string, error) {
-	instruction := "Create a practical daily plan. Section `## Yesterday` summarizes factual work from the aggregated activity below. Section `## Today` proposes a focused plan for today using that activity and optional priorities."
-	payload, err := BuildDailyPlanPrompt(instruction, in, p.formatterOrDefault())
+// RunMode sends the mode's resolved instruction and the formatted activity
+// body to Ollama and returns the model's Markdown response. The activity
+// formatter is depth-adjusted for daily-plan / custom-prompt to keep model
+// section headings from colliding with repo headings.
+func (p OllamaProvider) RunMode(ctx context.Context, in RunInput) (string, error) {
+	formatter := p.formatterOrDefault()
+	if needsNested(in.ModeID) {
+		formatter = NestRepoChronologicalDepth(formatter)
+	}
+	payload, err := BuildPrompt(in.Instruction, in, formatter)
 	if err != nil {
 		return "", err
 	}
 	p.printPrompt(in.StreamOut, payload)
-	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, "markdown-request")
+	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, debugStageFor(in.ModeID))
 	if err != nil {
 		return "", err
 	}
 	return StripMarkdownFence(raw), nil
 }
 
-func (p OllamaProvider) SummarizeRecentActivity(ctx context.Context, in RecentActivityInput) (string, error) {
-	instruction := fmt.Sprintf(
-		"Summarize the developer's recent activity over %d calendar day(s) (%s to %s). Activity below is grouped by Git repository where each item's repository field is set (usually org/repo); treat it as ground truth. Return one Markdown document with a brief executive summary at the top and noteworthy callouts. Do not invent activity not present in the input.",
-		in.LookbackDays,
-		in.Since.Format(time.RFC3339),
-		in.Now.Format(time.RFC3339),
-	)
-	payload, err := BuildRecentActivityPrompt(instruction, in, p.formatterOrDefault())
-	if err != nil {
-		return "", err
+// needsNested returns true when the mode's outer rendering wraps the
+// activity in a `##` section (so repo headings should drop to `###`).
+func needsNested(modeID string) bool {
+	switch modeID {
+	case "daily-plan", "custom-prompt":
+		return true
+	default:
+		return false
 	}
-	p.printPrompt(in.StreamOut, payload)
-	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, "recent-activity-request")
-	if err != nil {
-		return "", err
-	}
-	return StripMarkdownFence(raw), nil
 }
 
-func (p OllamaProvider) RunCustomPrompt(ctx context.Context, in CustomPromptInput) (string, error) {
-	payload, err := BuildCustomPromptPayload(in.UserPrompt, in, p.formatterOrDefault())
-	if err != nil {
-		return "", err
+func debugStageFor(modeID string) string {
+	id := strings.TrimSpace(modeID)
+	if id == "" {
+		id = "request"
 	}
-	p.printPrompt(in.StreamOut, payload)
-	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, "custom-prompt-request")
-	if err != nil {
-		return "", err
-	}
-	return StripMarkdownFence(raw), nil
+	return id + "-request"
 }
 
 func (p OllamaProvider) printPrompt(streamOut io.Writer, payload string) {

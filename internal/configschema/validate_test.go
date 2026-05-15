@@ -123,6 +123,107 @@ directives:
 	}
 }
 
+func TestValidateYAML_executionModesAccepted(t *testing.T) {
+	yamlDoc := strings.TrimSpace(`
+ai:
+  provider: rule-based
+directives:
+  - id: github
+    name: GitHub
+    collector: github
+    enabled: true
+execution_modes:
+  - id: repo-activity
+    name: Repo activity (everyone)
+    lookback: { kind: days, days: 14 }
+    prompt:
+      instruction: "Summarize repo activity."
+    scope: repo
+  - id: weekly
+    lookback: { kind: previous-weekday }
+    scope: self
+  - id: free-form
+    formatter: json-signal-list
+`)
+	if err := configschema.ValidateYAML([]byte(yamlDoc)); err != nil {
+		t.Fatalf("execution_modes example should validate: %v", configschema.ValidationProblems(err))
+	}
+}
+
+func TestValidateYAML_executionModesRejectsBadShape(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "days without value",
+			yaml: `
+ai:
+  provider: rule-based
+directives:
+  - id: gh
+    name: GH
+    collector: github
+    enabled: true
+execution_modes:
+  - id: bad
+    lookback: { kind: days }
+`,
+		},
+		{
+			name: "previous-weekday with days",
+			yaml: `
+ai:
+  provider: rule-based
+directives:
+  - id: gh
+    name: GH
+    collector: github
+    enabled: true
+execution_modes:
+  - id: bad
+    lookback: { kind: previous-weekday, days: 3 }
+`,
+		},
+		{
+			name: "unknown scope",
+			yaml: `
+ai:
+  provider: rule-based
+directives:
+  - id: gh
+    name: GH
+    collector: github
+    enabled: true
+execution_modes:
+  - id: bad
+    scope: team
+`,
+		},
+		{
+			name: "bad id pattern",
+			yaml: `
+ai:
+  provider: rule-based
+directives:
+  - id: gh
+    name: GH
+    collector: github
+    enabled: true
+execution_modes:
+  - id: BadID
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := configschema.ValidateYAML([]byte(strings.TrimSpace(tc.yaml))); err == nil {
+				t.Fatal("expected schema rejection")
+			}
+		})
+	}
+}
+
 func TestValidateYAML_duplicateDirectiveIDsAcceptedBySchema(t *testing.T) {
 	yamlDoc := `
 ai:
