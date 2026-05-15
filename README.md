@@ -72,13 +72,13 @@ directives:
 
 ## Modes
 
-Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, and a placeholder **scope**. Built-in modes ship with the binary; users can declare additional modes in `userdata/config.yaml` under `execution_modes:`.
+Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, and a **scope**. Built-in modes ship with the binary; users can declare additional modes in `userdata/config.yaml` under `execution_modes:`.
 
 | Mode | Lookback | Scope | Behavior |
 |------|----------|-------|----------|
-| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | `self` | AI output should use `## Yesterday` and `## Today`. **Scoped to your own contributions** (see *Self-only scoping* below). |
-| `recent-activity` | `--days N` (default 7, or prompt) | `self` | Summarize activity; grouped markdown. **Scoped to your own contributions.** |
-| `custom-prompt` | `--days N` | `all` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions. Receives the unfiltered status list. |
+| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | `involved` | AI output should use `## Yesterday` and `## Today`. Pulls your own activity plus PRs/issues you reviewed, were assigned, or were mentioned in (see *Scope semantics* below). |
+| `recent-activity` | `--days N` (default 7, or prompt) | `involved` | Summarize activity; grouped markdown. Same scope coverage as `daily-plan`. |
+| `custom-prompt` | `--days N` | `involved` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions over the same `involved` set. Override with `scope: all` on a user-declared mode if you want everything. |
 
 Run without `--mode` on a TTY to pick interactively.
 
@@ -93,24 +93,61 @@ execution_modes:
     lookback: { kind: days, days: 14 }
     prompt:
       instruction: "Summarize recent activity across all contributors on the configured repos."
-    scope: repo
+    scope: all
 ```
 
-A user-declared mode whose `id` matches a built-in (`daily-plan`, etc.) overrides the built-in for that run. The `scope` field is a placeholder for an upcoming collector-side effort: today only `self` has observable behavior (it triggers the same `FilterToSelf` step that drives the built-in self-scoped modes); `repo` and `all` skip the filter but otherwise collect the same data as `self` until per-collector scope support lands.
+A user-declared mode whose `id` matches a built-in (`daily-plan`, etc.) overrides the built-in for that run. Scope `all` only broadens the collection in collectors that have a `followed_*` directive config to anchor on (see *Scope semantics* below).
 
-### Self-only scoping
+### Scope semantics
 
-`daily-plan` and `recent-activity` filter the collected status list down to entries each collector flagged as **your own** activity (`is_self: true`). `custom-prompt` skips the filter so you can ask cross-cutting questions. `collector_error` rows always pass through so collection failures stay visible.
+Each collector honors `scope` directly — there is no post-collection filter. `collector_error` rows always pass through so collection failures stay visible.
 
-How each collector decides "self":
+| Collector | `self` | `involved` (default) | `all` |
+|-----------|--------|----------------------|-------|
+| `local-git` | Commits whose author matches your `git config user.email` / `$USER`. Reflog rows always emitted. | Self commits **plus** commits on local branches (branches you've created or checked out). | Every commit on every ref in the window. |
+| `github` / `github-enterprise` | `gh search prs --author <you>` and commits authored by you. | Self plus PRs reviewed by you, issues you're involved with, and comments you left on either. | `involved` plus per-repo `gh search prs/issues/commits --repo <r>` for each entry in `config.followed_repos`. |
+| `gitea` | Repos you own; issues + PRs created by you. | Self plus issues/PRs assigned to you or mentioning you (deduped). | `involved` plus per-repo issue + PR listings for each entry in `config.followed_repos`. Bare-`owner` entries fan out across all repos under that owner. |
+| `jira` | `(assignee = currentUser() OR reporter = currentUser()) AND updated >= …` | Adds `OR watcher = currentUser()`. Today's default JQL. | Wraps with `project in (…) OR …` using `config.followed_projects` (falls back to `involved` when no projects are configured). |
+| `google-calendar` | All scopes return all events on the secret iCal feed (the feed is your personal calendar by definition). | Same as `self`. | Same as `self`. |
 
-- **`local-git`**: a commit is yours when its author email equals the per-repo `git config user.email`, the global `git config --global user.email`, **or** when `$USER` (e.g. `kpreston`) appears anywhere in the author name (case-insensitive). Reflog rows are always yours (they record your local checkout actions).
-- **`github` / `github-enterprise`**: every result is yours by construction (search queries are scoped to `--author`, `--reviewed-by`, `--commenter`, `--involves` for the configured user / `@me`).
-- **`gitea`**: repos returned for the resolved owner (defaults to the authenticated user via `/api/v1/user`).
-- **`jira`**: default JQL scopes to issues you assign / report / watch.
-- **`google-calendar`**: events from your secret iCal feed.
+How each collector decides whether a row is **yours** (`is_self: true`):
 
-A future `repo-activity` mode will surface everyone's contributions on the configured repos (separate from your personal feed).
+- **`local-git`**: author email matches per-repo/global `user.email`, or `$USER` appears (case-insensitive) in the author name. Reflog rows are always yours.
+- **`github` / `github-enterprise`**: user-anchored queries (`--author`, `--reviewed-by`, `--commenter`, `--involves`) yield `is_self=true`. Repo-scoped queries used in `scope: all` yield `is_self=false` unless the result author matches your username.
+- **`gitea`**: user-anchored queries (created/assigned/mentioned) yield `is_self=true`. Repo-scoped queries used in `scope: all` set `is_self=true` only when the issue/PR author matches your login.
+- **`jira`**: `self` / `involved` rows are `is_self=true` (the JQL guarantees it). `all` rows are `is_self=true` only when the issue's assignee or reporter email matches `config.email` (Basic auth); otherwise `is_self=false`.
+- **`google-calendar`**: every event is `is_self=true` today.
+
+### Following repos / projects in scope: all
+
+To make `scope: all` collect more than `involved` for the forge and ticket-tracker collectors, declare what you'd like to follow:
+
+```yaml
+directives:
+  - id: github
+    collector: github
+    enabled: true
+    config:
+      followed_repos: "rust-lang/rust, golang/go"   # comma-, space-, or newline-separated
+  - id: gitea
+    collector: gitea
+    enabled: true
+    config:
+      base_url: https://gitea.example
+      followed_repos: "some-org, some-org/some-repo" # bare owner fans out across all that owner's repos
+    credential_refs:
+      token: SLAKKR_GITEA_TOKEN
+  - id: jira
+    collector: jira
+    enabled: true
+    config:
+      base_url: https://jira.example
+      followed_projects: "PROJ, OTHER"
+    credential_refs:
+      pat: SLAKKR_JIRA_PAT
+```
+
+Without these fields, `scope: all` collects the same set as `scope: involved` (the collectors have nothing extra to broaden on).
 
 ### Common flags
 
@@ -133,10 +170,10 @@ A future `repo-activity` mode will surface everyone's contributions on the confi
 
 All collectors run in **date range** mode (`since` → `until`). Implemented:
 
-- `local-git` — commits + reflog under `code_home` or explicit `paths`.
-- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty).
-- `gitea` — repos updated under `target.owner`; defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty.
-- `jira` — issues you assign / report / watch (override with `config.query` for project- or label-scoped JQL).
+- `local-git` — commits + reflog under `code_home` or explicit `paths`. Scope picks commits by author, by local-branch membership, or every commit on every ref.
+- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
+- `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
+- `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.
 
 ## Layout

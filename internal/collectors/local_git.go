@@ -19,6 +19,17 @@ type LocalGitCollector struct {
 }
 
 // Collect emits commits and reflog rows since opts.Since across resolved repo directories.
+//
+// Scope semantics:
+//   - ScopeSelf: only commits the per-repo matcher flags as the user's own
+//     (matched by author email or USER name). Reflog rows always pass since
+//     they record the user's local checkout actions.
+//   - ScopeInvolved (default): commits reachable from local branches (which
+//     the user has by definition created or checked out) UNION the matcher's
+//     self commits. Covers detached-HEAD work that isn't on any local branch
+//     yet.
+//   - ScopeAll: every commit on every ref (`git log --all`), regardless of
+//     author.
 func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	expand := defaultExpandRepoPath(opts)
 	since := time.Time{}
@@ -29,6 +40,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 	if opts != nil {
 		now = opts.windowEnd(c.Clock)
 	}
+	scope := opts.EffectiveScope()
 	dirs, err := localGitRepoDirs(directive, opts, expand)
 	if err != nil {
 		return nil, err
@@ -41,71 +53,44 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 	for _, abs := range dirs {
 		repoLabel := localGitRepositoryKey(ctx, abs)
 		matcher := newLocalGitSelfMatcher(ctx, abs, globalEmail, currentUser)
-		logOut, err := gitOutput(ctx, abs, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%ae%x09%s")
+
+		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher)
 		if err != nil {
 			return nil, err
 		}
-		for _, line := range strings.Split(logOut, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			parts := strings.SplitN(line, "\t", 5)
-			if len(parts) < 5 {
-				continue
-			}
-			hash := strings.TrimSpace(parts[0])
-			iso := strings.TrimSpace(parts[1])
-			author := strings.TrimSpace(parts[2])
-			email := strings.TrimSpace(parts[3])
-			subject := strings.TrimSpace(parts[4])
-			obs, err := time.Parse(time.RFC3339, iso)
+
+		// branchHashes is only populated for scope=involved (where we need
+		// to know which commits sit on local branches). For self/all we
+		// either don't care about it or just keep every commit anyway.
+		var branchHashes map[string]struct{}
+		if scope == ScopeInvolved {
+			branchHashes, err = localGitBranchHashes(ctx, abs, sinceISO)
 			if err != nil {
-				if obs, err = time.Parse("2006-01-02 15:04:05 -0700", strings.ReplaceAll(iso, "T", " ")); err != nil {
-					continue
-				}
+				return nil, err
 			}
-			if obs.Before(since) || obs.After(now) {
+		}
+
+		for _, ci := range commits {
+			keep := true
+			switch scope {
+			case ScopeSelf:
+				keep = ci.isSelf
+			case ScopeInvolved:
+				if !ci.isSelf {
+					if _, ok := branchHashes[ci.hash]; !ok {
+						keep = false
+					}
+				}
+			default: // ScopeAll
+				keep = true
+			}
+			if !keep {
 				continue
 			}
-			short := hash
-			if len(hash) > 7 {
-				short = hash[:7]
-			}
-			title := subject
-			if len(dirs) > 1 {
-				title = fmt.Sprintf("(%s) %s", filepath.Base(abs), subject)
-			}
-			authorIdentity := author
-			if email != "" {
-				if author != "" {
-					authorIdentity = fmt.Sprintf("%s <%s>", author, email)
-				} else {
-					authorIdentity = email
-				}
-			}
-			out = append(out, StatusItem{
-				DirectiveID: directive.ID,
-				Repository:  repoLabel,
-				Source:      "local-git",
-				Kind:        "commit",
-				Title:       title,
-				Summary:     fmt.Sprintf("%s %s — %s", short, author, iso),
-				Severity:    "info",
-				ObservedAt:  obs.UTC(),
-				Author:      authorIdentity,
-				IsSelf:      matcher.Match(author, email),
-				Fields: map[string]string{
-					"path":         abs,
-					"hash":         hash,
-					"short_hash":   short,
-					"author":       author,
-					"author_email": email,
-					"iso":          iso,
-					"subject":      subject,
-				},
-			})
+			out = append(out, buildLocalGitCommitItem(directive.ID, repoLabel, abs, ci, dirs))
+			commitTimes[ci.hash] = ci.observed
 		}
+
 		refOut, err := gitOutput(ctx, abs, "reflog", "--since="+sinceISO, "--date=iso", "--pretty=format:%H%x09%gd%x09%gs")
 		if err != nil {
 			return nil, err
@@ -168,6 +153,120 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		}
 	}
 	return out, nil
+}
+
+// localGitCommit is the parsed form of one `git log` row before it becomes a
+// StatusItem. Splitting this out keeps Collect's scope branching readable.
+type localGitCommit struct {
+	hash     string
+	iso      string
+	author   string
+	email    string
+	subject  string
+	observed time.Time
+	isSelf   bool
+}
+
+func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since, now time.Time, matcher localGitSelfMatcher) ([]localGitCommit, error) {
+	logOut, err := gitOutput(ctx, repoDir, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%ae%x09%s")
+	if err != nil {
+		return nil, err
+	}
+	var out []localGitCommit
+	for _, line := range strings.Split(logOut, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 5 {
+			continue
+		}
+		hash := strings.TrimSpace(parts[0])
+		iso := strings.TrimSpace(parts[1])
+		author := strings.TrimSpace(parts[2])
+		email := strings.TrimSpace(parts[3])
+		subject := strings.TrimSpace(parts[4])
+		obs, err := time.Parse(time.RFC3339, iso)
+		if err != nil {
+			if obs, err = time.Parse("2006-01-02 15:04:05 -0700", strings.ReplaceAll(iso, "T", " ")); err != nil {
+				continue
+			}
+		}
+		if obs.Before(since) || obs.After(now) {
+			continue
+		}
+		out = append(out, localGitCommit{
+			hash:     hash,
+			iso:      iso,
+			author:   author,
+			email:    email,
+			subject:  subject,
+			observed: obs,
+			isSelf:   matcher.Match(author, email),
+		})
+	}
+	return out, nil
+}
+
+// localGitBranchHashes returns the set of commit SHAs reachable from any
+// local branch within the time window. Used for ScopeInvolved: a commit
+// counts as "the user's involved work" when it sits on one of the branches
+// they have created or checked out locally.
+func localGitBranchHashes(ctx context.Context, repoDir, sinceISO string) (map[string]struct{}, error) {
+	out, err := gitOutput(ctx, repoDir, "log", "--branches", "--no-merges", "--since="+sinceISO, "--pretty=format:%H")
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]struct{}{}
+	for _, line := range strings.Split(out, "\n") {
+		h := strings.TrimSpace(line)
+		if h == "" {
+			continue
+		}
+		set[h] = struct{}{}
+	}
+	return set, nil
+}
+
+func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitCommit, allDirs []string) StatusItem {
+	short := ci.hash
+	if len(ci.hash) > 7 {
+		short = ci.hash[:7]
+	}
+	title := ci.subject
+	if len(allDirs) > 1 {
+		title = fmt.Sprintf("(%s) %s", filepath.Base(abs), ci.subject)
+	}
+	authorIdentity := ci.author
+	if ci.email != "" {
+		if ci.author != "" {
+			authorIdentity = fmt.Sprintf("%s <%s>", ci.author, ci.email)
+		} else {
+			authorIdentity = ci.email
+		}
+	}
+	return StatusItem{
+		DirectiveID: directiveID,
+		Repository:  repoLabel,
+		Source:      "local-git",
+		Kind:        "commit",
+		Title:       title,
+		Summary:     fmt.Sprintf("%s %s — %s", short, ci.author, ci.iso),
+		Severity:    "info",
+		ObservedAt:  ci.observed.UTC(),
+		Author:      authorIdentity,
+		IsSelf:      ci.isSelf,
+		Fields: map[string]string{
+			"path":         abs,
+			"hash":         ci.hash,
+			"short_hash":   short,
+			"author":       ci.author,
+			"author_email": ci.email,
+			"iso":          ci.iso,
+			"subject":      ci.subject,
+		},
+	}
 }
 
 // localGitRepositoryKey prefers remote.origin URL (owner/repo or nested path) so local-git

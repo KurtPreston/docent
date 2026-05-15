@@ -4,11 +4,51 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/userdata"
 )
+
+// parseFollowedList splits a directive config string (used for
+// `followed_repos` / `followed_projects`) into trimmed, non-empty entries.
+// Accepts commas, semicolons, and any whitespace as separators so users can
+// write `org/a, org/b` or `org/a org/b` or one-per-line.
+func parseFollowedList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ';', '\n', '\r', '\t', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(fields) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(fields))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
 // FilterToSelf keeps only items the collector flagged as the configured
 // user's own activity. collector_error rows always pass through so failures
@@ -52,13 +92,10 @@ type CollectOpts struct {
 	OnDirectiveUpdate func(DirectiveProgress)
 	Since             time.Time
 	Until             time.Time // window end; if zero, collectors use their clock
-	// Scope is a placeholder describing how broadly the collector should
-	// gather data (e.g. only the configured user's activity vs. everyone's
-	// activity on the configured repos). Today collectors ignore it; the
-	// CLI uses it only to gate the post-collection FilterToSelf step.
-	// Implementation of distinct scope semantics inside each collector is
-	// a follow-up effort. Mirrors executionmode.Scope without importing
-	// that package to keep the dependency direction.
+	// Scope controls how broadly each collector pulls data. Collectors
+	// branch on this directly; the CLI no longer post-filters by self.
+	// Mirrors executionmode.Scope without importing that package to keep
+	// the dependency direction.
 	Scope Scope
 }
 
@@ -68,11 +105,20 @@ type CollectOpts struct {
 type Scope string
 
 const (
-	ScopeUnset Scope = ""
-	ScopeSelf  Scope = "self"
-	ScopeRepo  Scope = "repo"
-	ScopeAll   Scope = "all"
+	ScopeUnset    Scope = ""
+	ScopeSelf     Scope = "self"
+	ScopeInvolved Scope = "involved"
+	ScopeAll      Scope = "all"
 )
+
+// EffectiveScope returns the scope to honor when collecting. An empty/unset
+// Scope resolves to ScopeInvolved (matches the default built-in modes).
+func (o *CollectOpts) EffectiveScope() Scope {
+	if o == nil || o.Scope == ScopeUnset {
+		return ScopeInvolved
+	}
+	return o.Scope
+}
 
 func (o *CollectOpts) windowEnd(clock func() time.Time) time.Time {
 	if o != nil && !o.Until.IsZero() {

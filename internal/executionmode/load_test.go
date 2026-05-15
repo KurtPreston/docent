@@ -12,7 +12,7 @@ func TestLoadAppendsUserModes(t *testing.T) {
 			Name:     "Repo activity",
 			Lookback: &Lookback{Kind: LookbackKindDays, Days: 14},
 			Prompt:   &Prompt{Instruction: "Summarize repo activity."},
-			Scope:    ScopeRepo,
+			Scope:    ScopeInvolved,
 		},
 	}
 	modes, err := Load(BuiltinModes(), user)

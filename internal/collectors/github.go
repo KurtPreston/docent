@@ -48,7 +48,16 @@ type ghSearchCommitRow struct {
 }
 
 // Collect runs scoped GitHub search queries for PR/issue/comment/commit
-// activity in opts.Since → window end.
+// activity in opts.Since → window end. The exact set of queries depends on
+// the resolved scope:
+//
+//   - ScopeSelf: only queries anchored on the user (`--author`).
+//   - ScopeInvolved (default): user-anchored queries plus reviewed-by,
+//     commenter, and involves queries.
+//   - ScopeAll: ScopeInvolved queries plus per-repo searches for each
+//     entry in `config.followed_repos` (no user filter). With no
+//     followed_repos configured, ScopeAll behaves identically to
+//     ScopeInvolved.
 func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	user := strings.TrimSpace(directive.Target["username"])
 	if user == "" {
@@ -76,7 +85,6 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		now = opts.windowEnd(c.Clock)
 	}
 	dateStr := since.Format("2006-01-02")
-	updatedFilter := ">=" + dateStr
 
 	env := os.Environ()
 	if token != "" {
@@ -89,168 +97,282 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		env = append(env, "GH_HOST="+host)
 	}
 
+	scope := opts.EffectiveScope()
+	followedRepos := parseFollowedList(directive.Config["followed_repos"])
+	searches, commitSearches := buildGitHubSearchSpecs(scope, user, dateStr, followedRepos)
+
 	var items []StatusItem
-
-	trySearch := func(kind string, filterArgs []string, queryForSummary, itemKind, jsonFields string) error {
-		args := []string{"search", kind}
-		args = append(args, filterArgs...)
-		args = append(args, "--limit", "25", "--json", jsonFields)
-		cmd := exec.CommandContext(ctx, "gh", args...)
-		cmd.Env = env
-		out, err := cmd.Output()
+	for _, spec := range searches {
+		batch, err := runGitHubSearch(ctx, env, spec, directive, user, host, since, now)
 		if err != nil {
-			if exit, ok := err.(*exec.ExitError); ok {
-				return fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
-			}
-			return fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+			return nil, err
 		}
-		var rows []ghSearchActivityRow
-		if err := json.Unmarshal(out, &rows); err != nil {
-			return err
-		}
-		for _, row := range rows {
-			obs, err := time.Parse(time.RFC3339, strings.TrimSpace(row.UpdatedAt))
-			if err != nil || obs.Before(since) || obs.After(now) {
-				continue
-			}
-			repo := strings.TrimSpace(row.Repository.NameWithOwner)
-			if repo == "" {
-				repo = gitHubOwnerRepoFromURL(row.URL)
-			}
-			items = append(items, StatusItem{
-				DirectiveID: directive.ID,
-				Repository:  repo,
-				Source:      directive.Collector,
-				Kind:        itemKind,
-				Title:       row.Title,
-				Summary:     fmt.Sprintf("%s state=%s updated=%s", queryForSummary, row.State, row.UpdatedAt),
-				URL:         row.URL,
-				Severity:    "info",
-				ObservedAt:  obs.UTC(),
-				Author:      user,
-				IsSelf:      true,
-				Fields: map[string]string{
-					"query":      queryForSummary,
-					"username":   user,
-					"host":       host,
-					"repo":       repo,
-					"state":      row.State,
-					"updated_at": row.UpdatedAt,
-					"closed_at":  row.ClosedAt,
-				},
-			})
-		}
-		return nil
+		items = append(items, batch...)
 	}
-
-	trySearchCommits := func(queryForSummary, itemKind string) error {
-		args := []string{"search", "commits", "--author", user, "--author-date", updatedFilter, "--limit", "25", "--json", "sha,url,repository,commit"}
-		cmd := exec.CommandContext(ctx, "gh", args...)
-		cmd.Env = env
-		out, err := cmd.Output()
+	for _, spec := range commitSearches {
+		batch, err := runGitHubCommitSearch(ctx, env, spec, directive, user, host, since, now)
 		if err != nil {
-			if exit, ok := err.(*exec.ExitError); ok {
-				return fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
-			}
-			return fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+			return nil, err
 		}
-		var rows []ghSearchCommitRow
-		if err := json.Unmarshal(out, &rows); err != nil {
-			return err
-		}
-		for _, row := range rows {
-			obs, err := time.Parse(time.RFC3339, strings.TrimSpace(row.Commit.Author.Date))
-			if err != nil || obs.Before(since) || obs.After(now) {
-				continue
-			}
-			msg := strings.TrimSpace(row.Commit.Message)
-			title := msg
-			if i := strings.IndexByte(msg, '\n'); i >= 0 {
-				title = strings.TrimSpace(msg[:i])
-			}
-			if title == "" {
-				title = row.SHA
-			}
-			repo := strings.TrimSpace(row.Repository.FullName)
-			items = append(items, StatusItem{
-				DirectiveID: directive.ID,
-				Repository:  repo,
-				Source:      directive.Collector,
-				Kind:        itemKind,
-				Title:       title,
-				Summary:     fmt.Sprintf("%s repo=%s sha=%s authored=%s", queryForSummary, repo, row.SHA, row.Commit.Author.Date),
-				URL:         row.URL,
-				Severity:    "info",
-				ObservedAt:  obs.UTC(),
-				Author:      user,
-				IsSelf:      true,
-				Fields: map[string]string{
-					"query":       queryForSummary,
-					"username":    user,
-					"host":        host,
-					"repo":        repo,
-					"sha":         row.SHA,
-					"authored_at": row.Commit.Author.Date,
-				},
-			})
-		}
-		return nil
+		items = append(items, batch...)
+	}
+	return dedupeGitHubItems(items), nil
+}
+
+// ghSearchSpec describes a single `gh search prs|issues` invocation.
+//
+// userAnchored is true for queries that are scoped to the configured user
+// (author/reviewer/commenter/involves). Rows from those queries are
+// IsSelf=true unconditionally. Repo-scoped queries (used in ScopeAll) set
+// IsSelf based on whether the row's repository and the resolved user
+// match.
+type ghSearchSpec struct {
+	queryType    string // "prs" or "issues"
+	args         []string
+	summary      string
+	itemKind     string
+	jsonFields   string
+	userAnchored bool
+}
+
+// ghCommitSearchSpec mirrors ghSearchSpec for `gh search commits`, which
+// returns a different JSON shape.
+type ghCommitSearchSpec struct {
+	args         []string
+	summary      string
+	itemKind     string
+	userAnchored bool
+}
+
+// buildGitHubSearchSpecs returns the list of gh search invocations to run
+// for the given scope. Exported (lowercase) for tests in this package.
+func buildGitHubSearchSpecs(scope Scope, user, dateStr string, followedRepos []string) ([]ghSearchSpec, []ghCommitSearchSpec) {
+	updatedFilter := ">=" + dateStr
+	authoredPRs := ghSearchSpec{
+		queryType:    "prs",
+		args:         []string{"--author", user, "--updated", updatedFilter},
+		summary:      fmt.Sprintf("author:%s updated:>=%s", user, dateStr),
+		itemKind:     "authored_pr",
+		jsonFields:   "title,url,state,updatedAt,closedAt,repository",
+		userAnchored: true,
+	}
+	authoredCommits := ghCommitSearchSpec{
+		args:         []string{"--author", user, "--author-date", updatedFilter},
+		summary:      fmt.Sprintf("author:%s author-date:>=%s", user, dateStr),
+		itemKind:     "github_commit",
+		userAnchored: true,
 	}
 
-	if err := trySearch(
-		"prs",
-		[]string{"--author", user, "--updated", updatedFilter},
-		fmt.Sprintf("author:%s updated:>=%s", user, dateStr),
-		"authored_pr",
-		"title,url,state,updatedAt,closedAt,repository",
-	); err != nil {
+	if scope == ScopeSelf {
+		return []ghSearchSpec{authoredPRs}, []ghCommitSearchSpec{authoredCommits}
+	}
+
+	// ScopeInvolved and ScopeAll both include the user-anchored set;
+	// ScopeAll layers repo-scoped queries on top.
+	involved := []ghSearchSpec{
+		authoredPRs,
+		{
+			queryType:    "prs",
+			args:         []string{"--reviewed-by", user, "--updated", updatedFilter},
+			summary:      fmt.Sprintf("reviewed-by:%s updated:>=%s", user, dateStr),
+			itemKind:     "reviewed_pr",
+			jsonFields:   "title,url,state,updatedAt,repository",
+			userAnchored: true,
+		},
+		{
+			queryType:    "issues",
+			args:         []string{"--involves", user, "--updated", updatedFilter},
+			summary:      fmt.Sprintf("involves:%s updated:>=%s", user, dateStr),
+			itemKind:     "involved_issue",
+			jsonFields:   "title,url,state,updatedAt,repository",
+			userAnchored: true,
+		},
+		// GitHub issue search requires is:issue or is:pull-request in the query;
+		// --include-prs does not satisfy that, so split issues vs PRs.
+		{
+			queryType:    "issues",
+			args:         []string{"is:issue", "--commenter", user, "--updated", updatedFilter},
+			summary:      fmt.Sprintf("is:issue commenter:%s updated:>=%s", user, dateStr),
+			itemKind:     "left_comment",
+			jsonFields:   "title,url,state,updatedAt,repository",
+			userAnchored: true,
+		},
+		{
+			queryType:    "prs",
+			args:         []string{"--commenter", user, "--updated", updatedFilter},
+			summary:      fmt.Sprintf("is:pull-request commenter:%s updated:>=%s", user, dateStr),
+			itemKind:     "left_comment",
+			jsonFields:   "title,url,state,updatedAt,repository",
+			userAnchored: true,
+		},
+	}
+	commits := []ghCommitSearchSpec{authoredCommits}
+
+	if scope != ScopeAll || len(followedRepos) == 0 {
+		return involved, commits
+	}
+
+	for _, repo := range followedRepos {
+		involved = append(involved,
+			ghSearchSpec{
+				queryType:  "prs",
+				args:       []string{"--repo", repo, "--updated", updatedFilter},
+				summary:    fmt.Sprintf("repo:%s is:pull-request updated:>=%s", repo, dateStr),
+				itemKind:   "repo_pr",
+				jsonFields: "title,url,state,updatedAt,closedAt,repository",
+			},
+			ghSearchSpec{
+				queryType:  "issues",
+				args:       []string{"is:issue", "--repo", repo, "--updated", updatedFilter},
+				summary:    fmt.Sprintf("repo:%s is:issue updated:>=%s", repo, dateStr),
+				itemKind:   "repo_issue",
+				jsonFields: "title,url,state,updatedAt,repository",
+			},
+		)
+		commits = append(commits, ghCommitSearchSpec{
+			args:     []string{"--repo", repo, "--author-date", updatedFilter},
+			summary:  fmt.Sprintf("repo:%s author-date:>=%s", repo, dateStr),
+			itemKind: "repo_commit",
+		})
+	}
+	return involved, commits
+}
+
+func runGitHubSearch(ctx context.Context, env []string, spec ghSearchSpec, directive userdata.Directive, user, host string, since, now time.Time) ([]StatusItem, error) {
+	args := append([]string{"search", spec.queryType}, spec.args...)
+	args = append(args, "--limit", "25", "--json", spec.jsonFields)
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
+		}
+		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+	}
+	var rows []ghSearchActivityRow
+	if err := json.Unmarshal(out, &rows); err != nil {
 		return nil, err
 	}
-	if err := trySearch(
-		"prs",
-		[]string{"--reviewed-by", user, "--updated", updatedFilter},
-		fmt.Sprintf("reviewed-by:%s updated:>=%s", user, dateStr),
-		"reviewed_pr",
-		"title,url,state,updatedAt,repository",
-	); err != nil {
-		return nil, err
-	}
-	if err := trySearch(
-		"issues",
-		[]string{"--involves", user, "--updated", updatedFilter},
-		fmt.Sprintf("involves:%s updated:>=%s", user, dateStr),
-		"involved_issue",
-		"title,url,state,updatedAt,repository",
-	); err != nil {
-		return nil, err
-	}
-	// GitHub issue search requires is:issue or is:pull-request in the query; --include-prs
-	// does not satisfy that, so split issues vs PRs (gh search prs scopes to pull requests).
-	if err := trySearch(
-		"issues",
-		[]string{"is:issue", "--commenter", user, "--updated", updatedFilter},
-		fmt.Sprintf("is:issue commenter:%s updated:>=%s", user, dateStr),
-		"left_comment",
-		"title,url,state,updatedAt,repository",
-	); err != nil {
-		return nil, err
-	}
-	if err := trySearch(
-		"prs",
-		[]string{"--commenter", user, "--updated", updatedFilter},
-		fmt.Sprintf("is:pull-request commenter:%s updated:>=%s", user, dateStr),
-		"left_comment",
-		"title,url,state,updatedAt,repository",
-	); err != nil {
-		return nil, err
-	}
-	if err := trySearchCommits(
-		fmt.Sprintf("author:%s author-date:>=%s", user, dateStr),
-		"github_commit",
-	); err != nil {
-		return nil, err
+	var items []StatusItem
+	for _, row := range rows {
+		obs, err := time.Parse(time.RFC3339, strings.TrimSpace(row.UpdatedAt))
+		if err != nil || obs.Before(since) || obs.After(now) {
+			continue
+		}
+		repo := strings.TrimSpace(row.Repository.NameWithOwner)
+		if repo == "" {
+			repo = gitHubOwnerRepoFromURL(row.URL)
+		}
+		items = append(items, StatusItem{
+			DirectiveID: directive.ID,
+			Repository:  repo,
+			Source:      directive.Collector,
+			Kind:        spec.itemKind,
+			Title:       row.Title,
+			Summary:     fmt.Sprintf("%s state=%s updated=%s", spec.summary, row.State, row.UpdatedAt),
+			URL:         row.URL,
+			Severity:    "info",
+			ObservedAt:  obs.UTC(),
+			Author:      user,
+			IsSelf:      spec.userAnchored,
+			Fields: map[string]string{
+				"query":      spec.summary,
+				"username":   user,
+				"host":       host,
+				"repo":       repo,
+				"state":      row.State,
+				"updated_at": row.UpdatedAt,
+				"closed_at":  row.ClosedAt,
+			},
+		})
 	}
 	return items, nil
+}
+
+func runGitHubCommitSearch(ctx context.Context, env []string, spec ghCommitSearchSpec, directive userdata.Directive, user, host string, since, now time.Time) ([]StatusItem, error) {
+	args := append([]string{"search", "commits"}, spec.args...)
+	args = append(args, "--limit", "25", "--json", "sha,url,repository,commit")
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
+		}
+		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+	}
+	var rows []ghSearchCommitRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+	var items []StatusItem
+	for _, row := range rows {
+		obs, err := time.Parse(time.RFC3339, strings.TrimSpace(row.Commit.Author.Date))
+		if err != nil || obs.Before(since) || obs.After(now) {
+			continue
+		}
+		msg := strings.TrimSpace(row.Commit.Message)
+		title := msg
+		if i := strings.IndexByte(msg, '\n'); i >= 0 {
+			title = strings.TrimSpace(msg[:i])
+		}
+		if title == "" {
+			title = row.SHA
+		}
+		repo := strings.TrimSpace(row.Repository.FullName)
+		items = append(items, StatusItem{
+			DirectiveID: directive.ID,
+			Repository:  repo,
+			Source:      directive.Collector,
+			Kind:        spec.itemKind,
+			Title:       title,
+			Summary:     fmt.Sprintf("%s repo=%s sha=%s authored=%s", spec.summary, repo, row.SHA, row.Commit.Author.Date),
+			URL:         row.URL,
+			Severity:    "info",
+			ObservedAt:  obs.UTC(),
+			Author:      user,
+			IsSelf:      spec.userAnchored,
+			Fields: map[string]string{
+				"query":       spec.summary,
+				"username":    user,
+				"host":        host,
+				"repo":        repo,
+				"sha":         row.SHA,
+				"authored_at": row.Commit.Author.Date,
+			},
+		})
+	}
+	return items, nil
+}
+
+// dedupeGitHubItems merges duplicates that arise when the same PR / issue /
+// commit shows up in multiple search results (e.g. a PR authored by the user
+// is also reviewed by them, or repo-scoped queries surface the same PR an
+// involves query already found). We key off URL when present, falling back
+// to (kind, title, observedAt). When merging, IsSelf=true wins so the
+// strongest signal sticks.
+func dedupeGitHubItems(items []StatusItem) []StatusItem {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]int, len(items))
+	out := make([]StatusItem, 0, len(items))
+	for _, it := range items {
+		key := it.URL
+		if key == "" {
+			key = fmt.Sprintf("%s|%s|%s", it.Kind, it.Title, it.ObservedAt.UTC().Format(time.RFC3339Nano))
+		}
+		if idx, ok := seen[key]; ok {
+			if it.IsSelf && !out[idx].IsSelf {
+				out[idx].IsSelf = true
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, it)
+	}
+	return out
 }
 
 // ValidateDirective checks that `gh` is installed, the optional token env var

@@ -80,7 +80,7 @@
         },
         "scope": {
           "type": "string",
-          "enum": ["self", "repo", "all"]
+          "enum": ["self", "involved", "all"]
         }
       }
     },
@@ -336,6 +336,11 @@
               "type": "string",
               "x-slakkr-prompt": "GitHub host URL (default https://github.com)",
               "x-slakkr-validator": "url"
+            },
+            "followed_repos": {
+              "type": "string",
+              "x-slakkr-prompt": "Comma-separated owner/repo list to include when scope=all",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -389,6 +394,11 @@
               "minLength": 1,
               "x-slakkr-prompt": "GitHub Enterprise base URL",
               "x-slakkr-validator": "url"
+            },
+            "followed_repos": {
+              "type": "string",
+              "x-slakkr-prompt": "Comma-separated owner/repo list to include when scope=all",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "required": ["base_url"],
@@ -443,6 +453,11 @@
               "minLength": 1,
               "x-slakkr-prompt": "Gitea base URL",
               "x-slakkr-validator": "url"
+            },
+            "followed_repos": {
+              "type": "string",
+              "x-slakkr-prompt": "Comma-separated owner/repo (or bare owner) list to include when scope=all",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "required": ["base_url"],
@@ -490,6 +505,11 @@
             "query": {
               "type": "string",
               "x-slakkr-prompt": "Optional JQL filter (default: issues you assign/report/watch)"
+            },
+            "followed_projects": {
+              "type": "string",
+              "x-slakkr-prompt": "Comma-separated Jira project keys to include when scope=all",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "required": ["base_url"],

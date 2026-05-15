@@ -26,6 +26,16 @@ func (c GoogleCalendarCollector) client() *http.Client {
 }
 
 // Collect returns calendar events whose DTSTART falls in [opts.Since, window end] (read-only GET of iCal).
+//
+// Scope semantics: the iCal feed is the user's personal calendar by
+// definition (the URL is a per-user secret), so events on it are events
+// the user has either organized or accepted. All three scopes therefore
+// emit the same set today, and every item is marked IsSelf=true.
+//
+// A future improvement could split ScopeSelf out by inspecting the
+// ORGANIZER property and comparing against a new config.user_email
+// (events where the user is only an attendee would drop to IsSelf=false).
+// That is intentionally out of scope for the current iCal-only collector.
 func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	rawURL := strings.TrimSpace(directive.Config["ical_url"])
 	if rawURL == "" {

@@ -27,6 +27,30 @@ type giteaRepo struct {
 	Private       bool   `json:"private"`
 }
 
+// giteaIssue is one row from `/api/v1/repos/issues/search` or the per-repo
+// `/api/v1/repos/{owner}/{repo}/issues` listing. PullRequest is non-nil for
+// PRs and nil/absent for plain issues (Gitea's data model treats both as
+// "issues").
+type giteaIssue struct {
+	Number     int    `json:"number"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	HTMLURL    string `json:"html_url"`
+	Updated    string `json:"updated_at"`
+	User       struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Assignees []struct {
+		Login string `json:"login"`
+	} `json:"assignees"`
+	Repository struct {
+		FullName string `json:"full_name"`
+		Name     string `json:"name"`
+		Owner    string `json:"owner"`
+	} `json:"repository"`
+	PullRequest *struct{} `json:"pull_request,omitempty"`
+}
+
 func (c GiteaCollector) client() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
@@ -34,10 +58,23 @@ func (c GiteaCollector) client() *http.Client {
 	return http.DefaultClient
 }
 
-// Collect keeps repositories whose updated_at is on or after opts.Since.
+// Collect emits issue, pull-request, and repository-update items for the
+// resolved owner (and, in ScopeAll, the directive's followed_repos).
+//
+// Scope semantics:
+//   - ScopeSelf: repos owned by the user; issues + PRs the user authored.
+//   - ScopeInvolved (default): self UNION issues/PRs assigned to the user
+//     UNION issues/PRs that mention the user. De-duped by (repo, number,
+//     kind); IsSelf=true wins so a row that started as "mentioned" still
+//     reads as user activity if the user also authored it.
+//   - ScopeAll: involved UNION per-repo issue/PR listings for each entry in
+//     config.followed_repos. Bare-owner entries fan out via owner filter;
+//     owner/repo entries pin to a single repo. Repo-updated items expand
+//     to include followed repos' updated_at signals.
+//
 // When target.owner is empty, the authenticated user is resolved via
 // /api/v1/user and used as the owner so the directive defaults to the
-// caller's own repositories.
+// caller's own repositories and activity.
 func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	owner := strings.TrimSpace(directive.Target["owner"])
@@ -65,10 +102,6 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 		}
 		owner = login
 	}
-	repos, err := c.fetchReposForOwner(ctx, apiBase, owner, token)
-	if err != nil {
-		return nil, err
-	}
 	since := time.Time{}
 	if opts != nil {
 		since = opts.Since
@@ -77,6 +110,55 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	if opts != nil {
 		now = opts.windowEnd(c.Clock)
 	}
+	scope := opts.EffectiveScope()
+	followedRepos := parseFollowedList(directive.Config["followed_repos"])
+
+	// Repo-updated items: always include the resolved owner's repos. In
+	// ScopeAll, also include each followed entry so the "this followed
+	// repo got pushed" signal lands alongside its issue/PR activity.
+	var items []StatusItem
+	ownerRepos, err := c.fetchReposForOwner(ctx, apiBase, owner, token)
+	if err != nil {
+		return nil, err
+	}
+	items = append(items, c.repoItemsFor(directive, apiBase, owner, ownerRepos, since, now)...)
+	if scope == ScopeAll {
+		for _, entry := range followedRepos {
+			repos, err := c.resolveFollowedRepoEntry(ctx, apiBase, token, entry)
+			if err != nil {
+				return nil, err
+			}
+			if len(repos) == 0 {
+				continue
+			}
+			entryOwner := entry
+			if slash := strings.Index(entry, "/"); slash > 0 {
+				entryOwner = entry[:slash]
+			}
+			items = append(items, c.repoItemsFor(directive, apiBase, entryOwner, repos, since, now)...)
+		}
+	}
+
+	// Issue / PR items. Order matters for de-dup: user-anchored queries go
+	// first so their IsSelf=true entries win over repo-scoped duplicates.
+	issueQueries := buildGiteaIssueQueries(scope, owner, followedRepos, since)
+	for _, q := range issueQueries {
+		rows, err := c.fetchIssues(ctx, apiBase, token, q)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			obs, perr := parseGiteaTime(row.Updated)
+			if perr != nil || obs.Before(since) || obs.After(now) {
+				continue
+			}
+			items = append(items, buildGiteaIssueItem(directive, apiBase, owner, q, row, obs))
+		}
+	}
+	return dedupeGiteaItems(items), nil
+}
+
+func (c GiteaCollector) repoItemsFor(directive userdata.Directive, apiBase, owner string, repos []giteaRepo, since, now time.Time) []StatusItem {
 	var items []StatusItem
 	for _, r := range repos {
 		updatedAt, err := parseGiteaTime(r.Updated)
@@ -106,7 +188,7 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 			Severity:    "info",
 			ObservedAt:  updatedAt.UTC(),
 			Author:      owner,
-			IsSelf:      true,
+			IsSelf:      strings.EqualFold(owner, gitOwnerFromFullName(r.FullName)),
 			Fields: map[string]string{
 				"name":           r.Name,
 				"full_name":      r.FullName,
@@ -118,7 +200,284 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 			},
 		})
 	}
-	return items, nil
+	return items
+}
+
+// giteaIssueQuery is one `/api/v1/repos/issues/search` call. anchor is the
+// summary label used for the resulting StatusItem.Fields["query"] entry.
+type giteaIssueQuery struct {
+	// Mutually exclusive user filter (only one is non-empty).
+	createdBy   string
+	assignedBy  string
+	mentionedBy string
+	// Optional repo scoping for the search.
+	owner string
+	repo  string
+	// type: "issues" or "pulls".
+	issueType string
+	since     time.Time
+	itemKind  string
+	anchor    string
+	// userAnchored is true when the query is filtered by createdBy /
+	// assignedBy / mentionedBy. Rows from such queries are IsSelf=true.
+	userAnchored bool
+}
+
+func buildGiteaIssueQueries(scope Scope, user string, followedRepos []string, since time.Time) []giteaIssueQuery {
+	authoredIssues := giteaIssueQuery{
+		createdBy: user, issueType: "issues", since: since,
+		itemKind: "gitea_issue", anchor: fmt.Sprintf("created_by:%s type:issues", user),
+		userAnchored: true,
+	}
+	authoredPRs := giteaIssueQuery{
+		createdBy: user, issueType: "pulls", since: since,
+		itemKind: "gitea_pr", anchor: fmt.Sprintf("created_by:%s type:pulls", user),
+		userAnchored: true,
+	}
+	if scope == ScopeSelf {
+		return []giteaIssueQuery{authoredIssues, authoredPRs}
+	}
+	out := []giteaIssueQuery{
+		authoredIssues, authoredPRs,
+		{
+			assignedBy: user, issueType: "issues", since: since,
+			itemKind: "gitea_issue", anchor: fmt.Sprintf("assigned_by:%s type:issues", user),
+			userAnchored: true,
+		},
+		{
+			assignedBy: user, issueType: "pulls", since: since,
+			itemKind: "gitea_pr", anchor: fmt.Sprintf("assigned_by:%s type:pulls", user),
+			userAnchored: true,
+		},
+		{
+			mentionedBy: user, issueType: "issues", since: since,
+			itemKind: "gitea_issue", anchor: fmt.Sprintf("mentioned_by:%s type:issues", user),
+			userAnchored: true,
+		},
+		{
+			mentionedBy: user, issueType: "pulls", since: since,
+			itemKind: "gitea_pr", anchor: fmt.Sprintf("mentioned_by:%s type:pulls", user),
+			userAnchored: true,
+		},
+	}
+	if scope != ScopeAll {
+		return out
+	}
+	for _, entry := range followedRepos {
+		entryOwner, entryRepo := splitFollowedRepo(entry)
+		out = append(out,
+			giteaIssueQuery{
+				owner: entryOwner, repo: entryRepo, issueType: "issues", since: since,
+				itemKind: "gitea_issue", anchor: fmt.Sprintf("repo:%s type:issues", entry),
+			},
+			giteaIssueQuery{
+				owner: entryOwner, repo: entryRepo, issueType: "pulls", since: since,
+				itemKind: "gitea_pr", anchor: fmt.Sprintf("repo:%s type:pulls", entry),
+			},
+		)
+	}
+	return out
+}
+
+// splitFollowedRepo parses an `owner` or `owner/repo` entry from
+// config.followed_repos. A bare owner yields ("owner", "").
+func splitFollowedRepo(entry string) (owner, repo string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return "", ""
+	}
+	if slash := strings.Index(entry, "/"); slash > 0 {
+		return strings.TrimSpace(entry[:slash]), strings.TrimSpace(entry[slash+1:])
+	}
+	return entry, ""
+}
+
+func gitOwnerFromFullName(fullName string) string {
+	if slash := strings.Index(fullName, "/"); slash > 0 {
+		return fullName[:slash]
+	}
+	return fullName
+}
+
+func (c GiteaCollector) fetchIssues(ctx context.Context, apiBase, token string, q giteaIssueQuery) ([]giteaIssue, error) {
+	values := url.Values{}
+	values.Set("type", q.issueType)
+	values.Set("state", "all")
+	values.Set("limit", "50")
+	if !q.since.IsZero() {
+		values.Set("since", q.since.UTC().Format(time.RFC3339))
+	}
+	if q.createdBy != "" {
+		values.Set("created_by", q.createdBy)
+	}
+	if q.assignedBy != "" {
+		values.Set("assigned_by", q.assignedBy)
+	}
+	if q.mentionedBy != "" {
+		values.Set("mentioned_by", q.mentionedBy)
+	}
+	if q.owner != "" {
+		values.Set("owner", q.owner)
+	}
+	if q.repo != "" {
+		values.Set("repo", q.repo)
+	}
+	rawURL := apiBase + "/api/v1/repos/issues/search?" + values.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Accept", "application/json")
+	res, err := c.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("gitea %s: %s — %s", res.Status, rawURL, strings.TrimSpace(string(body)))
+	}
+	var rows []giteaIssue
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return nil, fmt.Errorf("parse gitea issues: %w", err)
+	}
+	// For PR/issue parity, Gitea returns both kinds from /issues/search
+	// when type is omitted; we always set type, but defensive filter:
+	if q.issueType == "issues" {
+		filtered := rows[:0]
+		for _, row := range rows {
+			if row.PullRequest == nil {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	} else if q.issueType == "pulls" {
+		filtered := rows[:0]
+		for _, row := range rows {
+			if row.PullRequest != nil {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	return rows, nil
+}
+
+func (c GiteaCollector) resolveFollowedRepoEntry(ctx context.Context, apiBase, token, entry string) ([]giteaRepo, error) {
+	entryOwner, entryRepo := splitFollowedRepo(entry)
+	if entryOwner == "" {
+		return nil, nil
+	}
+	if entryRepo == "" {
+		return c.fetchReposForOwner(ctx, apiBase, entryOwner, token)
+	}
+	rawURL := fmt.Sprintf("%s/api/v1/repos/%s/%s", apiBase, url.PathEscape(entryOwner), url.PathEscape(entryRepo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Accept", "application/json")
+	res, err := c.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("gitea %s: %s — %s", res.Status, rawURL, strings.TrimSpace(string(body)))
+	}
+	var repo giteaRepo
+	if err := json.Unmarshal(body, &repo); err != nil {
+		return nil, fmt.Errorf("parse gitea repo %s: %w", entry, err)
+	}
+	return []giteaRepo{repo}, nil
+}
+
+func buildGiteaIssueItem(directive userdata.Directive, apiBase, user string, q giteaIssueQuery, row giteaIssue, obs time.Time) StatusItem {
+	repoKey := strings.TrimSpace(row.Repository.FullName)
+	if repoKey == "" {
+		repoKey = row.Repository.Name
+	}
+	authorLogin := strings.TrimSpace(row.User.Login)
+	isSelf := q.userAnchored
+	if !isSelf && user != "" && strings.EqualFold(authorLogin, user) {
+		isSelf = true
+	}
+	title := fmt.Sprintf("#%d %s", row.Number, row.Title)
+	if repoKey != "" {
+		title = fmt.Sprintf("[%s] %s", repoKey, title)
+	}
+	summary := fmt.Sprintf("%s state=%s updated=%s author=%s", q.anchor, row.State, row.Updated, authorLogin)
+	fields := map[string]string{
+		"query":      q.anchor,
+		"username":   user,
+		"repo":       repoKey,
+		"number":     fmt.Sprintf("%d", row.Number),
+		"state":      row.State,
+		"updated_at": row.Updated,
+		"author":     authorLogin,
+		"gitea_base": apiBase,
+	}
+	if len(row.Assignees) > 0 {
+		var names []string
+		for _, a := range row.Assignees {
+			names = append(names, a.Login)
+		}
+		fields["assignees"] = strings.Join(names, ",")
+	}
+	return StatusItem{
+		DirectiveID: directive.ID,
+		Repository:  repoKey,
+		Source:      "gitea",
+		Kind:        q.itemKind,
+		Title:       title,
+		Summary:     summary,
+		URL:         row.HTMLURL,
+		Severity:    "info",
+		ObservedAt:  obs.UTC(),
+		Author:      authorLogin,
+		IsSelf:      isSelf,
+		Fields:      fields,
+	}
+}
+
+// dedupeGiteaItems keys off (kind, repo, number) for issues/PRs and URL
+// for repository_updated rows. When duplicates collide, IsSelf=true wins.
+func dedupeGiteaItems(items []StatusItem) []StatusItem {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]int, len(items))
+	out := make([]StatusItem, 0, len(items))
+	for _, it := range items {
+		var key string
+		switch it.Kind {
+		case "gitea_issue", "gitea_pr":
+			key = fmt.Sprintf("%s|%s|%s", it.Kind, it.Repository, it.Fields["number"])
+		default:
+			key = it.URL
+			if key == "" {
+				key = fmt.Sprintf("%s|%s|%s", it.Kind, it.Repository, it.Title)
+			}
+		}
+		if idx, ok := seen[key]; ok {
+			if it.IsSelf && !out[idx].IsSelf {
+				out[idx].IsSelf = true
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, it)
+	}
+	return out
 }
 
 // ValidateDirective checks base_url is a valid URL, the token env value is

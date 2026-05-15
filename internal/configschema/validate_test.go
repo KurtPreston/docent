@@ -138,7 +138,7 @@ execution_modes:
     lookback: { kind: days, days: 14 }
     prompt:
       instruction: "Summarize repo activity."
-    scope: repo
+    scope: involved
   - id: weekly
     lookback: { kind: previous-weekday }
     scope: self

@@ -79,7 +79,7 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 
 	scope := mode.Scope
 	if scope == ScopeUnset {
-		scope = ScopeSelf
+		scope = ScopeInvolved
 	}
 
 	return ResolvedRun{

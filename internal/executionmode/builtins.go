@@ -11,7 +11,9 @@ const (
 
 // BuiltinModes returns the three built-in execution modes in canonical
 // menu order. Returned values are fresh on each call, so callers may mutate
-// them without affecting future loads.
+// them without affecting future loads. All three default to ScopeInvolved
+// so the user sees their own activity plus adjacent context (PR reviews on
+// their PRs, comments on their issues, branches they've touched, etc.).
 func BuiltinModes() []ExecutionMode {
 	return []ExecutionMode{
 		{
@@ -19,14 +21,14 @@ func BuiltinModes() []ExecutionMode {
 			Name:     "Daily plan",
 			Lookback: &Lookback{Kind: LookbackKindPreviousWeekday},
 			Prompt:   &Prompt{Instruction: dailyPlanInstruction},
-			Scope:    ScopeSelf,
+			Scope:    ScopeInvolved,
 		},
 		{
 			ID:       BuiltinRecentActivity,
 			Name:     "Recent activity",
 			Lookback: &Lookback{Kind: LookbackKindDays, Days: 7},
 			Prompt:   &Prompt{Instruction: recentActivityInstruction},
-			Scope:    ScopeSelf,
+			Scope:    ScopeInvolved,
 		},
 		{
 			ID:       BuiltinCustomPrompt,
@@ -34,7 +36,7 @@ func BuiltinModes() []ExecutionMode {
 			Lookback: &Lookback{Kind: LookbackKindDays, Days: 7},
 			// Prompt left nil on purpose: the user supplies the prompt
 			// interactively (or via --prompt / --prompt-file).
-			Scope: ScopeAll,
+			Scope: ScopeInvolved,
 		},
 	}
 }

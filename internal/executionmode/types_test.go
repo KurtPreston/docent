@@ -17,7 +17,7 @@ func TestExecutionModeValidate(t *testing.T) {
 		},
 		{
 			name: "ok days",
-			mode: ExecutionMode{ID: "x", Lookback: &Lookback{Kind: LookbackKindDays, Days: 14}, Scope: ScopeRepo},
+			mode: ExecutionMode{ID: "x", Lookback: &Lookback{Kind: LookbackKindDays, Days: 14}, Scope: ScopeInvolved},
 		},
 		{
 			name: "ok empty optional fields",
@@ -107,21 +107,21 @@ func TestBuiltinModesValid(t *testing.T) {
 			if m.Prompt == nil {
 				t.Fatal("daily-plan should have prompt")
 			}
-			if m.Scope != ScopeSelf {
+			if m.Scope != ScopeInvolved {
 				t.Fatalf("daily-plan scope: %q", m.Scope)
 			}
 		case BuiltinRecentActivity:
 			if m.Lookback == nil || m.Lookback.Kind != LookbackKindDays || m.Lookback.Days != 7 {
 				t.Fatalf("recent-activity lookback: %+v", m.Lookback)
 			}
-			if m.Scope != ScopeSelf {
+			if m.Scope != ScopeInvolved {
 				t.Fatalf("recent-activity scope: %q", m.Scope)
 			}
 		case BuiltinCustomPrompt:
 			if m.Prompt != nil {
 				t.Fatalf("custom-prompt should leave Prompt nil so the user is asked, got %+v", m.Prompt)
 			}
-			if m.Scope != ScopeAll {
+			if m.Scope != ScopeInvolved {
 				t.Fatalf("custom-prompt scope: %q", m.Scope)
 			}
 		}

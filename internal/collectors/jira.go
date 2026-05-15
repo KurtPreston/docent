@@ -36,12 +36,29 @@ type jiraSearchResult struct {
 			Priority struct {
 				Name string `json:"name"`
 			} `json:"priority"`
-			Updated string `json:"updated"`
+			Updated  string `json:"updated"`
+			Assignee struct {
+				Name         string `json:"name"`
+				AccountID    string `json:"accountId"`
+				EmailAddress string `json:"emailAddress"`
+			} `json:"assignee"`
+			Reporter struct {
+				Name         string `json:"name"`
+				AccountID    string `json:"accountId"`
+				EmailAddress string `json:"emailAddress"`
+			} `json:"reporter"`
 		} `json:"fields"`
 	} `json:"issues"`
 }
 
 // Collect runs JQL restricted to issues updated on or after opts.Since.
+//
+// Scope shapes the user clause inside the composed JQL:
+//   - ScopeSelf: assignee or reporter is the current user.
+//   - ScopeInvolved (default): assignee, reporter, or watcher is the user.
+//   - ScopeAll: ScopeInvolved expanded with `project in (followed_projects)`
+//     when config.followed_projects is set; falls back to involved when no
+//     projects are configured.
 func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	jql := strings.TrimSpace(directive.Config["query"])
@@ -52,7 +69,9 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	if opts != nil {
 		since = opts.Since
 	}
-	effective := buildJiraActivityJQL(jql, since)
+	scope := opts.EffectiveScope()
+	followedProjects := parseFollowedList(directive.Config["followed_projects"])
+	effective := buildJiraActivityJQL(jql, since, scope, followedProjects)
 	userdataDir := ""
 	if opts != nil {
 		userdataDir = opts.UserdataDir
@@ -92,7 +111,7 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	q := url.Values{}
 	q.Set("jql", effective)
 	q.Set("maxResults", "50")
-	q.Set("fields", "summary,status,priority,updated")
+	q.Set("fields", "summary,status,priority,updated,assignee,reporter")
 	reqURL := api + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -133,6 +152,23 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 			sev = "warning"
 		}
 		web := strings.TrimRight(base, "/") + "/browse/" + iss.Key
+		// IsSelf rules:
+		//   - self/involved: JQL guaranteed the user matched (assignee /
+		//     reporter / watcher), so mark true.
+		//   - all: only true when assignee or reporter email matches
+		//     the Basic-auth identity; otherwise the row likely came
+		//     from the followed-projects expansion and isn't the
+		//     user's own activity.
+		isSelf := true
+		if scope == ScopeAll {
+			isSelf = false
+			if email != "" {
+				if strings.EqualFold(iss.Fields.Assignee.EmailAddress, email) ||
+					strings.EqualFold(iss.Fields.Reporter.EmailAddress, email) {
+					isSelf = true
+				}
+			}
+		}
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
 			Source:      "jira",
@@ -142,12 +178,14 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 			URL:         web,
 			Severity:    sev,
 			ObservedAt:  obs.UTC(),
-			IsSelf:      true,
+			IsSelf:      isSelf,
 			Fields: map[string]string{
 				"key":      iss.Key,
 				"status":   iss.Fields.Status.Name,
 				"priority": priority,
 				"updated":  iss.Fields.Updated,
+				"assignee": iss.Fields.Assignee.Name,
+				"reporter": iss.Fields.Reporter.Name,
 			},
 		})
 	}
@@ -272,17 +310,46 @@ func (c JiraCollector) ValidateDirective(ctx context.Context, directive userdata
 	return nil
 }
 
-// buildJiraActivityJQL composes the JQL that the directive runs. When the
-// directive supplies its own `query`, it is preserved as a sub-clause and the
-// caller can scope freely (e.g. to a project). When omitted, the default
-// scope is "issues that involve the authenticated user" so the directive
-// behaves like a personal activity feed instead of a global tenant scan.
-func buildJiraActivityJQL(base string, since time.Time) string {
+// buildJiraActivityJQL composes the JQL that the directive runs. The
+// shape is:
+//
+//	[(<user-supplied query>) AND] <scope clause> AND updated >= "<date>" ORDER BY updated DESC
+//
+// The scope clause is:
+//   - ScopeSelf: assignee = currentUser() OR reporter = currentUser()
+//   - ScopeInvolved (default): adds watcher = currentUser()
+//   - ScopeAll: ScopeInvolved plus `project in (P1, P2, ...)` when
+//     followedProjects is non-empty; falls back to ScopeInvolved otherwise.
+//
+// When the user supplies config.query, it is preserved as a sub-clause so
+// the caller can scope freely (project, label, etc.) while the scope
+// expansion still controls which actors count.
+func buildJiraActivityJQL(userQuery string, since time.Time, scope Scope, followedProjects []string) string {
 	date := since.Format("2006-01-02")
-	if strings.TrimSpace(base) == "" {
-		return fmt.Sprintf(`(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= "%s" ORDER BY updated DESC`, date)
+	scopeClause := buildJiraScopeClause(scope, followedProjects)
+	base := strings.TrimSpace(userQuery)
+	if base == "" {
+		return fmt.Sprintf(`%s AND updated >= "%s" ORDER BY updated DESC`, scopeClause, date)
 	}
-	return fmt.Sprintf(`(%s) AND updated >= "%s" ORDER BY updated DESC`, strings.TrimSpace(base), date)
+	return fmt.Sprintf(`(%s) AND %s AND updated >= "%s" ORDER BY updated DESC`, base, scopeClause, date)
+}
+
+func buildJiraScopeClause(scope Scope, followedProjects []string) string {
+	switch scope {
+	case ScopeSelf:
+		return "(assignee = currentUser() OR reporter = currentUser())"
+	case ScopeAll:
+		if len(followedProjects) == 0 {
+			return "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())"
+		}
+		quoted := make([]string, 0, len(followedProjects))
+		for _, p := range followedProjects {
+			quoted = append(quoted, fmt.Sprintf("%q", p))
+		}
+		return fmt.Sprintf("(project in (%s) OR assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())", strings.Join(quoted, ", "))
+	default: // ScopeInvolved / ScopeUnset
+		return "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())"
+	}
 }
 
 func jiraParseUpdated(s string) (time.Time, error) {

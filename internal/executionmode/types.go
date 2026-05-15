@@ -1,13 +1,13 @@
 // Package executionmode defines the declarative ExecutionMode interface that
-// drives a slakkr run. An ExecutionMode bundles up the three properties that
+// drives a slakkr run. An ExecutionMode bundles up the four properties that
 // vary between built-in flows (daily-plan / recent-activity / custom-prompt)
-// and any user-declared flows: a lookback window, an activity formatter, and
-// an LLM prompt. Any property left unset is filled in interactively at
-// runtime via the Resolve function.
+// and any user-declared flows: a lookback window, an activity formatter, an
+// LLM prompt, and a collection Scope. Any property left unset is filled in
+// interactively at runtime via the Resolve function.
 //
-// A fourth field, Scope, is a placeholder for an upcoming "how broadly should
-// collectors gather data" effort. Today it only gates the existing
-// FilterToSelf step in the CLI; collectors do not branch on it yet.
+// Scope describes how broadly each collector should gather data for a run.
+// All three values are honored by the collectors themselves; see Scope below
+// for the canonical semantics.
 package executionmode
 
 import (
@@ -32,15 +32,21 @@ const (
 )
 
 // Scope describes how broadly a collector should gather data for a run.
-// Today only ScopeSelf has observable behavior (gates FilterToSelf in the
-// CLI). The other values are placeholders for collector-side work.
+//
+//   - ScopeSelf: only the configured user's own activity.
+//   - ScopeInvolved: the user's activity plus activity adjacent to their
+//     work (PRs they review, issues they're assigned, branches they've
+//     touched, etc.). This is the default for the built-in execution modes.
+//   - ScopeAll: every signal the collector can reasonably surface within
+//     the time window, broadened via the new `followed_repos` /
+//     `followed_projects` directive config.
 type Scope string
 
 const (
-	ScopeUnset Scope = ""
-	ScopeSelf  Scope = "self"
-	ScopeRepo  Scope = "repo"
-	ScopeAll   Scope = "all"
+	ScopeUnset    Scope = ""
+	ScopeSelf     Scope = "self"
+	ScopeInvolved Scope = "involved"
+	ScopeAll      Scope = "all"
 )
 
 // ExecutionMode is one declaratively-described slakkr run shape. All fields
@@ -123,13 +129,13 @@ func (l Lookback) Validate() error {
 	return nil
 }
 
-// Validate ensures the scope is one of the known placeholder values (the
-// empty string is allowed and means "resolve to the default").
+// Validate ensures the scope is one of the known values (the empty string
+// is allowed and means "resolve to the default").
 func (s Scope) Validate() error {
 	switch s {
-	case ScopeUnset, ScopeSelf, ScopeRepo, ScopeAll:
+	case ScopeUnset, ScopeSelf, ScopeInvolved, ScopeAll:
 		return nil
 	default:
-		return fmt.Errorf("unknown scope %q (expected one of: %s, %s, %s)", string(s), ScopeSelf, ScopeRepo, ScopeAll)
+		return fmt.Errorf("unknown scope %q (expected one of: %s, %s, %s)", string(s), ScopeSelf, ScopeInvolved, ScopeAll)
 	}
 }

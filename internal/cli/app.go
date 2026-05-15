@@ -229,14 +229,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 	progress.Done()
 
-	// Scope==self keeps only the configured user's activity (today's
-	// daily-plan / recent-activity behavior). collector_error rows always
-	// pass through FilterToSelf so failures stay visible. Other scopes
-	// (repo, all) skip the filter; scope-aware collection inside each
-	// collector is a follow-up effort.
-	if resolved.Scope == executionmode.ScopeSelf {
-		statuses = collectors.FilterToSelf(statuses)
-	}
+	// Scope semantics are now honored by the collectors themselves; the
+	// CLI no longer needs to post-filter the aggregated status list.
+	// collectors.FilterToSelf remains exported as a fallback helper for
+	// callers (tests, ad-hoc tooling) that want the old behavior.
 
 	// Per-run provider formatter override: SelectProvider picks formatter
 	// from ai.activity_formatter; ExecutionMode may override it for this

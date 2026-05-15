@@ -45,7 +45,7 @@ func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	if res.LookbackDays != 0 {
 		t.Fatalf("daily-plan LookbackDays should be 0, got %d", res.LookbackDays)
 	}
-	if res.Scope != ScopeSelf {
+	if res.Scope != ScopeInvolved {
 		t.Fatalf("daily-plan scope: %q", res.Scope)
 	}
 }
@@ -109,7 +109,7 @@ func TestResolveCustomPromptAsksForPrompt(t *testing.T) {
 	if res.Instruction != "summarize me" {
 		t.Fatalf("instruction: got %q", res.Instruction)
 	}
-	if res.Scope != ScopeAll {
+	if res.Scope != ScopeInvolved {
 		t.Fatalf("custom-prompt scope: %q", res.Scope)
 	}
 	if len(prompter.calls) != 1 {
@@ -149,7 +149,7 @@ func TestResolveCustomPromptWithoutPrompterErrors(t *testing.T) {
 	}
 }
 
-func TestResolveScopeDefaultsToSelfWhenUnset(t *testing.T) {
+func TestResolveScopeDefaultsToInvolvedWhenUnset(t *testing.T) {
 	mode := ExecutionMode{
 		ID:       "untyped",
 		Lookback: &Lookback{Kind: LookbackKindDays, Days: 3},
@@ -161,8 +161,8 @@ func TestResolveScopeDefaultsToSelfWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Scope != ScopeSelf {
-		t.Fatalf("expected default scope=self, got %q", res.Scope)
+	if res.Scope != ScopeInvolved {
+		t.Fatalf("expected default scope=involved, got %q", res.Scope)
 	}
 }
 
