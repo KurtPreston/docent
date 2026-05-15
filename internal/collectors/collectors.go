@@ -185,6 +185,7 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry.Register("gitea", GiteaCollector{Clock: clock, HTTP: nil})
 	registry.Register("jira", JiraCollector{Clock: clock, HTTP: nil})
 	registry.Register("google-calendar", GoogleCalendarCollector{Clock: clock, HTTP: nil})
+	registry.Register("slack", SlackCollector{Clock: clock, HTTP: nil})
 	return registry
 }
 

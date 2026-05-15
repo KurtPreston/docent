@@ -27,7 +27,7 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Collectors) != 6 {
+	if len(m.Collectors) != 7 {
 		t.Fatalf("collectors: got %d", len(m.Collectors))
 	}
 	var foundFormatter bool

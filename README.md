@@ -175,6 +175,7 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
 - `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.
+- `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [docs/Slack.md](docs/Slack.md) for token setup and required scopes.
 
 ## Layout
 

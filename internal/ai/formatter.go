@@ -213,6 +213,18 @@ func formatSignalLine(s collectors.StatusItem) string {
 			return fmt.Sprintf("%s %s calendar_event: %s (%s)", iso, src, title, dur)
 		}
 		return fmt.Sprintf("%s %s calendar_event: %s", iso, src, title)
+	case "slack_dm", "slack_mention", "slack_sent",
+		"slack_thread_reply", "slack_context", "slack_channel_message":
+		title := strings.TrimSpace(s.Title)
+		author := strings.TrimSpace(s.Author)
+		actor := ""
+		if author != "" {
+			actor = " @" + author
+		}
+		if s.URL != "" {
+			return fmt.Sprintf("%s %s %s%s: %s (%s)", iso, src, kindStr, actor, title, s.URL)
+		}
+		return fmt.Sprintf("%s %s %s%s: %s", iso, src, kindStr, actor, title)
 	default:
 		title := strings.TrimSpace(s.Title)
 		if title == "" {

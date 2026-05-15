@@ -253,6 +253,9 @@
             },
             {
               "$ref": "#/$defs/directive.google-calendar"
+            },
+            {
+              "$ref": "#/$defs/directive.slack"
             }
           ]
         }
@@ -663,6 +666,52 @@
           "required": ["credential_refs"]
         }
       ]
+    },
+    "directive.slack": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "slack",
+          "x-slakkr-default-id": "slack",
+          "x-slakkr-display-name": "Slack"
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "followed_channels": {
+              "type": "string",
+              "x-slakkr-prompt": "Comma-separated channel names (#team) or IDs to include when scope=all",
+              "x-slakkr-setup-skip-prompt": true
+            },
+            "user_id": {
+              "type": "string",
+              "x-slakkr-prompt": "Override Slack user ID (leave empty to resolve via auth.test)",
+              "x-slakkr-setup-skip-prompt": true
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "credential_refs": {
+          "type": "object",
+          "properties": {
+            "token": {
+              "type": "string",
+              "minLength": 1,
+              "x-slakkr-secret": true,
+              "x-slakkr-default": "SLAKKR_SLACK_TOKEN",
+              "x-slakkr-prompt": "Env var for Slack user OAuth token (xoxp-...)"
+            }
+          },
+          "required": ["token"],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["collector", "credential_refs"]
     }
   }
 }
