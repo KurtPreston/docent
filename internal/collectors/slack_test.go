@@ -3,9 +3,11 @@ package collectors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -582,4 +584,337 @@ func TestSlackRegistryRegisters(t *testing.T) {
 		}
 	}
 	t.Fatalf("slack collector not registered; names=%v", reg.Names())
+}
+
+// TestSlackCollectSkipsDeletedAndArchivedDMs guards the request-reduction
+// optimization: DMs with deactivated peers and archived MPIMs should not
+// produce any conversations.history calls.
+func TestSlackCollectSkipsDeletedAndArchivedDMs(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	srv, state := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_DEAD", "is_im": true, "user": "U_GONE", "is_user_deleted": true},
+					{"id": "G_OLD_MPIM", "is_mpim": true, "name": "mpdm-old", "is_archived": true},
+					{"id": "D_LIVE", "is_im": true, "user": "U_PEER"},
+				},
+			})
+		case "conversations.history":
+			return http.StatusOK, slackOK(map[string]any{
+				"messages": []map[string]any{
+					{"type": "message", "user": "U_PEER", "text": "alive", "ts": "1778500000.000000"},
+				},
+			})
+		case "search.messages":
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		case "users.info":
+			return http.StatusOK, slackOK(map[string]any{
+				"user": map[string]any{"id": req.Query.Get("user"), "name": "user-" + req.Query.Get("user")},
+			})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyChans := map[string]int{}
+	for _, r := range state.snapshot() {
+		if pathFor(r.Path) != "conversations.history" {
+			continue
+		}
+		historyChans[r.Query.Get("channel")]++
+	}
+	if historyChans["D_DEAD"] != 0 {
+		t.Errorf("expected zero history calls for deactivated-peer DM, got %d", historyChans["D_DEAD"])
+	}
+	if historyChans["G_OLD_MPIM"] != 0 {
+		t.Errorf("expected zero history calls for archived MPIM, got %d", historyChans["G_OLD_MPIM"])
+	}
+	if historyChans["D_LIVE"] != 1 {
+		t.Errorf("expected exactly one history call for live DM, got %d", historyChans["D_LIVE"])
+	}
+	var dm *StatusItem
+	for i := range items {
+		if items[i].Kind == "slack_dm" {
+			dm = &items[i]
+		}
+	}
+	if dm == nil {
+		t.Fatalf("expected slack_dm item from live DM, got items=%+v", items)
+	}
+}
+
+// TestSlackCallAPIRetriesOn429 guards the rate-limit recovery path:
+// a transient 429 is followed by a success and the caller never sees the
+// failure.
+func TestSlackCallAPIRetriesOn429(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	var (
+		mu          sync.Mutex
+		historyHits int
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_DM1", "is_im": true, "user": "U_PEER"},
+				},
+			})
+		case "conversations.history":
+			mu.Lock()
+			historyHits++
+			n := historyHits
+			mu.Unlock()
+			if n == 1 {
+				// First attempt: simulate Slack throttling us. Use a
+				// Retry-After of 0 seconds so the test doesn't wait.
+				return http.StatusTooManyRequests, map[string]any{"ok": false, "error": "ratelimited"}
+			}
+			return http.StatusOK, slackOK(map[string]any{
+				"messages": []map[string]any{
+					{"type": "message", "user": "U_PEER", "text": "after retry", "ts": "1778500000.000000"},
+				},
+			})
+		case "search.messages":
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		case "users.info":
+			return http.StatusOK, slackOK(map[string]any{
+				"user": map[string]any{"id": req.Query.Get("user"), "name": "user-" + req.Query.Get("user")},
+			})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	})
+	if err != nil {
+		t.Fatalf("expected transparent retry to mask the 429, got error: %v", err)
+	}
+	mu.Lock()
+	gotHits := historyHits
+	mu.Unlock()
+	if gotHits != 2 {
+		t.Errorf("expected 2 conversations.history calls (429 + retry), got %d", gotHits)
+	}
+	var dm *StatusItem
+	for i := range items {
+		if items[i].Kind == "slack_dm" {
+			dm = &items[i]
+		}
+	}
+	if dm == nil {
+		t.Fatalf("expected slack_dm after retry, got items=%+v", items)
+	}
+}
+
+// TestSlackCallAPIGivesUpAfterMaxRetries guards the upper bound on the
+// retry loop: an endpoint that always returns 429 must eventually
+// surface a useful error instead of looping forever.
+//
+// The exponential backoff (1+2+4+8 seconds) means this test sleeps ~15s
+// of real time on the failure path, so it skips under `go test -short`.
+func TestSlackCallAPIGivesUpAfterMaxRetries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip: backoff schedule sleeps ~15s of real time")
+	}
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	var (
+		mu          sync.Mutex
+		historyHits int
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_DM1", "is_im": true, "user": "U_PEER"},
+				},
+			})
+		case "conversations.history":
+			mu.Lock()
+			historyHits++
+			mu.Unlock()
+			return http.StatusTooManyRequests, map[string]any{"ok": false, "error": "ratelimited"}
+		case "search.messages":
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	_, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	})
+	if err == nil {
+		t.Fatalf("expected a surfaced 429 after retries are exhausted")
+	}
+	if !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "after") {
+		t.Errorf("expected error to mention 429 and retry count, got: %v", err)
+	}
+	mu.Lock()
+	gotHits := historyHits
+	mu.Unlock()
+	// 1 initial + slackMaxRetries retries.
+	want := 1 + slackMaxRetries
+	if gotHits != want {
+		t.Errorf("expected %d total attempts (1 + %d retries), got %d", want, slackMaxRetries, gotHits)
+	}
+}
+
+// TestSlackCollectFanOutBoundedByConcurrency guards both the parallelism
+// (no requests are dropped or duplicated) and the worker-count bound
+// (in-flight requests never exceed history_concurrency).
+func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+	const dmCount = 12
+	const concurrency = 3
+
+	channels := make([]map[string]any, 0, dmCount)
+	for i := 0; i < dmCount; i++ {
+		channels = append(channels, map[string]any{
+			"id":   fmt.Sprintf("D_PEER%02d", i),
+			"is_im": true,
+			"user": fmt.Sprintf("U_PEER%02d", i),
+		})
+	}
+
+	var (
+		mu      sync.Mutex
+		inFlight int
+		peakInFlight int
+		seen    = map[string]int{}
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{"channels": channels})
+		case "conversations.history":
+			mu.Lock()
+			inFlight++
+			if inFlight > peakInFlight {
+				peakInFlight = inFlight
+			}
+			ch := req.Query.Get("channel")
+			seen[ch]++
+			mu.Unlock()
+			// Hold the handler open briefly so concurrent workers
+			// actually overlap; otherwise even single-threaded code
+			// would race through fast enough to look "concurrent".
+			time.Sleep(10 * time.Millisecond)
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+			return http.StatusOK, slackOK(map[string]any{"messages": []map[string]any{}})
+		case "search.messages":
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	d := newSlackDirective()
+	d.Config["history_concurrency"] = strconv.Itoa(concurrency)
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	if _, err := c.Collect(context.Background(), d, &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 0; i < dmCount; i++ {
+		id := fmt.Sprintf("D_PEER%02d", i)
+		if seen[id] != 1 {
+			t.Errorf("expected exactly one history call for %s, got %d", id, seen[id])
+		}
+	}
+	if peakInFlight > concurrency {
+		t.Errorf("peak in-flight history calls = %d, want <= %d (history_concurrency)", peakInFlight, concurrency)
+	}
+	if peakInFlight < 2 {
+		t.Errorf("expected at least 2 concurrent history calls, peak=%d (fan-out not actually parallel?)", peakInFlight)
+	}
+}
+
+func TestSlackHistoryConcurrencyParsing(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want int
+	}{
+		{"", defaultHistoryConcurrency},
+		{"   ", defaultHistoryConcurrency},
+		{"not-a-number", defaultHistoryConcurrency},
+		{"0", defaultHistoryConcurrency},
+		{"-3", defaultHistoryConcurrency},
+		{"1", 1},
+		{"8", 8},
+		{"9999", maxHistoryConcurrency},
+	}
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			d := newSlackDirective()
+			d.Config["history_concurrency"] = tc.raw
+			if got := historyConcurrency(d); got != tc.want {
+				t.Errorf("historyConcurrency(%q) = %d want %d", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSlackRetryAfterParsing(t *testing.T) {
+	cases := []struct {
+		header  string
+		attempt int
+		want    time.Duration
+	}{
+		{"", 0, time.Second},
+		{"", 1, 2 * time.Second},
+		{"", 2, 4 * time.Second},
+		{"", 30, slackMaxRetryAfter}, // exponential overflow clamped
+		{"  ", 0, time.Second},
+		{"abc", 0, time.Second},
+		{"0", 0, time.Second}, // zero falls back to backoff
+		{"3", 0, 3 * time.Second},
+		{"60", 0, slackMaxRetryAfter}, // header value clamped
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("header=%q,attempt=%d", tc.header, tc.attempt), func(t *testing.T) {
+			if got := slackRetryAfter(tc.header, tc.attempt); got != tc.want {
+				t.Errorf("slackRetryAfter(%q, %d) = %s want %s", tc.header, tc.attempt, got, tc.want)
+			}
+		})
+	}
 }

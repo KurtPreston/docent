@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/userdata"
@@ -34,6 +35,29 @@ const slackTokenScopesRemediation = "ensure the Slack app's user-token scopes in
 	"search:read, users:read, channels:history, channels:read, " +
 	"groups:history, groups:read, im:history, im:read, " +
 	"mpim:history, mpim:read"
+
+// Tunables that bound how aggressively the collector talks to Slack.
+// These intentionally live as package constants so the test suite can
+// observe the same numbers the collector uses at runtime.
+const (
+	// defaultHistoryConcurrency is the worker count used to fan out
+	// per-channel conversations.history calls. Overridable per-directive
+	// via Config["history_concurrency"]. Tier-3 endpoints document
+	// ~50 req/min, so 4 in-flight workers leaves plenty of headroom for
+	// the collector to share with mention/sent/replies traffic.
+	defaultHistoryConcurrency = 4
+	// maxHistoryConcurrency caps user-supplied overrides so a typo
+	// can't burst hundreds of requests/sec into Slack and trigger a
+	// long workspace-wide cooldown.
+	maxHistoryConcurrency = 16
+	// slackMaxRetries is how many times callAPI will sleep on a 429
+	// before giving up and surfacing the rate-limit error.
+	slackMaxRetries = 4
+	// slackMaxRetryAfter caps any single Retry-After sleep; Slack can
+	// occasionally return very large values, and we'd rather fail fast
+	// than make the user think the CLI is hung.
+	slackMaxRetryAfter = 30 * time.Second
+)
 
 func (c SlackCollector) client() *http.Client {
 	if c.HTTP != nil {
@@ -69,15 +93,17 @@ type slackAuthTest struct {
 }
 
 type slackChannel struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name,omitempty"`
-	IsIM               bool   `json:"is_im,omitempty"`
-	IsMPIM             bool   `json:"is_mpim,omitempty"`
-	IsGroup            bool   `json:"is_group,omitempty"`
-	IsPrivate          bool   `json:"is_private,omitempty"`
-	IsChannel          bool   `json:"is_channel,omitempty"`
-	User               string `json:"user,omitempty"` // peer for is_im
-	Members            int    `json:"num_members,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	IsIM          bool   `json:"is_im,omitempty"`
+	IsMPIM        bool   `json:"is_mpim,omitempty"`
+	IsGroup       bool   `json:"is_group,omitempty"`
+	IsPrivate     bool   `json:"is_private,omitempty"`
+	IsChannel     bool   `json:"is_channel,omitempty"`
+	IsArchived    bool   `json:"is_archived,omitempty"`
+	IsUserDeleted bool   `json:"is_user_deleted,omitempty"` // peer in is_im has been deactivated
+	User          string `json:"user,omitempty"`            // peer for is_im
+	Members       int    `json:"num_members,omitempty"`
 }
 
 type slackConversationsList struct {
@@ -251,12 +277,35 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 	if err != nil {
 		return nil, fmt.Errorf("slack conversations.list (dm): %w", err)
 	}
+	// Skip IMs whose peer user has been deactivated and archived MPIMs:
+	// they cannot have new messages in the window, so calling
+	// conversations.history on them is pure overhead (and contributes
+	// to the per-workspace rate-limit budget). For a typical user with
+	// hundreds of historical DMs this is often the single biggest cut.
+	activeDMs := dmChannels[:0:0]
+	skipped := 0
 	for _, ch := range dmChannels {
-		msgs, err := c.fetchHistorySince(ctx, token, ch.ID, since, now, opts, directive.ID)
-		if err != nil {
-			return nil, fmt.Errorf("slack conversations.history %s: %w", ch.ID, err)
+		if ch.IsArchived {
+			skipped++
+			continue
 		}
-		for _, m := range msgs {
+		if ch.IsIM && ch.IsUserDeleted {
+			skipped++
+			continue
+		}
+		activeDMs = append(activeDMs, ch)
+	}
+	if skipped > 0 {
+		loggerFor(opts, directive.ID).Note(
+			"slack: skipping %d DM/MPIM channel(s) with deactivated peer or archived state", skipped,
+		)
+	}
+	dmResults, err := c.fanOutHistorySince(ctx, token, activeDMs, since, now, opts, directive)
+	if err != nil {
+		return nil, err
+	}
+	for i, ch := range activeDMs {
+		for _, m := range dmResults[i] {
 			if m.User == userID {
 				continue // user's own messages are reported via "sent" path
 			}
@@ -392,16 +441,20 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 					named = append(named, ch.ID)
 				}
 			}
+			followedChans := make([]slackChannel, 0, len(named))
 			for _, chID := range named {
 				ch, ok := channelCache.byID(chID)
 				if !ok {
 					ch = slackChannel{ID: chID, Name: chID}
 				}
-				msgs, err := c.fetchHistorySince(ctx, token, chID, since, now, opts, directive.ID)
-				if err != nil {
-					return nil, fmt.Errorf("slack conversations.history %s: %w", chID, err)
-				}
-				for _, m := range msgs {
+				followedChans = append(followedChans, ch)
+			}
+			followedResults, err := c.fanOutHistorySince(ctx, token, followedChans, since, now, opts, directive)
+			if err != nil {
+				return nil, err
+			}
+			for i, ch := range followedChans {
+				for _, m := range followedResults[i] {
 					add(collected{
 						message: m, channel: ch,
 						kind:   "slack_channel_message",
@@ -552,6 +605,101 @@ func (c SlackCollector) fetchAllConversations(ctx context.Context, token, types 
 	}
 }
 
+// fanOutHistorySince fetches conversations.history for each channel in
+// `channels` using a bounded worker pool. Results[i] always corresponds to
+// channels[i]; an empty slice means the channel had no messages in the
+// window. The first error wins: on failure, the context is cancelled so
+// the remaining workers unblock quickly and we don't keep talking to a
+// rate-limited Slack tenant.
+//
+// Concurrency defaults to defaultHistoryConcurrency, overridable per
+// directive via Config["history_concurrency"] (clamped to [1,
+// maxHistoryConcurrency] so a typo cannot DoS the workspace).
+func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, channels []slackChannel, since, now time.Time, opts *CollectOpts, directive userdata.Directive) ([][]slackMessage, error) {
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	results := make([][]slackMessage, len(channels))
+	workers := historyConcurrency(directive)
+	if workers > len(channels) {
+		workers = len(channels)
+	}
+
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type job struct {
+		index   int
+		channel slackChannel
+	}
+	jobs := make(chan job)
+	var (
+		wg      sync.WaitGroup
+		errOnce sync.Once
+		firstEr error
+	)
+	recordErr := func(err error) {
+		errOnce.Do(func() {
+			firstEr = err
+			cancel()
+		})
+	}
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if jobCtx.Err() != nil {
+					return
+				}
+				msgs, err := c.fetchHistorySince(jobCtx, token, j.channel.ID, since, now, opts, directive.ID)
+				if err != nil {
+					// Suppress context-cancelled noise: that's just
+					// "another worker hit an error and we bailed".
+					if jobCtx.Err() == nil {
+						recordErr(fmt.Errorf("slack conversations.history %s: %w", j.channel.ID, err))
+					}
+					return
+				}
+				results[j.index] = msgs
+			}
+		}()
+	}
+
+dispatch:
+	for i, ch := range channels {
+		select {
+		case <-jobCtx.Done():
+			break dispatch
+		case jobs <- job{index: i, channel: ch}:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstEr != nil {
+		return nil, firstEr
+	}
+	return results, nil
+}
+
+// historyConcurrency reads Config["history_concurrency"] and clamps it to
+// the supported range. Missing/empty/zero values fall back to the default.
+func historyConcurrency(directive userdata.Directive) int {
+	raw := strings.TrimSpace(directive.Config["history_concurrency"])
+	if raw == "" {
+		return defaultHistoryConcurrency
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultHistoryConcurrency
+	}
+	if n > maxHistoryConcurrency {
+		return maxHistoryConcurrency
+	}
+	return n
+}
+
 func (c SlackCollector) fetchHistorySince(ctx context.Context, token, channelID string, since, now time.Time, opts *CollectOpts, directiveID string) ([]slackMessage, error) {
 	var out []slackMessage
 	cursor := ""
@@ -688,48 +836,120 @@ func (c SlackCollector) fetchUser(ctx context.Context, token, userID string, opt
 // callAPI issues a Slack Web API request and unmarshals into out. Slack
 // returns a 200 response with `ok:false` and a textual `error` field on
 // auth/scope failures, so we surface those as Go errors here.
+//
+// 429 responses are retried transparently up to slackMaxRetries times,
+// honoring the Retry-After header (capped at slackMaxRetryAfter so a
+// runaway value doesn't hang the run). When all retries are exhausted
+// the final 429 is returned as an error like the original behavior.
 func (c SlackCollector) callAPI(ctx context.Context, token, method, endpoint string, params url.Values, out any, opts *CollectOpts, directiveID string) error {
 	full := c.baseURL() + "/" + strings.TrimLeft(endpoint, "/")
 	if params != nil && method == http.MethodGet {
 		full += "?" + params.Encode()
 	}
-	var body io.Reader
+	encodedBody := ""
 	if method != http.MethodGet && params != nil {
-		body = strings.NewReader(params.Encode())
+		encodedBody = params.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, full, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	if method != http.MethodGet {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	}
-	res, raw, err := doAndReadHTTP(c.client(), req, 8<<20, opts, directiveID)
-	if err != nil {
-		return err
-	}
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		snippet := strings.TrimSpace(string(raw))
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
+
+	var lastStatus string
+	var lastSnippet string
+	for attempt := 0; attempt <= slackMaxRetries; attempt++ {
+		var body io.Reader
+		if encodedBody != "" {
+			body = strings.NewReader(encodedBody)
 		}
-		return fmt.Errorf("slack %s %s: %s", endpoint, res.Status, snippet)
+		req, err := http.NewRequestWithContext(ctx, method, full, body)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+		if method != http.MethodGet {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		res, raw, err := doAndReadHTTP(c.client(), req, 8<<20, opts, directiveID)
+		if err != nil {
+			return err
+		}
+		if res.StatusCode == http.StatusTooManyRequests {
+			lastStatus = res.Status
+			lastSnippet = trimSlackSnippet(raw)
+			if attempt == slackMaxRetries {
+				return fmt.Errorf("slack %s %s (after %d retries): %s", endpoint, res.Status, slackMaxRetries, lastSnippet)
+			}
+			wait := slackRetryAfter(res.Header.Get("Retry-After"), attempt)
+			loggerFor(opts, directiveID).Note(
+				"slack %s: rate limited, sleeping %s before retry (attempt %d/%d)",
+				endpoint, wait, attempt+1, slackMaxRetries,
+			)
+			if err := sleepCtx(ctx, wait); err != nil {
+				return err
+			}
+			continue
+		}
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			return fmt.Errorf("slack %s %s: %s", endpoint, res.Status, trimSlackSnippet(raw))
+		}
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("parse slack %s: %w", endpoint, err)
+		}
+		// Every response wraps slackResponseMeta; reflect across the structure
+		// by re-decoding into the meta type for the OK/error fields.
+		var meta slackResponseMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return fmt.Errorf("parse slack %s meta: %w", endpoint, err)
+		}
+		if !meta.OK {
+			return fmt.Errorf("slack %s: %s", endpoint, strings.TrimSpace(meta.Error))
+		}
+		return nil
 	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("parse slack %s: %w", endpoint, err)
+	// Unreachable: the loop either returns inside or retries on 429.
+	return fmt.Errorf("slack %s %s: %s", endpoint, lastStatus, lastSnippet)
+}
+
+// slackRetryAfter parses Slack's Retry-After header (seconds), falling
+// back to an exponential backoff when the header is absent or malformed.
+// All values are clamped to [1s, slackMaxRetryAfter] so a single retry
+// never blocks the run for an unbounded period.
+func slackRetryAfter(header string, attempt int) time.Duration {
+	if v := strings.TrimSpace(header); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			d := time.Duration(secs) * time.Second
+			if d > slackMaxRetryAfter {
+				return slackMaxRetryAfter
+			}
+			return d
+		}
 	}
-	// Every response wraps slackResponseMeta; reflect across the structure
-	// by re-decoding into the meta type for the OK/error fields.
-	var meta slackResponseMeta
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		return fmt.Errorf("parse slack %s meta: %w", endpoint, err)
+	// Exponential backoff: 1s, 2s, 4s, 8s ... capped.
+	d := time.Second << attempt
+	if d <= 0 || d > slackMaxRetryAfter {
+		return slackMaxRetryAfter
 	}
-	if !meta.OK {
-		return fmt.Errorf("slack %s: %s", endpoint, strings.TrimSpace(meta.Error))
+	return d
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
 	}
-	return nil
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func trimSlackSnippet(raw []byte) string {
+	snippet := strings.TrimSpace(string(raw))
+	if len(snippet) > 200 {
+		snippet = snippet[:200] + "..."
+	}
+	return snippet
 }
 
 // --- helpers ---

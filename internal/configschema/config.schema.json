@@ -688,6 +688,12 @@
               "type": "string",
               "x-slakkr-prompt": "Override Slack user ID (leave empty to resolve via auth.test)",
               "x-slakkr-setup-skip-prompt": true
+            },
+            "history_concurrency": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "x-slakkr-prompt": "How many DM/MPIM history requests to run in parallel (default 4, max 16)",
+              "x-slakkr-setup-skip-prompt": true
             }
           },
           "additionalProperties": {

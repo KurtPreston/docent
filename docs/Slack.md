@@ -92,9 +92,40 @@ scopes resolved.
     followed_channels: "#team-foo, #team-bar"
     # Optional. Override the user_id resolved from auth.test (rarely needed).
     user_id: ""
+    # Optional. How many DM/MPIM conversations.history requests to issue
+    # in parallel (default 4, capped at 16). Bump to ~8-10 if your daily
+    # plan still feels slow despite skipping inactive DMs; the collector
+    # transparently waits on Retry-After if Slack starts rate-limiting.
+    history_concurrency: "4"
   credential_refs:
     token: SLAKKR_SLACK_TOKEN
 ```
+
+## Request shape & throttling
+
+`scope=involved` (the default) issues:
+
+1. One `auth.test` call to resolve the workspace + user identity.
+2. One `conversations.list?types=im,mpim` cursor walk to enumerate DMs
+   and group DMs you can see.
+3. One `conversations.history` per remaining DM/MPIM channel, fanned out
+   across `history_concurrency` workers. DMs whose peer user has been
+   deactivated (`is_user_deleted: true`) and any archived channels are
+   skipped before this fan-out, which on long-lived accounts usually
+   eliminates the majority of dead channels.
+4. Two `search.messages` calls — one for `@me` mentions and one for your
+   sent messages.
+5. One `conversations.replies` per unique thread you posted in (involved
+   tier), plus two non-inclusive `conversations.history` calls per sent
+   message for the 3-before / 3-after context window.
+6. One `users.info` per distinct unknown author, best-effort (skipped on
+   failure so a rate-limited lookup doesn't drop the message).
+
+If Slack responds with `429 Too Many Requests`, every Slack call now
+retries up to 4 times, honoring the `Retry-After` header (capped at 30s
+per sleep) and falling back to exponential backoff when the header is
+absent. The wait is logged to `<run>/slack.log` as a `note` line so you
+can see when throttling kicked in.
 
 `scope: all` only collects extra messages when `config.followed_channels`
 is non-empty. Without it, `all` behaves like `involved` for this
