@@ -50,7 +50,20 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 	currentUser := strings.ToLower(strings.TrimSpace(currentOSUsername()))
 	var out []StatusItem
 	commitTimes := map[string]time.Time{}
-	for _, abs := range dirs {
+	// One unit of progress per repo. This is by far the biggest
+	// wall-clock contributor for users with sizable code_home
+	// directories, so a steady "47/170" bar is much more useful than
+	// the indefinite spinner we showed before.
+	totalDirs := len(dirs)
+	for i, abs := range dirs {
+		reportProgress(opts, DirectiveProgress{
+			DirectiveID: directive.ID,
+			Description: directive.Name,
+			Status:      "running",
+			Detail:      fmt.Sprintf("scanning %s", filepath.Base(abs)),
+			Completed:   i,
+			Total:       totalDirs,
+		})
 		// A freshly-initialised repo (e.g. `git init` with no commits) makes
 		// `git log --all` / `git reflog` exit 128 with "your current branch
 		// '<name>' does not have any commits yet". Treat that as "nothing to

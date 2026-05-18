@@ -632,11 +632,42 @@ func (t *directiveProgressTable) renderLocked() {
 	if t.interactive && t.renderedLines > 0 {
 		fmt.Fprintf(t.out, "\x1b[%dA", t.renderedLines)
 	}
+	// Only render a Progress column when at least one collector has
+	// reported a denominator. Keeps the table compact in the
+	// degenerate case where nothing emits progress (e.g. tests with
+	// fake collectors) and lines up bar widths so columns stay aligned
+	// across rows.
+	showBars := false
+	for _, id := range t.order {
+		if t.rows[id].Total > 0 {
+			showBars = true
+			break
+		}
+	}
 	t.printTableLine("Collectors")
-	t.printTableLine("Indicator | Task Description | Status")
+	if showBars {
+		t.printTableLine("Indicator | Task Description | Progress | Status")
+	} else {
+		t.printTableLine("Indicator | Task Description | Status")
+	}
 	for _, id := range t.order {
 		row := t.rows[id]
-		t.printTableLine(fmt.Sprintf("%s | %s | %s", t.statusIcon(row.Status), row.Description, t.statusLabel(row)))
+		if showBars {
+			t.printTableLine(fmt.Sprintf(
+				"%s | %s | %s | %s",
+				t.statusIcon(row.Status),
+				row.Description,
+				t.progressBar(row),
+				t.statusLabel(row),
+			))
+		} else {
+			t.printTableLine(fmt.Sprintf(
+				"%s | %s | %s",
+				t.statusIcon(row.Status),
+				row.Description,
+				t.statusLabel(row),
+			))
+		}
 	}
 	if !t.interactive {
 		fmt.Fprintln(t.out)
@@ -650,6 +681,47 @@ func (t *directiveProgressTable) printTableLine(line string) {
 		return
 	}
 	fmt.Fprintf(t.out, "\x1b[2K\r%s\n", line)
+}
+
+// progressBarWidth is the printable cell width of a rendered bar
+// (filled+empty glyphs). The same width is used for every row so the
+// "| Status" column stays vertically aligned regardless of the
+// underlying completed/total numbers.
+const progressBarWidth = 16
+
+// progressBar renders a fixed-width unicode bar plus a "(done/total)"
+// suffix when the collector reported a denominator. Rows without a
+// denominator yield an empty string so the caller can still print the
+// cell at the same width (padding handled by progressCell).
+func (t *directiveProgressTable) progressBar(p collectors.DirectiveProgress) string {
+	if p.Total <= 0 {
+		// Reserve the column width with whitespace so columns line up.
+		return strings.Repeat(" ", progressBarWidth+len(" (?/?)"))
+	}
+	completed := p.Completed
+	if completed < 0 {
+		completed = 0
+	}
+	if completed > p.Total {
+		completed = p.Total
+	}
+	filled := (completed * progressBarWidth) / p.Total
+	if filled > progressBarWidth {
+		filled = progressBarWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", progressBarWidth-filled)
+	suffix := fmt.Sprintf(" (%d/%d)", completed, p.Total)
+	if t.colorEnabled {
+		switch p.Status {
+		case "done":
+			bar = colorize(bar, ansiGreen)
+		case "error":
+			bar = colorize(bar, ansiRed)
+		default:
+			bar = colorize(bar, ansiYellow)
+		}
+	}
+	return bar + suffix
 }
 
 func (t *directiveProgressTable) statusIcon(status string) string {

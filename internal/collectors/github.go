@@ -101,16 +101,37 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 	followedRepos := parseFollowedList(directive.Config["followed_repos"])
 	searches, commitSearches := buildGitHubSearchSpecs(scope, user, dateStr, followedRepos)
 
+	// One unit of progress per `gh search` invocation. Each issues/prs
+	// search is a separate process spawn (a few hundred ms on a warm
+	// cache, a few seconds otherwise) so a step-by-step counter is a
+	// significantly better signal than the indefinite spinner.
+	totalSteps := len(searches) + len(commitSearches)
+	completed := 0
+	emit := func(detail string) {
+		reportProgress(opts, DirectiveProgress{
+			DirectiveID: directive.ID,
+			Description: directive.Name,
+			Status:      "running",
+			Detail:      detail,
+			Completed:   completed,
+			Total:       totalSteps,
+		})
+	}
+
 	var items []StatusItem
 	for _, spec := range searches {
+		emit(fmt.Sprintf("search %s", spec.itemKind))
 		batch, err := runGitHubSearch(ctx, env, spec, directive, user, host, since, now, opts)
+		completed++
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, batch...)
 	}
 	for _, spec := range commitSearches {
+		emit(fmt.Sprintf("search %s", spec.itemKind))
 		batch, err := runGitHubCommitSearch(ctx, env, spec, directive, user, host, since, now, opts)
+		completed++
 		if err != nil {
 			return nil, err
 		}

@@ -181,6 +181,24 @@ type DirectiveProgress struct {
 	Description string
 	Status      string
 	Detail      string
+	// Completed and Total describe optional per-collector progress. When
+	// Total > 0 the CLI renders a progress bar (Completed / Total);
+	// when zero, only Status and Detail are surfaced. Collectors are
+	// free to revise Total upward mid-run (e.g. when a new work phase
+	// adds units the collector didn't know about up front).
+	Completed int
+	Total     int
+}
+
+// reportProgress is the package-internal helper collectors call to push
+// a DirectiveProgress update through opts.OnDirectiveUpdate. It is a
+// no-op when no callback is wired in, so collectors don't have to
+// nil-check at every emission site.
+func reportProgress(opts *CollectOpts, p DirectiveProgress) {
+	if opts == nil || opts.OnDirectiveUpdate == nil {
+		return
+	}
+	opts.OnDirectiveUpdate(p)
 }
 
 // Collector gathers status items for events since opts.Since through window end.
@@ -352,24 +370,20 @@ func (r *Registry) Validate(ctx context.Context, directives []userdata.Directive
 
 func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, opts *CollectOpts) []StatusItem {
 	collector := r.collectors[d.Collector]
-	if opts != nil && opts.OnDirectiveUpdate != nil {
-		opts.OnDirectiveUpdate(DirectiveProgress{
-			DirectiveID: d.ID,
-			Description: d.Name,
-			Status:      "running",
-			Detail:      "collecting",
-		})
-	}
+	reportProgress(opts, DirectiveProgress{
+		DirectiveID: d.ID,
+		Description: d.Name,
+		Status:      "running",
+		Detail:      "starting",
+	})
 	items, err := collector.Collect(ctx, d, opts)
 	if err != nil {
-		if opts != nil && opts.OnDirectiveUpdate != nil {
-			opts.OnDirectiveUpdate(DirectiveProgress{
-				DirectiveID: d.ID,
-				Description: d.Name,
-				Status:      "error",
-				Detail:      err.Error(),
-			})
-		}
+		reportProgress(opts, DirectiveProgress{
+			DirectiveID: d.ID,
+			Description: d.Name,
+			Status:      "error",
+			Detail:      err.Error(),
+		})
 		return []StatusItem{{
 			DirectiveID: d.ID,
 			Source:      d.Collector,
@@ -381,13 +395,17 @@ func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, o
 			IsSelf:      true,
 		}}
 	}
-	if opts != nil && opts.OnDirectiveUpdate != nil {
-		opts.OnDirectiveUpdate(DirectiveProgress{
-			DirectiveID: d.ID,
-			Description: d.Name,
-			Status:      "done",
-			Detail:      fmt.Sprintf("%d item(s)", len(items)),
-		})
-	}
+	// On success, fill the progress bar (Completed == Total) so the
+	// final render shows a full bar even for collectors that never
+	// emitted intermediate progress with a denominator. The item count
+	// remains the user-visible detail.
+	reportProgress(opts, DirectiveProgress{
+		DirectiveID: d.ID,
+		Description: d.Name,
+		Status:      "done",
+		Detail:      fmt.Sprintf("%d item(s)", len(items)),
+		Completed:   1,
+		Total:       1,
+	})
 	return items
 }

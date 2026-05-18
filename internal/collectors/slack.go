@@ -216,6 +216,96 @@ type slackSearchMessages struct {
 	} `json:"messages"`
 }
 
+// slackProgress tracks the rolling Completed/Total denominator the
+// Slack collector pushes through opts.OnDirectiveUpdate. Slack does
+// most of its wall-clock work fanning out conversations.history calls
+// across hundreds of DMs and (in involved/all scopes) threads, so the
+// denominator is the union of every per-channel/per-thread work unit
+// the collector knows about at any moment. New phases call AddUnits
+// to extend Total; finished units call Done to advance Completed.
+//
+// The tracker is safe for concurrent use because the history fan-out
+// worker pool calls Done from multiple goroutines at once.
+type slackProgress struct {
+	opts        *CollectOpts
+	directiveID string
+	description string
+	mu          sync.Mutex
+	completed   int
+	total       int
+	stage       string
+}
+
+func newSlackProgress(opts *CollectOpts, directive userdata.Directive) *slackProgress {
+	return &slackProgress{
+		opts:        opts,
+		directiveID: directive.ID,
+		description: directive.Name,
+	}
+}
+
+// SetStage replaces the visible Detail label (e.g. "DMs", "threads",
+// "followed channels"). Numbers are unchanged so the bar continues
+// moving forward.
+func (p *slackProgress) SetStage(stage string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.stage = stage
+	p.emitLocked()
+	p.mu.Unlock()
+}
+
+// AddUnits grows the denominator. Used at the start of each fan-out
+// phase whose size is known.
+func (p *slackProgress) AddUnits(n int) {
+	if p == nil || n <= 0 {
+		return
+	}
+	p.mu.Lock()
+	p.total += n
+	p.emitLocked()
+	p.mu.Unlock()
+}
+
+// Done advances the numerator by one finished work unit. Safe to call
+// from any worker goroutine.
+func (p *slackProgress) Done() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.completed++
+	if p.completed > p.total {
+		// Defensive: never let the bar overshoot if a caller forgot
+		// to AddUnits up-front. Bumping Total here keeps the bar at
+		// or below 100%.
+		p.total = p.completed
+	}
+	p.emitLocked()
+	p.mu.Unlock()
+}
+
+func (p *slackProgress) emitLocked() {
+	detail := p.stage
+	if p.total > 0 {
+		if detail == "" {
+			detail = fmt.Sprintf("%d/%d", p.completed, p.total)
+		} else {
+			detail = fmt.Sprintf("%s %d/%d", detail, p.completed, p.total)
+		}
+	}
+	reportProgress(p.opts, DirectiveProgress{
+		DirectiveID: p.directiveID,
+		Description: p.description,
+		Status:      "running",
+		Detail:      detail,
+		Completed:   p.completed,
+		Total:       p.total,
+	})
+}
+
 // Collect orchestrates the Slack Web API calls required by the resolved
 // scope and returns a deduplicated slice of StatusItems.
 //
@@ -252,6 +342,8 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		now = opts.windowEnd(c.Clock)
 	}
 	scope := opts.EffectiveScope()
+	progress := newSlackProgress(opts, directive)
+	progress.SetStage("auth")
 
 	auth, err := c.callAuthTest(ctx, token, opts, directive.ID)
 	if err != nil {
@@ -313,6 +405,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 
 	// --- self-tier signals (always run) ---
 
+	progress.SetStage("listing DMs")
 	dmChannels, err := c.fetchAllConversations(ctx, token, "im,mpim", channelCache, opts, directive.ID)
 	if err != nil {
 		return nil, fmt.Errorf("slack conversations.list (dm): %w", err)
@@ -340,7 +433,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			"slack: skipping %d DM/MPIM channel(s) with deactivated peer or archived state", skipped,
 		)
 	}
-	dmResults, err := c.fanOutHistorySince(ctx, token, activeDMs, since, now, opts, directive)
+	progress.SetStage("DM history")
+	progress.AddUnits(len(activeDMs))
+	dmResults, err := c.fanOutHistorySince(ctx, token, activeDMs, since, now, opts, directive, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -355,6 +450,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		}
 	}
 
+	progress.SetStage("mentions")
 	mentionMatches, err := c.fetchSearchMessages(ctx, token, "<@"+userID+"> after:"+slackAfterDate(since), opts, directive.ID)
 	if err != nil {
 		return nil, fmt.Errorf("slack search.messages (mentions): %w", err)
@@ -372,6 +468,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		})
 	}
 
+	progress.SetStage("sent")
 	sentMatches, err := c.fetchSearchMessages(ctx, token, "from:<@"+userID+"> after:"+slackAfterDate(since), opts, directive.ID)
 	if err != nil {
 		return nil, fmt.Errorf("slack search.messages (sent): %w", err)
@@ -405,6 +502,24 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		// (channel, thread_ts) pair from the sent-messages set.
 		type threadKey struct{ channel, ts string }
 		seenThreads := map[threadKey]struct{}{}
+		// Pre-count unique thread fetches so the bar denominator
+		// grows once (in AddUnits) rather than on every iteration.
+		uniqueThreads := 0
+		for _, ref := range selfRefs {
+			ts := ref.thread
+			if ts == "" {
+				ts = ref.ts
+			}
+			tk := threadKey{channel: ref.channel.ID, ts: ts}
+			if _, ok := seenThreads[tk]; !ok {
+				seenThreads[tk] = struct{}{}
+				uniqueThreads++
+			}
+		}
+		// Reset for the actual iteration below.
+		seenThreads = map[threadKey]struct{}{}
+		progress.SetStage("threads")
+		progress.AddUnits(uniqueThreads)
 		for _, ref := range selfRefs {
 			ts := ref.thread
 			if ts == "" {
@@ -416,6 +531,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			}
 			seenThreads[tk] = struct{}{}
 			replies, err := c.fetchThreadReplies(ctx, token, ref.channel.ID, ts, opts, directive.ID)
+			progress.Done()
 			if err != nil {
 				if isTolerablePerChannelError(err) {
 					loggerFor(opts, directive.ID).Note(
@@ -440,8 +556,11 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		}
 
 		// Context window: 3 messages before and after each self message.
+		progress.SetStage("context windows")
+		progress.AddUnits(len(selfRefs))
 		for _, ref := range selfRefs {
 			ctxMsgs, err := c.fetchContextWindow(ctx, token, ref.channel.ID, ref.ts, opts, directive.ID)
+			progress.Done()
 			if err != nil {
 				if isTolerablePerChannelError(err) {
 					loggerFor(opts, directive.ID).Note(
@@ -501,7 +620,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 				}
 				followedChans = append(followedChans, ch)
 			}
-			followedResults, err := c.fanOutHistorySince(ctx, token, followedChans, since, now, opts, directive)
+			progress.SetStage("followed channels")
+			progress.AddUnits(len(followedChans))
+			followedResults, err := c.fanOutHistorySince(ctx, token, followedChans, since, now, opts, directive, progress)
 			if err != nil {
 				return nil, err
 			}
@@ -519,6 +640,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 
 	// Resolve unique authors so StatusItem.Author renders as a name when
 	// possible, falling back to the bare user ID.
+	progress.SetStage("authors")
 	for _, b := range bucket {
 		if b.message.User == "" {
 			continue
@@ -667,7 +789,12 @@ func (c SlackCollector) fetchAllConversations(ctx context.Context, token, types 
 // Concurrency defaults to defaultHistoryConcurrency, overridable per
 // directive via Config["history_concurrency"] (clamped to [1,
 // maxHistoryConcurrency] so a typo cannot DoS the workspace).
-func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, channels []slackChannel, since, now time.Time, opts *CollectOpts, directive userdata.Directive) ([][]slackMessage, error) {
+//
+// progress is the per-directive bar tracker; when non-nil, each
+// finished (or tolerably-failed) channel ticks one unit of completion
+// so the user sees a live count of "channels processed". Pass nil
+// when running without progress wiring (e.g. tests).
+func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, channels []slackChannel, since, now time.Time, opts *CollectOpts, directive userdata.Directive, progress *slackProgress) ([][]slackMessage, error) {
 	if len(channels) == 0 {
 		return nil, nil
 	}
@@ -715,6 +842,7 @@ func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, ch
 					// the whole run.
 					if isTolerablePerChannelError(err) {
 						logger.Note("slack: skipping channel %s: %v", j.channel.ID, err)
+						progress.Done()
 						continue
 					}
 					// Suppress context-cancelled noise: that's just
@@ -725,6 +853,7 @@ func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, ch
 					return
 				}
 				results[j.index] = msgs
+				progress.Done()
 			}
 		}()
 	}

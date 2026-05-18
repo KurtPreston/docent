@@ -112,18 +112,42 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	scope := opts.EffectiveScope()
 	followedRepos := parseFollowedList(directive.Config["followed_repos"])
 
+	// Step plan: 1 owner-repos fetch + (in all-mode) one per followed
+	// entry + one per issue query. Held as a flat denominator so the
+	// progress bar advances uniformly across both phases.
+	issueQueries := buildGiteaIssueQueries(scope, owner, followedRepos, since)
+	totalSteps := 1 + len(issueQueries)
+	if scope == ScopeAll {
+		totalSteps += len(followedRepos)
+	}
+	completed := 0
+	emit := func(detail string) {
+		reportProgress(opts, DirectiveProgress{
+			DirectiveID: directive.ID,
+			Description: directive.Name,
+			Status:      "running",
+			Detail:      detail,
+			Completed:   completed,
+			Total:       totalSteps,
+		})
+	}
+
 	// Repo-updated items: always include the resolved owner's repos. In
 	// ScopeAll, also include each followed entry so the "this followed
 	// repo got pushed" signal lands alongside its issue/PR activity.
 	var items []StatusItem
+	emit(fmt.Sprintf("repos for %s", owner))
 	ownerRepos, err := c.fetchReposForOwner(ctx, apiBase, owner, token, opts, directive.ID)
+	completed++
 	if err != nil {
 		return nil, err
 	}
 	items = append(items, c.repoItemsFor(directive, apiBase, owner, ownerRepos, since, now)...)
 	if scope == ScopeAll {
 		for _, entry := range followedRepos {
+			emit(fmt.Sprintf("repos for %s", entry))
 			repos, err := c.resolveFollowedRepoEntry(ctx, apiBase, token, entry, opts, directive.ID)
+			completed++
 			if err != nil {
 				return nil, err
 			}
@@ -140,9 +164,10 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 
 	// Issue / PR items. Order matters for de-dup: user-anchored queries go
 	// first so their IsSelf=true entries win over repo-scoped duplicates.
-	issueQueries := buildGiteaIssueQueries(scope, owner, followedRepos, since)
 	for _, q := range issueQueries {
+		emit(fmt.Sprintf("issues %s", q.anchor))
 		rows, err := c.fetchIssues(ctx, apiBase, token, q, opts, directive.ID)
+		completed++
 		if err != nil {
 			return nil, err
 		}
