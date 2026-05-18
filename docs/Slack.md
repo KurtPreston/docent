@@ -127,6 +127,15 @@ per sleep) and falling back to exponential backoff when the header is
 absent. The wait is logged to `<run>/slack.log` as a `note` line so you
 can see when throttling kicked in.
 
+Per-channel failures (`channel_not_found`, `not_in_channel`,
+`is_archived`, `access_denied`, `missing_scope`) are also non-fatal: a
+single stale DM that `conversations.list` reports but
+`conversations.history` can't read is logged as `slack: skipping channel
+<id>: ...` and the rest of the collection continues. Workspace-level
+errors (`invalid_auth`, `account_inactive`, `token_revoked`, etc.) still
+abort the run so a broken token surfaces clearly instead of silently
+returning an empty result set.
+
 `scope: all` only collects extra messages when `config.followed_channels`
 is non-empty. Without it, `all` behaves like `involved` for this
 collector — same as the other forge/ticket collectors documented in

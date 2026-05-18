@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -866,6 +867,140 @@ func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
 	}
 	if peakInFlight < 2 {
 		t.Errorf("expected at least 2 concurrent history calls, peak=%d (fan-out not actually parallel?)", peakInFlight)
+	}
+}
+
+// TestSlackCollectTolerablePerChannelHistoryErrors guards the
+// "skip a broken channel, keep the rest" path: a stale DM that
+// conversations.list reports but conversations.history can't read
+// (e.g. channel_not_found) must not abort the whole run.
+func TestSlackCollectTolerablePerChannelHistoryErrors(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	// We sweep every documented tolerable code to make sure adding a
+	// new one to the set wires it through end-to-end.
+	tolerableCodes := []string{
+		"channel_not_found",
+		"not_in_channel",
+		"is_archived",
+		"access_denied",
+		"missing_scope",
+	}
+	for _, code := range tolerableCodes {
+		t.Run(code, func(t *testing.T) {
+			srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+				switch pathFor(req.Path) {
+				case "auth.test":
+					return http.StatusOK, authTestPayload(userID)
+				case "conversations.list":
+					return http.StatusOK, slackOK(map[string]any{
+						"channels": []map[string]any{
+							{"id": "D_BROKEN", "is_im": true, "user": "U_STALE"},
+							{"id": "D_LIVE", "is_im": true, "user": "U_PEER"},
+						},
+					})
+				case "conversations.history":
+					if req.Query.Get("channel") == "D_BROKEN" {
+						// Slack returns HTTP 200 with ok:false for these.
+						return http.StatusOK, map[string]any{"ok": false, "error": code}
+					}
+					return http.StatusOK, slackOK(map[string]any{
+						"messages": []map[string]any{
+							{"type": "message", "user": "U_PEER", "text": "alive", "ts": "1778500000.000000"},
+						},
+					})
+				case "search.messages":
+					return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+				case "users.info":
+					return http.StatusOK, slackOK(map[string]any{
+						"user": map[string]any{"id": req.Query.Get("user"), "name": "user-" + req.Query.Get("user")},
+					})
+				}
+				return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+			})
+
+			c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+			items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+				Since: since, Until: now, Scope: ScopeSelf,
+			})
+			if err != nil {
+				t.Fatalf("expected tolerable %q to be skipped, got error: %v", code, err)
+			}
+			var dm *StatusItem
+			for i := range items {
+				if items[i].Kind == "slack_dm" {
+					dm = &items[i]
+				}
+			}
+			if dm == nil {
+				t.Fatalf("expected slack_dm from live DM, got items=%+v", items)
+			}
+		})
+	}
+}
+
+// TestSlackCollectIntolerableSlackErrorStillFails verifies that
+// non-tolerable Slack error codes still surface up — we don't want the
+// retry path to silently swallow auth failures or missing scopes.
+func TestSlackCollectIntolerableSlackErrorStillFails(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_DM1", "is_im": true, "user": "U_PEER"},
+				},
+			})
+		case "conversations.history":
+			return http.StatusOK, map[string]any{"ok": false, "error": "invalid_auth"}
+		case "search.messages":
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	_, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	})
+	if err == nil {
+		t.Fatalf("expected invalid_auth to fail the run, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid_auth") {
+		t.Errorf("expected error to mention invalid_auth, got: %v", err)
+	}
+}
+
+func TestSlackAPIErrorIsTolerable(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("plain error"), false},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "channel_not_found"}, true},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "not_in_channel"}, true},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "is_archived"}, true},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "access_denied"}, true},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "missing_scope"}, true},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "invalid_auth"}, false},
+		{&slackAPIError{Endpoint: "conversations.history", Code: "ratelimited"}, false},
+		{fmt.Errorf("wrap: %w", &slackAPIError{Endpoint: "conversations.history", Code: "channel_not_found"}), true},
+	}
+	for _, tc := range cases {
+		if got := isTolerablePerChannelError(tc.err); got != tc.want {
+			t.Errorf("isTolerablePerChannelError(%v) = %v want %v", tc.err, got, tc.want)
+		}
 	}
 }
 

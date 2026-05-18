@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,6 +59,45 @@ const (
 	// than make the user think the CLI is hung.
 	slackMaxRetryAfter = 30 * time.Second
 )
+
+// slackAPIError represents a Slack-level error (HTTP 200 with `ok:false`
+// and an `error` code in the body). Carrying the code as a field — rather
+// than burying it in a formatted string — lets callers branch on
+// well-known recoverable codes (e.g. channel_not_found on a single DM)
+// without resorting to substring matching.
+type slackAPIError struct {
+	Endpoint string
+	Code     string
+}
+
+func (e *slackAPIError) Error() string {
+	return fmt.Sprintf("slack %s: %s", e.Endpoint, e.Code)
+}
+
+// tolerablePerChannelHistoryErrors lists Slack `error` codes that mean
+// "this single channel is unreachable" rather than "the whole run should
+// abort". Each of these can show up legitimately in the IM/MPIM list
+// returned by conversations.list (e.g. a DM whose peer left the
+// workspace mid-run, a private channel the user was just removed from)
+// and the right behavior is to skip that one channel and keep going.
+var tolerablePerChannelHistoryErrors = map[string]struct{}{
+	"channel_not_found": {},
+	"not_in_channel":    {},
+	"is_archived":       {},
+	"access_denied":     {},
+	"missing_scope":     {}, // single-channel scope gap (rare); whole-token gap shows up on auth.test
+}
+
+// isTolerablePerChannelError returns true when err is a slackAPIError whose
+// code we should skip rather than propagate.
+func isTolerablePerChannelError(err error) bool {
+	var apiErr *slackAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	_, ok := tolerablePerChannelHistoryErrors[apiErr.Code]
+	return ok
+}
 
 func (c SlackCollector) client() *http.Client {
 	if c.HTTP != nil {
@@ -377,6 +417,12 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			seenThreads[tk] = struct{}{}
 			replies, err := c.fetchThreadReplies(ctx, token, ref.channel.ID, ts, opts, directive.ID)
 			if err != nil {
+				if isTolerablePerChannelError(err) {
+					loggerFor(opts, directive.ID).Note(
+						"slack: skipping thread replies for %s/%s: %v", ref.channel.ID, ts, err,
+					)
+					continue
+				}
 				return nil, fmt.Errorf("slack conversations.replies %s/%s: %w", ref.channel.ID, ts, err)
 			}
 			for _, rm := range replies {
@@ -397,6 +443,12 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		for _, ref := range selfRefs {
 			ctxMsgs, err := c.fetchContextWindow(ctx, token, ref.channel.ID, ref.ts, opts, directive.ID)
 			if err != nil {
+				if isTolerablePerChannelError(err) {
+					loggerFor(opts, directive.ID).Note(
+						"slack: skipping context window for %s/%s: %v", ref.channel.ID, ref.ts, err,
+					)
+					continue
+				}
 				return nil, fmt.Errorf("slack context window %s/%s: %w", ref.channel.ID, ref.ts, err)
 			}
 			for _, cm := range ctxMsgs {
@@ -645,6 +697,7 @@ func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, ch
 		})
 	}
 
+	logger := loggerFor(opts, directive.ID)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -655,6 +708,15 @@ func (c SlackCollector) fanOutHistorySince(ctx context.Context, token string, ch
 				}
 				msgs, err := c.fetchHistorySince(jobCtx, token, j.channel.ID, since, now, opts, directive.ID)
 				if err != nil {
+					// Tolerable per-channel errors (channel_not_found,
+					// not_in_channel, ...) mean "this one channel is
+					// unreachable" — log it and keep going so a single
+					// stale DM in conversations.list doesn't blow up
+					// the whole run.
+					if isTolerablePerChannelError(err) {
+						logger.Note("slack: skipping channel %s: %v", j.channel.ID, err)
+						continue
+					}
 					// Suppress context-cancelled noise: that's just
 					// "another worker hit an error and we bailed".
 					if jobCtx.Err() == nil {
@@ -900,7 +962,7 @@ func (c SlackCollector) callAPI(ctx context.Context, token, method, endpoint str
 			return fmt.Errorf("parse slack %s meta: %w", endpoint, err)
 		}
 		if !meta.OK {
-			return fmt.Errorf("slack %s: %s", endpoint, strings.TrimSpace(meta.Error))
+			return &slackAPIError{Endpoint: endpoint, Code: strings.TrimSpace(meta.Error)}
 		}
 		return nil
 	}
