@@ -182,7 +182,7 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `userdata/config.yaml` — only required config file.
 - `userdata/.env` — secret values referenced by `credential_refs` (optional).
 - `userdata/output/` — saved markdown.
-- `userdata/.cache/ai-debug/` — optional Ollama request/response logs.
+- `userdata/.cache/ai-debug/` — request/response logs from the active LLM provider (Ollama or cursor-agent); the last 20 entries per provider are retained.
 - `jsonschema/config.schema.json` — JSON Schema for `userdata/config.yaml` (canonical copy alongside embedded duplicate).
 
 The `userdata/` directory is gitignored; initialize with [`scripts/setup`](scripts/setup), run the CLI once (minimal default config), or copy an example by hand.

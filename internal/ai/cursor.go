@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // CursorCLIProvider shells out to cursor-agent (or Command) with a single prompt payload.
@@ -73,10 +74,10 @@ func (p CursorCLIProvider) RunMode(ctx context.Context, in RunInput) (string, er
 	if err != nil {
 		return "", err
 	}
-	return p.runMarkdown(ctx, payload, in.StreamOut)
+	return p.runMarkdown(ctx, payload, in.DebugDir, in.StreamOut, debugStageFor(in.ModeID))
 }
 
-func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload string, streamOut io.Writer) (string, error) {
+func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer, requestLogStage string) (string, error) {
 	dir, err := os.MkdirTemp("", "slakkr-cursor-")
 	if err != nil {
 		return "", fmt.Errorf("cursor-agent: create temp workspace: %w", err)
@@ -89,6 +90,15 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload string, stre
 	}
 	args = append(args, payload)
 
+	redactedArgs := redactCursorArgs(args, payload)
+	writeAIDebugLog(debugDir, "cursor", requestLogStage, map[string]any{
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"command":   p.command(),
+		"args":      redactedArgs,
+		"cwd":       dir,
+		"prompt":    payload,
+	})
+
 	cmd := exec.CommandContext(ctx, p.command(), args...)
 	cmd.Dir = dir
 
@@ -98,7 +108,7 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload string, stre
 		cmd.Stderr = io.MultiWriter(&stderrBuf, streamOut)
 		fmt.Fprintf(streamOut, "$ %s %s  (cwd=%s)\n",
 			p.command(),
-			strings.Join(redactCursorArgs(args, payload), " "),
+			strings.Join(redactedArgs, " "),
 			dir,
 		)
 	} else {
@@ -107,7 +117,21 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload string, stre
 
 	runErr := cmd.Run()
 	stderr := strings.TrimSpace(stderrBuf.String())
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	stdoutStr := stdout.String()
 	if runErr != nil {
+		writeAIDebugLog(debugDir, "cursor", "error", map[string]any{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"command":   p.command(),
+			"args":      redactedArgs,
+			"exit_code": exitCode,
+			"error":     runErr.Error(),
+			"stdout":    stdoutStr,
+			"stderr":    stderr,
+		})
 		if exit, ok := runErr.(*exec.ExitError); ok {
 			return "", fmt.Errorf("cursor-agent exited with code %d: %w\nstderr:\n%s",
 				exit.ExitCode(), runErr, stderr)
@@ -115,11 +139,28 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload string, stre
 		return "", fmt.Errorf("cursor-agent: %w\nstderr:\n%s", runErr, stderr)
 	}
 	if cmd.ProcessState != nil && !cmd.ProcessState.Success() {
+		writeAIDebugLog(debugDir, "cursor", "error", map[string]any{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"command":   p.command(),
+			"args":      redactedArgs,
+			"exit_code": exitCode,
+			"stdout":    stdoutStr,
+			"stderr":    stderr,
+		})
 		return "", fmt.Errorf("cursor-agent exited with code %d\nstderr:\n%s",
 			cmd.ProcessState.ExitCode(), stderr)
 	}
 
-	out := strings.TrimSpace(stdout.String())
+	out := strings.TrimSpace(stdoutStr)
+	writeAIDebugLog(debugDir, "cursor", "markdown-response", map[string]any{
+		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
+		"command":         p.command(),
+		"args":            redactedArgs,
+		"exit_code":       exitCode,
+		"stdout":          stdoutStr,
+		"stderr":          stderr,
+		"message_content": out,
+	})
 	if out == "" {
 		return "", fmt.Errorf("cursor-agent returned no output (exit 0)\nstderr:\n%s", stderr)
 	}

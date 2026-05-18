@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -120,15 +117,13 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 	if err != nil {
 		return "", err
 	}
-	if debugDir != "" {
-		writeOllamaDebugLog(debugDir, requestLogStage, map[string]any{
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-			"base_url":  p.BaseURL,
-			"model":     p.Model,
-			"request":   json.RawMessage(body),
-			"prompt":    userContent,
-		})
-	}
+	writeAIDebugLog(debugDir, "ollama", requestLogStage, map[string]any{
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"base_url":  p.BaseURL,
+		"model":     p.Model,
+		"request":   json.RawMessage(body),
+		"prompt":    userContent,
+	})
 	url := strings.TrimRight(p.BaseURL, "/") + "/api/chat"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -143,14 +138,12 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var errBody bytes.Buffer
 		_, _ = errBody.ReadFrom(res.Body)
-		if debugDir != "" {
-			writeOllamaDebugLog(debugDir, "error", map[string]any{
-				"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
-				"status":      res.Status,
-				"status_code": res.StatusCode,
-				"response":    strings.TrimSpace(errBody.String()),
-			})
-		}
+		writeAIDebugLog(debugDir, "ollama", "error", map[string]any{
+			"timestamp":   time.Now().UTC().Format(time.RFC3339Nano),
+			"status":      res.Status,
+			"status_code": res.StatusCode,
+			"response":    strings.TrimSpace(errBody.String()),
+		})
 		return "", fmt.Errorf("ollama %s: %s", res.Status, strings.TrimSpace(errBody.String()))
 	}
 	decoder := json.NewDecoder(res.Body)
@@ -165,12 +158,10 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			if debugDir != "" {
-				writeOllamaDebugLog(debugDir, "error", map[string]any{
-					"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-					"error":     fmt.Sprintf("ollama stream parse: %v", err),
-				})
-			}
+			writeAIDebugLog(debugDir, "ollama", "error", map[string]any{
+				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+				"error":     fmt.Sprintf("ollama stream parse: %v", err),
+			})
 			return "", fmt.Errorf("ollama stream: %w", err)
 		}
 		streamChunks = append(streamChunks, chunk)
@@ -188,71 +179,12 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 		}
 	}
 	out := content.String()
-	if debugDir != "" {
-		writeOllamaDebugLog(debugDir, "markdown-response", map[string]any{
-			"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
-			"status":          res.Status,
-			"status_code":     res.StatusCode,
-			"response_raw":    streamChunks,
-			"message_content": out,
-		})
-	}
-	return out, nil
-}
-
-func writeOllamaDebugLog(debugDir, stage string, payload map[string]any) {
-	if strings.TrimSpace(debugDir) == "" {
-		return
-	}
-	if err := os.MkdirAll(debugDir, 0o755); err != nil {
-		return
-	}
-	filename := fmt.Sprintf("ollama-%s-%s.json", time.Now().UTC().Format("20060102T150405.000000000Z"), stage)
-	content, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(debugDir, filename), append(content, '\n'), 0o644)
-	pruneOllamaDebugLogs(debugDir, 20)
-}
-
-func pruneOllamaDebugLogs(debugDir string, keep int) {
-	if keep <= 0 {
-		return
-	}
-	entries, err := os.ReadDir(debugDir)
-	if err != nil {
-		return
-	}
-	type logFile struct {
-		path    string
-		modTime time.Time
-	}
-	files := make([]logFile, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "ollama-") || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		files = append(files, logFile{
-			path:    filepath.Join(debugDir, name),
-			modTime: info.ModTime(),
-		})
-	}
-	if len(files) <= keep {
-		return
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime.After(files[j].modTime)
+	writeAIDebugLog(debugDir, "ollama", "markdown-response", map[string]any{
+		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
+		"status":          res.Status,
+		"status_code":     res.StatusCode,
+		"response_raw":    streamChunks,
+		"message_content": out,
 	})
-	for _, stale := range files[keep:] {
-		_ = os.Remove(stale.path)
-	}
+	return out, nil
 }
