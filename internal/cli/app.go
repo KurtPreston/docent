@@ -17,6 +17,7 @@ import (
 	"github.com/kurt/slakkr-ai/internal/collectors"
 	"github.com/kurt/slakkr-ai/internal/configschema"
 	"github.com/kurt/slakkr-ai/internal/executionmode"
+	"github.com/kurt/slakkr-ai/internal/runlog"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 	"github.com/kurt/slakkr-ai/internal/workflow"
 	"golang.org/x/term"
@@ -71,9 +72,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(filepath.Join(*userdataDir, "output"), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(*userdataDir, ".cache"), 0o755); err != nil {
-		return err
-	}
+	// Opportunistically remove the legacy `.cache/` directory: AI debug
+	// logs now live in userdata/logs/<run>/ and nothing else uses this
+	// path. Errors (permission denied, already removed) are ignored.
+	_ = os.RemoveAll(filepath.Join(*userdataDir, ".cache"))
 
 	configPath = strings.TrimSpace(configPath)
 	var (
@@ -172,11 +174,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		stream = a.Err
 	}
 
-	debugDir := filepath.Join(*userdataDir, ".cache", "ai-debug")
-	if err := os.MkdirAll(debugDir, 0o755); err != nil {
-		return err
-	}
-
 	promptOverride, err := readPromptOverride(*promptFlag, *promptFile)
 	if err != nil {
 		return err
@@ -215,19 +212,46 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		}
 	}
 
-	progress := newDirectiveProgressTable(a.Out)
-	defer progress.Done()
-
-	statuses, err := workflow.CollectStatuses(ctx, workflow.Deps{
-		Registry:          a.Reg,
-		Now:               a.Now,
-		ExpandRepoPath:    expand,
-		OnDirectiveUpdate: progress.Update,
-	}, cfg, *userdataDir, resolved.Since, resolved.Until, collectors.Scope(resolved.Scope))
+	// Resolve the output path (and its uniquified collision suffix)
+	// before collection so the run-log directory name matches the
+	// markdown file we will eventually save. When --no-save is set we
+	// still derive a basename so logs still get a stable home.
+	outPathResolved, outBasename, err := resolveOutputPath(*userdataDir, *outPath, outDate, resolved.ModeID, *noSave)
 	if err != nil {
 		return err
 	}
+
+	run, err := runlog.NewRun(*userdataDir, outBasename, a.Now())
+	if err != nil {
+		return err
+	}
+	defer run.Close()
+
+	tracker := newDirectiveStatusTracker()
+	progress := newDirectiveProgressTable(a.Out)
+	defer progress.Done()
+
+	writeRunLogHeader(run.RunInfo(), a.Now(), resolved, cfg, *userdataDir, outPathResolved, *noSave)
+
+	collectStart := a.Now()
+	statuses, err := workflow.CollectStatuses(ctx, workflow.Deps{
+		Registry: a.Reg,
+		Now:      a.Now,
+		ExpandRepoPath: expand,
+		OnDirectiveUpdate: func(p collectors.DirectiveProgress) {
+			tracker.Update(p, a.Now())
+			progress.Update(p)
+		},
+		RunLog: runLogAdapter{run: run},
+	}, cfg, *userdataDir, resolved.Since, resolved.Until, collectors.Scope(resolved.Scope))
+	collectDuration := a.Now().Sub(collectStart)
+	if err != nil {
+		writeRunLogCollectError(run.RunInfo(), err, collectDuration)
+		return err
+	}
 	progress.Done()
+
+	writeRunLogCollectSummary(run.RunInfo(), tracker, statuses, collectDuration)
 
 	// Scope semantics are now honored by the collectors themselves; the
 	// CLI no longer needs to post-filter the aggregated status list.
@@ -241,6 +265,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		provider = withFormatter(provider, ai.SelectActivityFormatter(resolved.Formatter))
 	}
 
+	aiStart := a.Now()
 	md, err := provider.RunMode(ctx, ai.RunInput{
 		ModeID:       resolved.ModeID,
 		ModeName:     resolved.ModeName,
@@ -249,38 +274,74 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		LookbackDays: resolved.LookbackDays,
 		Instruction:  resolved.Instruction,
 		Statuses:     statuses,
-		DebugDir:     debugDir,
+		DebugDir:     run.Dir(),
 		StreamOut:    stream,
 	})
+	aiDuration := a.Now().Sub(aiStart)
 	if err != nil {
+		writeRunLogAIError(run.RunInfo(), provider, err, aiDuration)
 		return err
 	}
 	md = strings.TrimSpace(md) + "\n"
 
 	fmt.Fprint(a.Out, md)
 
+	finalOutPath := ""
 	if !*noSave {
-		out := strings.TrimSpace(*outPath)
-		if out == "" {
-			if err := os.MkdirAll(filepath.Join(*userdataDir, "output"), 0o755); err != nil {
-				return err
-			}
-			out = filepath.Join(*userdataDir, "output", fmt.Sprintf("%s-%s.md", outDate, resolved.ModeID))
-		}
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(outPathResolved), 0o755); err != nil {
 			return err
 		}
-		out, err = uniqueOutputPath(out)
-		if err != nil {
+		if err := os.WriteFile(outPathResolved, []byte(md), 0o644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(out, []byte(md), 0o644); err != nil {
-			return err
-		}
-		fmt.Fprintf(a.Err, "Wrote %s\n", out)
+		finalOutPath = outPathResolved
+		fmt.Fprintf(a.Err, "Wrote %s\n", outPathResolved)
+	}
+
+	writeRunLogFinalSummary(run.RunInfo(), provider, aiDuration, finalOutPath, *noSave)
+
+	if err := runlog.PruneRunLogs(*userdataDir, runlog.DefaultRetention); err != nil {
+		fmt.Fprintf(a.Err, "warning: prune run logs: %v\n", err)
 	}
 
 	return nil
+}
+
+// runLogAdapter bridges *runlog.Run to collectors.RunLog so the
+// collectors package doesn't import runlog directly.
+type runLogAdapter struct {
+	run *runlog.Run
+}
+
+func (a runLogAdapter) Directive(id string) collectors.DirectiveLogger {
+	return a.run.Directive(id)
+}
+
+// resolveOutputPath decides where the markdown output will land and
+// what basename anchors the run-log directory. When --no-save is set
+// we still derive a basename from outDate + modeID so logs have a
+// home. When --out is explicit, its directory is honored. In both
+// save cases, an existing file triggers `-2`, `-3`, … suffixing
+// (uniqueOutputPath) so the run-log dir name matches the file we
+// actually create.
+func resolveOutputPath(userdataDir, outFlag, outDate, modeID string, noSave bool) (path, basename string, err error) {
+	out := strings.TrimSpace(outFlag)
+	defaultName := fmt.Sprintf("%s-%s.md", outDate, modeID)
+	if out == "" {
+		out = filepath.Join(userdataDir, "output", defaultName)
+	}
+	if !noSave {
+		out, err = uniqueOutputPath(out)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	base := filepath.Base(out)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if stem == "" {
+		stem = strings.TrimSuffix(defaultName, ".md")
+	}
+	return out, stem, nil
 }
 
 // formatModeOption renders an interactive-menu label that includes both the

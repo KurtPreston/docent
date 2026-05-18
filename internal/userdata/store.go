@@ -20,13 +20,14 @@ func NewStore(root string) Store {
 }
 
 // Ensure creates userdata/output and a default config.yaml if missing.
+// The legacy `.cache/` directory (used for ai-debug payloads before
+// run-log directories existed) is opportunistically removed so old
+// installs don't carry it around.
 func (s Store) Ensure(_ context.Context) error {
 	if err := os.MkdirAll(filepath.Join(s.Root, "output"), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(s.Root, ".cache"), 0o755); err != nil {
-		return err
-	}
+	_ = os.RemoveAll(filepath.Join(s.Root, ".cache"))
 	return writeDefaultYAML(filepath.Join(s.Root, "config.yaml"), ConfigFile{
 		AI: AIConfig{Provider: "rule-based"},
 	})

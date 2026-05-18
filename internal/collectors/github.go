@@ -103,14 +103,14 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 
 	var items []StatusItem
 	for _, spec := range searches {
-		batch, err := runGitHubSearch(ctx, env, spec, directive, user, host, since, now)
+		batch, err := runGitHubSearch(ctx, env, spec, directive, user, host, since, now, opts)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, batch...)
 	}
 	for _, spec := range commitSearches {
-		batch, err := runGitHubCommitSearch(ctx, env, spec, directive, user, host, since, now)
+		batch, err := runGitHubCommitSearch(ctx, env, spec, directive, user, host, since, now, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -238,12 +238,12 @@ func buildGitHubSearchSpecs(scope Scope, user, dateStr string, followedRepos []s
 	return involved, commits
 }
 
-func runGitHubSearch(ctx context.Context, env []string, spec ghSearchSpec, directive userdata.Directive, user, host string, since, now time.Time) ([]StatusItem, error) {
+func runGitHubSearch(ctx context.Context, env []string, spec ghSearchSpec, directive userdata.Directive, user, host string, since, now time.Time, opts *CollectOpts) ([]StatusItem, error) {
 	args := append([]string{"search", spec.queryType}, spec.args...)
 	args = append(args, "--limit", "25", "--json", spec.jsonFields)
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
-	out, err := cmd.Output()
+	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
@@ -290,12 +290,12 @@ func runGitHubSearch(ctx context.Context, env []string, spec ghSearchSpec, direc
 	return items, nil
 }
 
-func runGitHubCommitSearch(ctx context.Context, env []string, spec ghCommitSearchSpec, directive userdata.Directive, user, host string, since, now time.Time) ([]StatusItem, error) {
+func runGitHubCommitSearch(ctx context.Context, env []string, spec ghCommitSearchSpec, directive userdata.Directive, user, host string, since, now time.Time, opts *CollectOpts) ([]StatusItem, error) {
 	args := append([]string{"search", "commits"}, spec.args...)
 	args = append(args, "--limit", "25", "--json", "sha,url,repository,commit")
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
-	out, err := cmd.Output()
+	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))

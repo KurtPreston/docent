@@ -68,7 +68,7 @@ func (p OllamaProvider) RunMode(ctx context.Context, in RunInput) (string, error
 		return "", err
 	}
 	p.printPrompt(in.StreamOut, payload)
-	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, debugStageFor(in.ModeID))
+	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut)
 	if err != nil {
 		return "", err
 	}
@@ -86,14 +86,6 @@ func needsNested(modeID string) bool {
 	}
 }
 
-func debugStageFor(modeID string) string {
-	id := strings.TrimSpace(modeID)
-	if id == "" {
-		id = "request"
-	}
-	return id + "-request"
-}
-
 func (p OllamaProvider) printPrompt(streamOut io.Writer, payload string) {
 	if streamOut == nil {
 		return
@@ -106,7 +98,7 @@ func (p OllamaProvider) printPrompt(streamOut io.Writer, payload string) {
 	fmt.Fprintln(streamOut)
 }
 
-func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir string, streamOut io.Writer, requestLogStage string) (string, error) {
+func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir string, streamOut io.Writer) (string, error) {
 	body, err := json.Marshal(ollamaChatRequest{
 		Model: p.Model,
 		Messages: []ollamaMsg{
@@ -117,7 +109,7 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 	if err != nil {
 		return "", err
 	}
-	writeAIDebugLog(debugDir, "ollama", requestLogStage, map[string]any{
+	writeAIDebugLog(debugDir, "ollama", "request", map[string]any{
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 		"base_url":  p.BaseURL,
 		"model":     p.Model,
@@ -179,7 +171,7 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 		}
 	}
 	out := content.String()
-	writeAIDebugLog(debugDir, "ollama", "markdown-response", map[string]any{
+	writeAIDebugLog(debugDir, "ollama", "response", map[string]any{
 		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
 		"status":          res.Status,
 		"status_code":     res.StatusCode,

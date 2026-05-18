@@ -3,7 +3,6 @@ package collectors
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -63,12 +62,7 @@ func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	res, body, err := doAndReadHTTP(c.client(), req, 8<<20, opts, directive.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +154,7 @@ func (c GoogleCalendarCollector) ValidateDirective(ctx context.Context, directiv
 			Remediation: "verify the iCal URL",
 		}}
 	}
-	res, err := c.client().Do(req)
+	res, _, err := doAndReadHTTP(c.client(), req, 1<<20, nil, directive.ID)
 	if err != nil {
 		return []ValidationIssue{{
 			Field:       "ical_url",
@@ -168,7 +162,6 @@ func (c GoogleCalendarCollector) ValidateDirective(ctx context.Context, directiv
 			Remediation: "verify network connectivity and the iCal URL",
 		}}
 	}
-	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return []ValidationIssue{{
 			Field:       "ical_url",

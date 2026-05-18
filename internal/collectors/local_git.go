@@ -46,7 +46,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		return nil, err
 	}
 	sinceISO := since.UTC().Format(time.RFC3339)
-	globalEmail := strings.ToLower(strings.TrimSpace(gitConfigValue(ctx, "", "--global", "user.email")))
+	globalEmail := strings.ToLower(strings.TrimSpace(gitConfigValue(ctx, "", "--global", "user.email", opts, directive.ID)))
 	currentUser := strings.ToLower(strings.TrimSpace(currentOSUsername()))
 	var out []StatusItem
 	commitTimes := map[string]time.Time{}
@@ -56,13 +56,13 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		// '<name>' does not have any commits yet". Treat that as "nothing to
 		// report" rather than failing the entire directive: one empty repo
 		// under code_home shouldn't sabotage every other repo's collection.
-		if !localGitRepoHasCommits(ctx, abs) {
+		if !localGitRepoHasCommits(ctx, abs, opts, directive.ID) {
 			continue
 		}
-		repoLabel := localGitRepositoryKey(ctx, abs)
-		matcher := newLocalGitSelfMatcher(ctx, abs, globalEmail, currentUser)
+		repoLabel := localGitRepositoryKey(ctx, abs, opts, directive.ID)
+		matcher := newLocalGitSelfMatcher(ctx, abs, globalEmail, currentUser, opts, directive.ID)
 
-		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher)
+		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +72,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 		// either don't care about it or just keep every commit anyway.
 		var branchHashes map[string]struct{}
 		if scope == ScopeInvolved {
-			branchHashes, err = localGitBranchHashes(ctx, abs, sinceISO)
+			branchHashes, err = localGitBranchHashes(ctx, abs, sinceISO, opts, directive.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -99,7 +99,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 			commitTimes[ci.hash] = ci.observed
 		}
 
-		refOut, err := gitOutput(ctx, abs, "reflog", "--since="+sinceISO, "--date=iso", "--pretty=format:%H%x09%gd%x09%gs")
+		refOut, err := gitOutput(ctx, abs, opts, directive.ID, "reflog", "--since="+sinceISO, "--date=iso", "--pretty=format:%H%x09%gd%x09%gs")
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +117,7 @@ func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Direc
 			gs := strings.TrimSpace(parts[2])
 			obs, ok := commitTimes[hash]
 			if !ok {
-				ci, err := gitOutput(ctx, abs, "show", "-s", "--format=%cI", hash)
+				ci, err := gitOutput(ctx, abs, opts, directive.ID, "show", "-s", "--format=%cI", hash)
 				if err != nil {
 					continue
 				}
@@ -175,8 +175,8 @@ type localGitCommit struct {
 	isSelf   bool
 }
 
-func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since, now time.Time, matcher localGitSelfMatcher) ([]localGitCommit, error) {
-	logOut, err := gitOutput(ctx, repoDir, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%ae%x09%s")
+func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since, now time.Time, matcher localGitSelfMatcher, opts *CollectOpts, directiveID string) ([]localGitCommit, error) {
+	logOut, err := gitOutput(ctx, repoDir, opts, directiveID, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%ae%x09%s")
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +221,8 @@ func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since
 // local branch within the time window. Used for ScopeInvolved: a commit
 // counts as "the user's involved work" when it sits on one of the branches
 // they have created or checked out locally.
-func localGitBranchHashes(ctx context.Context, repoDir, sinceISO string) (map[string]struct{}, error) {
-	out, err := gitOutput(ctx, repoDir, "log", "--branches", "--no-merges", "--since="+sinceISO, "--pretty=format:%H")
+func localGitBranchHashes(ctx context.Context, repoDir, sinceISO string, opts *CollectOpts, directiveID string) (map[string]struct{}, error) {
+	out, err := gitOutput(ctx, repoDir, opts, directiveID, "log", "--branches", "--no-merges", "--since="+sinceISO, "--pretty=format:%H")
 	if err != nil {
 		return nil, err
 	}
@@ -279,9 +279,9 @@ func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitComm
 
 // localGitRepositoryKey prefers remote.origin URL (owner/repo or nested path) so local-git
 // aligns with GitHub / Gitea `repository`; falls back to the working tree directory name.
-func localGitRepositoryKey(ctx context.Context, abs string) string {
+func localGitRepositoryKey(ctx context.Context, abs string, opts *CollectOpts, directiveID string) string {
 	fallback := filepath.Base(abs)
-	out, err := gitOutput(ctx, abs, "remote", "get-url", "origin")
+	out, err := gitOutput(ctx, abs, opts, directiveID, "remote", "get-url", "origin")
 	if err != nil {
 		return fallback
 	}
@@ -557,9 +557,9 @@ type localGitSelfMatcher struct {
 	user        string
 }
 
-func newLocalGitSelfMatcher(ctx context.Context, repoDir, globalEmail, currentUser string) localGitSelfMatcher {
+func newLocalGitSelfMatcher(ctx context.Context, repoDir, globalEmail, currentUser string, opts *CollectOpts, directiveID string) localGitSelfMatcher {
 	return localGitSelfMatcher{
-		repoEmail:   strings.ToLower(strings.TrimSpace(gitConfigValue(ctx, repoDir, "--local", "user.email"))),
+		repoEmail:   strings.ToLower(strings.TrimSpace(gitConfigValue(ctx, repoDir, "--local", "user.email", opts, directiveID))),
 		globalEmail: globalEmail,
 		user:        currentUser,
 	}
@@ -587,7 +587,7 @@ func (m localGitSelfMatcher) Match(name, email string) bool {
 // gitConfigValue runs `git config <scope> <key>` and returns the trimmed value.
 // Errors (missing key, missing repo, no git binary) collapse to "" so callers
 // can treat the absence the same as any other empty matcher.
-func gitConfigValue(ctx context.Context, repoDir string, scope, key string) string {
+func gitConfigValue(ctx context.Context, repoDir string, scope, key string, opts *CollectOpts, directiveID string) string {
 	args := []string{}
 	if repoDir != "" {
 		args = append(args, "-C", repoDir)
@@ -598,7 +598,7 @@ func gitConfigValue(ctx context.Context, repoDir string, scope, key string) stri
 	}
 	args = append(args, "--get", key)
 	cmd := exec.CommandContext(ctx, "git", args...)
-	out, err := cmd.Output()
+	out, err := runAndLogExec(cmd, opts, directiveID)
 	if err != nil {
 		return ""
 	}
@@ -625,9 +625,9 @@ func currentOSUsername() string {
 // genuine repo problems (corruption, safe.directory, missing .git) — only the
 // exit-1 signal counts as empty; everything else returns true so the
 // subsequent `git log` call in Collect can resurface the real error.
-func localGitRepoHasCommits(ctx context.Context, repoDir string) bool {
+func localGitRepoHasCommits(ctx context.Context, repoDir string, opts *CollectOpts, directiveID string) bool {
 	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-parse", "--verify", "--quiet", "HEAD")
-	err := cmd.Run()
+	_, err := runAndLogExec(cmd, opts, directiveID)
 	if err == nil {
 		return true
 	}
@@ -637,10 +637,10 @@ func localGitRepoHasCommits(ctx context.Context, repoDir string) bool {
 	return true
 }
 
-func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+func gitOutput(ctx context.Context, dir string, opts *CollectOpts, directiveID string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	out, err := cmd.Output()
+	out, err := runAndLogExec(cmd, opts, directiveID)
 	if err != nil {
 		// Surface git's stderr so callers (and the user) don't see an opaque
 		// `exit status 128`; the stderr typically explains the actual cause

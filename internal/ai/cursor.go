@@ -74,10 +74,10 @@ func (p CursorCLIProvider) RunMode(ctx context.Context, in RunInput) (string, er
 	if err != nil {
 		return "", err
 	}
-	return p.runMarkdown(ctx, payload, in.DebugDir, in.StreamOut, debugStageFor(in.ModeID))
+	return p.runMarkdown(ctx, payload, in.DebugDir, in.StreamOut)
 }
 
-func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer, requestLogStage string) (string, error) {
+func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer) (string, error) {
 	dir, err := os.MkdirTemp("", "slakkr-cursor-")
 	if err != nil {
 		return "", fmt.Errorf("cursor-agent: create temp workspace: %w", err)
@@ -91,7 +91,7 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload, debugDir st
 	args = append(args, payload)
 
 	redactedArgs := redactCursorArgs(args, payload)
-	writeAIDebugLog(debugDir, "cursor", requestLogStage, map[string]any{
+	writeAIDebugLog(debugDir, "cursor", "request", map[string]any{
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 		"command":   p.command(),
 		"args":      redactedArgs,
@@ -152,7 +152,7 @@ func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload, debugDir st
 	}
 
 	out := strings.TrimSpace(stdoutStr)
-	writeAIDebugLog(debugDir, "cursor", "markdown-response", map[string]any{
+	writeAIDebugLog(debugDir, "cursor", "response", map[string]any{
 		"timestamp":       time.Now().UTC().Format(time.RFC3339Nano),
 		"command":         p.command(),
 		"args":            redactedArgs,

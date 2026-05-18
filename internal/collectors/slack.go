@@ -187,7 +187,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 	}
 	scope := opts.EffectiveScope()
 
-	auth, err := c.callAuthTest(ctx, token)
+	auth, err := c.callAuthTest(ctx, token, opts, directive.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -247,12 +247,12 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 
 	// --- self-tier signals (always run) ---
 
-	dmChannels, err := c.fetchAllConversations(ctx, token, "im,mpim", channelCache)
+	dmChannels, err := c.fetchAllConversations(ctx, token, "im,mpim", channelCache, opts, directive.ID)
 	if err != nil {
 		return nil, fmt.Errorf("slack conversations.list (dm): %w", err)
 	}
 	for _, ch := range dmChannels {
-		msgs, err := c.fetchHistorySince(ctx, token, ch.ID, since, now)
+		msgs, err := c.fetchHistorySince(ctx, token, ch.ID, since, now, opts, directive.ID)
 		if err != nil {
 			return nil, fmt.Errorf("slack conversations.history %s: %w", ch.ID, err)
 		}
@@ -266,7 +266,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		}
 	}
 
-	mentionMatches, err := c.fetchSearchMessages(ctx, token, "<@"+userID+"> after:"+slackAfterDate(since))
+	mentionMatches, err := c.fetchSearchMessages(ctx, token, "<@"+userID+"> after:"+slackAfterDate(since), opts, directive.ID)
 	if err != nil {
 		return nil, fmt.Errorf("slack search.messages (mentions): %w", err)
 	}
@@ -283,7 +283,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		})
 	}
 
-	sentMatches, err := c.fetchSearchMessages(ctx, token, "from:<@"+userID+"> after:"+slackAfterDate(since))
+	sentMatches, err := c.fetchSearchMessages(ctx, token, "from:<@"+userID+"> after:"+slackAfterDate(since), opts, directive.ID)
 	if err != nil {
 		return nil, fmt.Errorf("slack search.messages (sent): %w", err)
 	}
@@ -326,7 +326,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 				continue
 			}
 			seenThreads[tk] = struct{}{}
-			replies, err := c.fetchThreadReplies(ctx, token, ref.channel.ID, ts)
+			replies, err := c.fetchThreadReplies(ctx, token, ref.channel.ID, ts, opts, directive.ID)
 			if err != nil {
 				return nil, fmt.Errorf("slack conversations.replies %s/%s: %w", ref.channel.ID, ts, err)
 			}
@@ -346,7 +346,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 
 		// Context window: 3 messages before and after each self message.
 		for _, ref := range selfRefs {
-			ctxMsgs, err := c.fetchContextWindow(ctx, token, ref.channel.ID, ref.ts)
+			ctxMsgs, err := c.fetchContextWindow(ctx, token, ref.channel.ID, ref.ts, opts, directive.ID)
 			if err != nil {
 				return nil, fmt.Errorf("slack context window %s/%s: %w", ref.channel.ID, ref.ts, err)
 			}
@@ -385,7 +385,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 				}
 				// We need the public/private channel directory to map names.
 				// Lazily fetch on first miss.
-				if _, err := c.fetchAllConversations(ctx, token, "public_channel,private_channel", channelCache); err != nil {
+				if _, err := c.fetchAllConversations(ctx, token, "public_channel,private_channel", channelCache, opts, directive.ID); err != nil {
 					return nil, fmt.Errorf("slack conversations.list (followed): %w", err)
 				}
 				if ch, ok := channelCache.byName(e); ok {
@@ -397,7 +397,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 				if !ok {
 					ch = slackChannel{ID: chID, Name: chID}
 				}
-				msgs, err := c.fetchHistorySince(ctx, token, chID, since, now)
+				msgs, err := c.fetchHistorySince(ctx, token, chID, since, now, opts, directive.ID)
 				if err != nil {
 					return nil, fmt.Errorf("slack conversations.history %s: %w", chID, err)
 				}
@@ -421,7 +421,7 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		if _, ok := userCache.get(b.message.User); ok {
 			continue
 		}
-		u, err := c.fetchUser(ctx, token, b.message.User)
+		u, err := c.fetchUser(ctx, token, b.message.User, opts, directive.ID)
 		if err != nil {
 			// Best-effort: skip on lookup failure (rate limit, missing scope).
 			userCache.put(slackUser{ID: b.message.User})
@@ -499,7 +499,7 @@ func (c SlackCollector) ValidateDirective(ctx context.Context, directive userdat
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	auth, err := c.callAuthTest(probeCtx, token)
+	auth, err := c.callAuthTest(probeCtx, token, nil, directive.ID)
 	if err != nil {
 		return []ValidationIssue{{
 			Field:       "auth",
@@ -519,15 +519,15 @@ func (c SlackCollector) ValidateDirective(ctx context.Context, directive userdat
 
 // callAuthTest performs the Slack auth.test handshake. It is reused by both
 // Validate and Collect.
-func (c SlackCollector) callAuthTest(ctx context.Context, token string) (slackAuthTest, error) {
+func (c SlackCollector) callAuthTest(ctx context.Context, token string, opts *CollectOpts, directiveID string) (slackAuthTest, error) {
 	var out slackAuthTest
-	if err := c.callAPI(ctx, token, http.MethodGet, "auth.test", nil, &out); err != nil {
+	if err := c.callAPI(ctx, token, http.MethodGet, "auth.test", nil, &out, opts, directiveID); err != nil {
 		return out, err
 	}
 	return out, nil
 }
 
-func (c SlackCollector) fetchAllConversations(ctx context.Context, token, types string, cache *slackChannelCache) ([]slackChannel, error) {
+func (c SlackCollector) fetchAllConversations(ctx context.Context, token, types string, cache *slackChannelCache, opts *CollectOpts, directiveID string) ([]slackChannel, error) {
 	var out []slackChannel
 	cursor := ""
 	for {
@@ -538,7 +538,7 @@ func (c SlackCollector) fetchAllConversations(ctx context.Context, token, types 
 			params.Set("cursor", cursor)
 		}
 		var resp slackConversationsList
-		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.list", params, &resp); err != nil {
+		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.list", params, &resp, opts, directiveID); err != nil {
 			return nil, err
 		}
 		for _, ch := range resp.Channels {
@@ -552,7 +552,7 @@ func (c SlackCollector) fetchAllConversations(ctx context.Context, token, types 
 	}
 }
 
-func (c SlackCollector) fetchHistorySince(ctx context.Context, token, channelID string, since, now time.Time) ([]slackMessage, error) {
+func (c SlackCollector) fetchHistorySince(ctx context.Context, token, channelID string, since, now time.Time, opts *CollectOpts, directiveID string) ([]slackMessage, error) {
 	var out []slackMessage
 	cursor := ""
 	for {
@@ -568,7 +568,7 @@ func (c SlackCollector) fetchHistorySince(ctx context.Context, token, channelID 
 			params.Set("cursor", cursor)
 		}
 		var resp slackHistory
-		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.history", params, &resp); err != nil {
+		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.history", params, &resp, opts, directiveID); err != nil {
 			return nil, err
 		}
 		for _, m := range resp.Messages {
@@ -584,7 +584,7 @@ func (c SlackCollector) fetchHistorySince(ctx context.Context, token, channelID 
 	}
 }
 
-func (c SlackCollector) fetchThreadReplies(ctx context.Context, token, channelID, threadTS string) ([]slackMessage, error) {
+func (c SlackCollector) fetchThreadReplies(ctx context.Context, token, channelID, threadTS string, opts *CollectOpts, directiveID string) ([]slackMessage, error) {
 	var out []slackMessage
 	cursor := ""
 	for {
@@ -596,7 +596,7 @@ func (c SlackCollector) fetchThreadReplies(ctx context.Context, token, channelID
 			params.Set("cursor", cursor)
 		}
 		var resp slackReplies
-		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.replies", params, &resp); err != nil {
+		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.replies", params, &resp, opts, directiveID); err != nil {
 			return nil, err
 		}
 		for _, m := range resp.Messages {
@@ -615,7 +615,7 @@ func (c SlackCollector) fetchThreadReplies(ctx context.Context, token, channelID
 // fetchContextWindow returns up to 3 messages before and 3 messages after ts
 // within the same channel, using two non-inclusive conversations.history
 // calls. Slack requires `latest` for the "before" half (older=true).
-func (c SlackCollector) fetchContextWindow(ctx context.Context, token, channelID, ts string) ([]slackMessage, error) {
+func (c SlackCollector) fetchContextWindow(ctx context.Context, token, channelID, ts string, opts *CollectOpts, directiveID string) ([]slackMessage, error) {
 	before, err := func() ([]slackMessage, error) {
 		params := url.Values{}
 		params.Set("channel", channelID)
@@ -623,7 +623,7 @@ func (c SlackCollector) fetchContextWindow(ctx context.Context, token, channelID
 		params.Set("inclusive", "false")
 		params.Set("limit", "3")
 		var resp slackHistory
-		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.history", params, &resp); err != nil {
+		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.history", params, &resp, opts, directiveID); err != nil {
 			return nil, err
 		}
 		return resp.Messages, nil
@@ -638,7 +638,7 @@ func (c SlackCollector) fetchContextWindow(ctx context.Context, token, channelID
 		params.Set("inclusive", "false")
 		params.Set("limit", "3")
 		var resp slackHistory
-		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.history", params, &resp); err != nil {
+		if err := c.callAPI(ctx, token, http.MethodGet, "conversations.history", params, &resp, opts, directiveID); err != nil {
 			return nil, err
 		}
 		return resp.Messages, nil
@@ -662,24 +662,24 @@ func (c SlackCollector) fetchContextWindow(ctx context.Context, token, channelID
 	return out, nil
 }
 
-func (c SlackCollector) fetchSearchMessages(ctx context.Context, token, query string) ([]slackSearchMatch, error) {
+func (c SlackCollector) fetchSearchMessages(ctx context.Context, token, query string, opts *CollectOpts, directiveID string) ([]slackSearchMatch, error) {
 	params := url.Values{}
 	params.Set("query", query)
 	params.Set("count", "100")
 	params.Set("sort", "timestamp")
 	params.Set("sort_dir", "desc")
 	var resp slackSearchMessages
-	if err := c.callAPI(ctx, token, http.MethodGet, "search.messages", params, &resp); err != nil {
+	if err := c.callAPI(ctx, token, http.MethodGet, "search.messages", params, &resp, opts, directiveID); err != nil {
 		return nil, err
 	}
 	return resp.Messages.Matches, nil
 }
 
-func (c SlackCollector) fetchUser(ctx context.Context, token, userID string) (slackUser, error) {
+func (c SlackCollector) fetchUser(ctx context.Context, token, userID string, opts *CollectOpts, directiveID string) (slackUser, error) {
 	params := url.Values{}
 	params.Set("user", userID)
 	var resp slackUsersInfo
-	if err := c.callAPI(ctx, token, http.MethodGet, "users.info", params, &resp); err != nil {
+	if err := c.callAPI(ctx, token, http.MethodGet, "users.info", params, &resp, opts, directiveID); err != nil {
 		return slackUser{}, err
 	}
 	return resp.User, nil
@@ -688,7 +688,7 @@ func (c SlackCollector) fetchUser(ctx context.Context, token, userID string) (sl
 // callAPI issues a Slack Web API request and unmarshals into out. Slack
 // returns a 200 response with `ok:false` and a textual `error` field on
 // auth/scope failures, so we surface those as Go errors here.
-func (c SlackCollector) callAPI(ctx context.Context, token, method, endpoint string, params url.Values, out any) error {
+func (c SlackCollector) callAPI(ctx context.Context, token, method, endpoint string, params url.Values, out any, opts *CollectOpts, directiveID string) error {
 	full := c.baseURL() + "/" + strings.TrimLeft(endpoint, "/")
 	if params != nil && method == http.MethodGet {
 		full += "?" + params.Encode()
@@ -706,12 +706,7 @@ func (c SlackCollector) callAPI(ctx context.Context, token, method, endpoint str
 	if method != http.MethodGet {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	res, err := c.client().Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	res, raw, err := doAndReadHTTP(c.client(), req, 8<<20, opts, directiveID)
 	if err != nil {
 		return err
 	}

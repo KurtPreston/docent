@@ -70,9 +70,6 @@ func Run(opts Options) error {
 	if err := os.MkdirAll(filepath.Join(root, "output"), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Join(root, ".cache"), 0o755); err != nil {
-		return err
-	}
 
 	model, err := configschema.WizardModel()
 	if err != nil {

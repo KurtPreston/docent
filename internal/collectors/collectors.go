@@ -97,7 +97,53 @@ type CollectOpts struct {
 	// Mirrors executionmode.Scope without importing that package to keep
 	// the dependency direction.
 	Scope Scope
+	// RunLog routes per-directive HTTP and subprocess activity into
+	// the per-run log directory. Nil disables logging (the default for
+	// tests). The runlog.Run type satisfies this interface; collectors
+	// only see the small interfaces below to keep their dependency
+	// surface narrow.
+	RunLog RunLog
 }
+
+// DirectiveLogger captures per-directive HTTP and subprocess
+// activity. The CLI builds a concrete logger that appends to
+// userdata/logs/<run>/<directive-id>.log; tests can pass nil
+// (collectors fall back to a noop logger).
+type DirectiveLogger interface {
+	LogHTTP(method, url string, reqBytes int, status int, resBytes int64, duration time.Duration, err error)
+	LogExec(name string, args []string, exitCode int, stdoutBytes, stderrBytes int, duration time.Duration, err error)
+	Note(format string, args ...any)
+}
+
+// RunLog is the per-run logger registry: one DirectiveLogger per
+// configured directive ID. Returning nil from Directive is allowed and
+// equivalent to a no-op logger.
+type RunLog interface {
+	Directive(id string) DirectiveLogger
+}
+
+// loggerFor returns the DirectiveLogger configured for directiveID,
+// or a no-op when no run-log is wired in. Callers should always go
+// through this helper so they don't have to nil-check at every call.
+func loggerFor(opts *CollectOpts, directiveID string) DirectiveLogger {
+	if opts == nil || opts.RunLog == nil {
+		return nopDirectiveLogger{}
+	}
+	l := opts.RunLog.Directive(directiveID)
+	if l == nil {
+		return nopDirectiveLogger{}
+	}
+	return l
+}
+
+// nopDirectiveLogger is the fallback when no logger is wired up.
+type nopDirectiveLogger struct{}
+
+func (nopDirectiveLogger) LogHTTP(method, url string, reqBytes int, status int, resBytes int64, duration time.Duration, err error) {
+}
+func (nopDirectiveLogger) LogExec(name string, args []string, exitCode int, stdoutBytes, stderrBytes int, duration time.Duration, err error) {
+}
+func (nopDirectiveLogger) Note(format string, args ...any) {}
 
 // Scope mirrors executionmode.Scope; defined here so the collectors package
 // has no upward dependency on executionmode. See executionmode.Scope for

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -96,7 +95,7 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	}
 	apiBase := strings.TrimRight(u.String(), "/")
 	if owner == "" {
-		login, err := c.fetchAuthenticatedLogin(ctx, apiBase, token)
+		login, err := c.fetchAuthenticatedLogin(ctx, apiBase, token, opts, directive.ID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve authenticated gitea user: %w", err)
 		}
@@ -117,14 +116,14 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	// ScopeAll, also include each followed entry so the "this followed
 	// repo got pushed" signal lands alongside its issue/PR activity.
 	var items []StatusItem
-	ownerRepos, err := c.fetchReposForOwner(ctx, apiBase, owner, token)
+	ownerRepos, err := c.fetchReposForOwner(ctx, apiBase, owner, token, opts, directive.ID)
 	if err != nil {
 		return nil, err
 	}
 	items = append(items, c.repoItemsFor(directive, apiBase, owner, ownerRepos, since, now)...)
 	if scope == ScopeAll {
 		for _, entry := range followedRepos {
-			repos, err := c.resolveFollowedRepoEntry(ctx, apiBase, token, entry)
+			repos, err := c.resolveFollowedRepoEntry(ctx, apiBase, token, entry, opts, directive.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -143,7 +142,7 @@ func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directiv
 	// first so their IsSelf=true entries win over repo-scoped duplicates.
 	issueQueries := buildGiteaIssueQueries(scope, owner, followedRepos, since)
 	for _, q := range issueQueries {
-		rows, err := c.fetchIssues(ctx, apiBase, token, q)
+		rows, err := c.fetchIssues(ctx, apiBase, token, q, opts, directive.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +298,7 @@ func gitOwnerFromFullName(fullName string) string {
 	return fullName
 }
 
-func (c GiteaCollector) fetchIssues(ctx context.Context, apiBase, token string, q giteaIssueQuery) ([]giteaIssue, error) {
+func (c GiteaCollector) fetchIssues(ctx context.Context, apiBase, token string, q giteaIssueQuery, opts *CollectOpts, directiveID string) ([]giteaIssue, error) {
 	values := url.Values{}
 	values.Set("type", q.issueType)
 	values.Set("state", "all")
@@ -329,12 +328,7 @@ func (c GiteaCollector) fetchIssues(ctx context.Context, apiBase, token string, 
 	}
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/json")
-	res, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	res, body, err := doAndReadHTTP(c.client(), req, 8<<20, opts, directiveID)
 	if err != nil {
 		return nil, err
 	}
@@ -367,13 +361,13 @@ func (c GiteaCollector) fetchIssues(ctx context.Context, apiBase, token string, 
 	return rows, nil
 }
 
-func (c GiteaCollector) resolveFollowedRepoEntry(ctx context.Context, apiBase, token, entry string) ([]giteaRepo, error) {
+func (c GiteaCollector) resolveFollowedRepoEntry(ctx context.Context, apiBase, token, entry string, opts *CollectOpts, directiveID string) ([]giteaRepo, error) {
 	entryOwner, entryRepo := splitFollowedRepo(entry)
 	if entryOwner == "" {
 		return nil, nil
 	}
 	if entryRepo == "" {
-		return c.fetchReposForOwner(ctx, apiBase, entryOwner, token)
+		return c.fetchReposForOwner(ctx, apiBase, entryOwner, token, opts, directiveID)
 	}
 	rawURL := fmt.Sprintf("%s/api/v1/repos/%s/%s", apiBase, url.PathEscape(entryOwner), url.PathEscape(entryRepo))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -382,12 +376,7 @@ func (c GiteaCollector) resolveFollowedRepoEntry(ctx context.Context, apiBase, t
 	}
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/json")
-	res, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	res, body, err := doAndReadHTTP(c.client(), req, 1<<20, opts, directiveID)
 	if err != nil {
 		return nil, err
 	}
@@ -523,7 +512,7 @@ func (c GiteaCollector) ValidateDirective(ctx context.Context, directive userdat
 	apiBase := strings.TrimRight(u.String(), "/")
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if _, err := c.fetchAuthenticatedLogin(probeCtx, apiBase, token); err != nil {
+	if _, err := c.fetchAuthenticatedLogin(probeCtx, apiBase, token, nil, directive.ID); err != nil {
 		issues = append(issues, ValidationIssue{
 			Field:       "auth",
 			Message:     fmt.Sprintf("Gitea auth probe failed: %v", err),
@@ -545,7 +534,7 @@ func parseGiteaTime(s string) (time.Time, error) {
 	return time.Parse("2006-01-02T15:04:05Z07:00", s)
 }
 
-func (c GiteaCollector) fetchAuthenticatedLogin(ctx context.Context, apiBase, token string) (string, error) {
+func (c GiteaCollector) fetchAuthenticatedLogin(ctx context.Context, apiBase, token string, opts *CollectOpts, directiveID string) (string, error) {
 	rawURL := apiBase + "/api/v1/user"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -553,12 +542,7 @@ func (c GiteaCollector) fetchAuthenticatedLogin(ctx context.Context, apiBase, to
 	}
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/json")
-	res, err := c.client().Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	res, body, err := doAndReadHTTP(c.client(), req, 1<<20, opts, directiveID)
 	if err != nil {
 		return "", err
 	}
@@ -577,14 +561,14 @@ func (c GiteaCollector) fetchAuthenticatedLogin(ctx context.Context, apiBase, to
 	return who.Login, nil
 }
 
-func (c GiteaCollector) fetchReposForOwner(ctx context.Context, apiBase, owner, token string) ([]giteaRepo, error) {
+func (c GiteaCollector) fetchReposForOwner(ctx context.Context, apiBase, owner, token string, opts *CollectOpts, directiveID string) ([]giteaRepo, error) {
 	userURL := fmt.Sprintf("%s/api/v1/users/%s/repos?limit=20&order=updated", apiBase, url.PathEscape(owner))
 	orgURL := fmt.Sprintf("%s/api/v1/orgs/%s/repos?limit=20&order=updated", apiBase, url.PathEscape(owner))
-	repos, errU := c.fetchReposURL(ctx, userURL, token)
+	repos, errU := c.fetchReposURL(ctx, userURL, token, opts, directiveID)
 	if errU == nil && len(repos) > 0 {
 		return repos, nil
 	}
-	reposO, errO := c.fetchReposURL(ctx, orgURL, token)
+	reposO, errO := c.fetchReposURL(ctx, orgURL, token, opts, directiveID)
 	if errO != nil {
 		if errU != nil {
 			return nil, errU
@@ -597,19 +581,14 @@ func (c GiteaCollector) fetchReposForOwner(ctx context.Context, apiBase, owner, 
 	return reposO, nil
 }
 
-func (c GiteaCollector) fetchReposURL(ctx context.Context, rawURL, token string) ([]giteaRepo, error) {
+func (c GiteaCollector) fetchReposURL(ctx context.Context, rawURL, token string, opts *CollectOpts, directiveID string) ([]giteaRepo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Accept", "application/json")
-	res, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	res, body, err := doAndReadHTTP(c.client(), req, 4<<20, opts, directiveID)
 	if err != nil {
 		return nil, err
 	}

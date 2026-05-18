@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -123,12 +122,7 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 		req.SetBasicAuth(email, secret)
 	}
 	req.Header.Set("Accept", "application/json")
-	res, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	res, body, err := doAndReadHTTP(c.client(), req, 4<<20, opts, directive.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +269,7 @@ func (c JiraCollector) ValidateDirective(ctx context.Context, directive userdata
 		req.SetBasicAuth(email, secret)
 	}
 	req.Header.Set("Accept", "application/json")
-	res, err := c.client().Do(req)
+	res, body, err := doAndReadHTTP(c.client(), req, 1<<20, nil, directive.ID)
 	if err != nil {
 		return []ValidationIssue{{
 			Field:       "auth",
@@ -283,8 +277,6 @@ func (c JiraCollector) ValidateDirective(ctx context.Context, directive userdata
 			Remediation: fmt.Sprintf("verify %s is reachable", base),
 		}}
 	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return []ValidationIssue{{
 			Field:       "auth",

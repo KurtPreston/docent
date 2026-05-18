@@ -182,7 +182,11 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `userdata/config.yaml` — only required config file.
 - `userdata/.env` — secret values referenced by `credential_refs` (optional).
 - `userdata/output/` — saved markdown.
-- `userdata/.cache/ai-debug/` — request/response logs from the active LLM provider (Ollama or cursor-agent); the last 20 entries per provider are retained.
+- `userdata/logs/<date>-<mode>/` — one directory per run, matching the saved markdown filename sans `.md` (including any `-2`/`-3` collision suffix). Contains:
+  - `run.log` — resolved mode/options + per-directive collection summary.
+  - `<directive-id>.log` — one file per enabled directive, recording every HTTP request and subprocess invocation the collector made (status, payload sizes, duration).
+  - `<provider>-summary-request.json` / `<provider>-summary-response.json` — the LLM provider's full request/response payloads (`cursor` or `ollama`); `<provider>-summary-error.json` appears when the call fails. The deterministic `rule-based` provider writes nothing here.
+  - Only the 20 most recent run directories are kept; older ones are pruned automatically.
 - `jsonschema/config.schema.json` — JSON Schema for `userdata/config.yaml` (canonical copy alongside embedded duplicate).
 
 The `userdata/` directory is gitignored; initialize with [`scripts/setup`](scripts/setup), run the CLI once (minimal default config), or copy an example by hand.

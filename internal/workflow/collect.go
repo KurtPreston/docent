@@ -14,6 +14,9 @@ type Deps struct {
 	Now               func() time.Time
 	ExpandRepoPath    func(string) string
 	OnDirectiveUpdate func(collectors.DirectiveProgress)
+	// RunLog routes per-directive HTTP and subprocess activity into
+	// the per-run log directory. Nil disables logging.
+	RunLog collectors.RunLog
 }
 
 // CollectStatuses runs all enabled directives in date-based mode since `until` is d.Now().
@@ -31,6 +34,7 @@ func CollectStatuses(ctx context.Context, d Deps, cfg userdata.ConfigFile, userd
 		Since:             since,
 		Until:             until,
 		Scope:             scope,
+		RunLog:            d.RunLog,
 	}
 	return d.Registry.Collect(ctx, cfg.Directives, opts)
 }
