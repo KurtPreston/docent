@@ -1029,6 +1029,77 @@ func TestSlackHistoryConcurrencyParsing(t *testing.T) {
 	}
 }
 
+// TestSlackCollectCachesUserIdentities runs the collector twice against
+// the same userdata dir and asserts the second run reuses the cached
+// author identity from disk instead of re-issuing users.info.
+func TestSlackCollectCachesUserIdentities(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	const userID = "U_SELF"
+	now1 := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+
+	var (
+		mu        sync.Mutex
+		usersInfo = 0
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_LIVE", "is_im": true, "user": "U_PEER"},
+				},
+			})
+		case "conversations.history":
+			return http.StatusOK, slackOK(map[string]any{
+				"messages": []map[string]any{
+					{"type": "message", "user": "U_PEER", "text": "still chatting", "ts": "1778500000.000000"},
+				},
+			})
+		case "search.messages":
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		case "users.info":
+			mu.Lock()
+			usersInfo++
+			mu.Unlock()
+			return http.StatusOK, slackOK(map[string]any{
+				"user": map[string]any{"id": req.Query.Get("user"), "name": "user-" + req.Query.Get("user")},
+			})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	userdataDir := t.TempDir()
+	c := SlackCollector{Clock: func() time.Time { return now1 }, BaseURL: srv.URL}
+
+	// --- Run 1: cold cache resolves and persists U_PEER. ---
+	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		UserdataDir: userdataDir, Since: now1.Add(-7 * 24 * time.Hour), Until: now1, Scope: ScopeSelf,
+	}); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	mu.Lock()
+	if usersInfo != 1 {
+		t.Fatalf("run 1 should resolve U_PEER once; usersInfo=%d", usersInfo)
+	}
+	mu.Unlock()
+
+	// --- Run 2: author identity should come from the on-disk cache. ---
+	now2 := now1.Add(24 * time.Hour)
+	c.Clock = func() time.Time { return now2 }
+	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		UserdataDir: userdataDir, Since: now2.Add(-7 * 24 * time.Hour), Until: now2, Scope: ScopeSelf,
+	}); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if usersInfo != 1 {
+		t.Errorf("run 2 should reuse the cached author; usersInfo=%d (want 1)", usersInfo)
+	}
+}
+
 func TestSlackRetryAfterParsing(t *testing.T) {
 	cases := []struct {
 		header  string

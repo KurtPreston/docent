@@ -101,6 +101,18 @@ scopes resolved.
     token: SLAKKR_SLACK_TOKEN
 ```
 
+## Caching
+
+The collector keeps a small, durable cache under
+`userdata/.cache/slack/<team_id>/cache.json`. It is best-effort: a missing,
+corrupt, or unwritable cache simply degrades to "no cache" and the run
+proceeds as before.
+
+Today the cache stores **resolved user identities**: `users.info` lookups
+are cached for 30 days, so author names are read from disk on repeat runs
+instead of re-fetched. Delete the cache directory at any time to force a
+fresh lookup; it will be rebuilt on the next run.
+
 ## Request shape & throttling
 
 `scope=involved` (the default) issues:

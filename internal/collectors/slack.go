@@ -358,6 +358,12 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 	}
 	teamURL := strings.TrimRight(strings.TrimSpace(auth.URL), "/")
 
+	teamID := strings.TrimSpace(auth.TeamID)
+	if teamID == "" {
+		teamID = strings.TrimSpace(auth.Team)
+	}
+	persistent := loadSlackCache(userdataDir, teamID)
+
 	channelCache := newSlackChannelCache()
 	userCache := newSlackUserCache()
 	userCache.put(slackUser{ID: userID, Name: auth.User})
@@ -648,6 +654,13 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		if _, ok := userCache.get(b.message.User); ok {
 			continue
 		}
+		// Reuse a previously-resolved identity from the persistent cache
+		// before spending a users.info call. Display names change rarely,
+		// so this eliminates almost all author lookups on repeat runs.
+		if u, ok := persistent.cachedUser(b.message.User, now); ok {
+			userCache.put(u)
+			continue
+		}
 		u, err := c.fetchUser(ctx, token, b.message.User, opts, directive.ID)
 		if err != nil {
 			// Best-effort: skip on lookup failure (rate limit, missing scope).
@@ -655,6 +668,11 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			continue
 		}
 		userCache.put(u)
+		persistent.putUser(u, now)
+	}
+
+	if err := persistent.save(); err != nil {
+		loggerFor(opts, directive.ID).Note("slack: failed to persist cache: %v", err)
 	}
 
 	items := make([]StatusItem, 0, len(bucket))
