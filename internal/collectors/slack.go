@@ -58,6 +58,12 @@ const (
 	// occasionally return very large values, and we'd rather fail fast
 	// than make the user think the CLI is hung.
 	slackMaxRetryAfter = 30 * time.Second
+	// slackDiscoveryMaxPages bounds the to:<@me> discovery search. Each
+	// page is 100 matches, so 20 pages covers 2000 inbound DM messages in
+	// the window. If a user somehow exceeds that we treat discovery as
+	// incomplete and fall back to polling every DM rather than risk
+	// pruning a channel whose only inbound message sat beyond the cap.
+	slackDiscoveryMaxPages = 20
 )
 
 // slackAPIError represents a Slack-level error (HTTP 200 with `ok:false`
@@ -211,6 +217,7 @@ type slackSearchMessages struct {
 	Messages struct {
 		Matches []slackSearchMatch `json:"matches"`
 		Paging  struct {
+			Page  int `json:"page,omitempty"`
 			Pages int `json:"pages,omitempty"`
 		} `json:"paging,omitempty"`
 	} `json:"messages"`
@@ -439,13 +446,22 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			"slack: skipping %d DM/MPIM channel(s) with deactivated peer or archived state", skipped,
 		)
 	}
+
+	// Decide which DMs actually need a conversations.history call. By
+	// default a single `to:<@me>` search discovers the (usually tiny) set
+	// of 1:1 DMs with inbound messages in the window, so we poll only
+	// those instead of fanning out across every DM the user can see.
+	// MPIMs are always polled (they aren't returned by `to:` searches),
+	// and any search failure falls back to polling every DM.
+	pollDMs := c.selectDMsToPoll(ctx, token, userID, since, activeDMs, opts, directive, progress)
+
 	progress.SetStage("DM history")
-	progress.AddUnits(len(activeDMs))
-	dmResults, err := c.fanOutHistorySince(ctx, token, activeDMs, since, now, opts, directive, progress)
+	progress.AddUnits(len(pollDMs))
+	dmResults, err := c.fanOutHistorySince(ctx, token, pollDMs, since, now, opts, directive, progress)
 	if err != nil {
 		return nil, err
 	}
-	for i, ch := range activeDMs {
+	for i, ch := range pollDMs {
 		for _, m := range dmResults[i] {
 			if m.User == userID {
 				continue // user's own messages are reported via "sent" path
@@ -909,6 +925,19 @@ func historyConcurrency(directive userdata.Directive) int {
 	return n
 }
 
+// dmDiscoveryEnabled reads Config["dm_discovery"]. It defaults to enabled
+// ("auto"): use a to:<@me> search to find active DMs and only poll those,
+// falling back to a full fan-out if search is unavailable. Set to
+// "off"/"false"/"no"/"0" to always poll every DM (the original behavior).
+func dmDiscoveryEnabled(directive userdata.Directive) bool {
+	switch strings.ToLower(strings.TrimSpace(directive.Config["dm_discovery"])) {
+	case "off", "false", "no", "0":
+		return false
+	default:
+		return true
+	}
+}
+
 func (c SlackCollector) fetchHistorySince(ctx context.Context, token, channelID string, since, now time.Time, opts *CollectOpts, directiveID string) ([]slackMessage, error) {
 	var out []slackMessage
 	cursor := ""
@@ -1030,6 +1059,120 @@ func (c SlackCollector) fetchSearchMessages(ctx context.Context, token, query st
 		return nil, err
 	}
 	return resp.Messages.Matches, nil
+}
+
+// selectDMsToPoll returns the subset of activeDMs that should be queried
+// with conversations.history. With discovery enabled (the default), it
+// runs a to:<@me> search to find 1:1 DMs with inbound messages and polls
+// only those plus all MPIMs; otherwise (or on any search failure) it
+// returns every active DM so no message is silently dropped.
+func (c SlackCollector) selectDMsToPoll(ctx context.Context, token, userID string, since time.Time, activeDMs []slackChannel, opts *CollectOpts, directive userdata.Directive, progress *slackProgress) []slackChannel {
+	if !dmDiscoveryEnabled(directive) || len(activeDMs) == 0 {
+		return activeDMs
+	}
+	logger := loggerFor(opts, directive.ID)
+
+	// MPIMs (and any non-IM) are always polled: `to:` searches only
+	// surface 1:1 IMs, so we can't discover MPIM activity this way.
+	var ims, mpims []slackChannel
+	for _, ch := range activeDMs {
+		if ch.IsIM {
+			ims = append(ims, ch)
+		} else {
+			mpims = append(mpims, ch)
+		}
+	}
+
+	progress.SetStage("discovering DMs")
+	active, capHit, err := c.discoverActiveIMChannels(ctx, token, userID, since, opts, directive.ID)
+	if err != nil {
+		logger.Note("slack: DM discovery search unavailable (%v); polling all %d DM(s)", err, len(activeDMs))
+		return activeDMs
+	}
+	if capHit {
+		logger.Note("slack: DM discovery exceeded %d pages; polling all %d DM(s)", slackDiscoveryMaxPages, len(activeDMs))
+		return activeDMs
+	}
+
+	poll := make([]slackChannel, 0, len(mpims)+len(active))
+	seen := map[string]struct{}{}
+	for _, ch := range mpims {
+		poll = append(poll, ch)
+		seen[ch.ID] = struct{}{}
+	}
+	for _, ch := range ims {
+		if _, ok := active[ch.ID]; ok {
+			poll = append(poll, ch)
+			seen[ch.ID] = struct{}{}
+		}
+	}
+	// Defensive: poll any discovered IM channel that conversations.list
+	// didn't return (e.g. a listing race), so discovery never drops one.
+	for id := range active {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		if strings.HasPrefix(id, "D") {
+			poll = append(poll, slackChannel{ID: id, IsIM: true})
+			seen[id] = struct{}{}
+		}
+	}
+
+	logger.Note(
+		"slack: DM discovery polling %d of %d DM(s) (%d active 1:1 + %d MPIM) via to:<@me> search",
+		len(poll), len(activeDMs), len(poll)-len(mpims), len(mpims),
+	)
+	return poll
+}
+
+// discoverActiveIMChannels runs a paginated `to:<@user> after:DATE`
+// search to find the set of 1:1 DM (IM) channel IDs that have an inbound
+// message in the window. This lets the caller poll conversations.history
+// for only the handful of active DMs instead of fanning out across every
+// DM the user can see (on long-lived accounts the overwhelming majority
+// are dormant).
+//
+// Correctness notes:
+//   - The search `after:` filter is day-granular, so we query from one
+//     day before `since` to avoid dropping a channel whose only inbound
+//     message lands on the boundary day. Over-discovery is harmless —
+//     conversations.history re-applies the exact [oldest,latest] window.
+//   - Search may collapse multiple nearby matches into one, but it still
+//     surfaces each active channel at least once, which is all we need:
+//     the authoritative messages come from conversations.history.
+//   - `to:` searches only return 1:1 IMs (verified against the live API);
+//     group DMs (MPIMs) never appear, so the caller polls MPIMs directly.
+//
+// The bool return is true when the page cap was hit (results are
+// incomplete and the caller should fall back to a full fan-out). On any
+// API error the error is returned so the caller can fall back too.
+func (c SlackCollector) discoverActiveIMChannels(ctx context.Context, token, userID string, since time.Time, opts *CollectOpts, directiveID string) (map[string]struct{}, bool, error) {
+	active := map[string]struct{}{}
+	query := "to:<@" + userID + "> after:" + slackAfterDate(since.AddDate(0, 0, -1))
+	for page := 1; ; page++ {
+		if page > slackDiscoveryMaxPages {
+			return active, true, nil
+		}
+		params := url.Values{}
+		params.Set("query", query)
+		params.Set("count", "100")
+		params.Set("sort", "timestamp")
+		params.Set("sort_dir", "desc")
+		params.Set("page", strconv.Itoa(page))
+		var resp slackSearchMessages
+		if err := c.callAPI(ctx, token, http.MethodGet, "search.messages", params, &resp, opts, directiveID); err != nil {
+			return nil, false, err
+		}
+		for _, m := range resp.Messages.Matches {
+			if id := strings.TrimSpace(m.Channel.ID); id != "" {
+				active[id] = struct{}{}
+			}
+		}
+		pages := resp.Messages.Paging.Pages
+		if pages <= 0 || page >= pages {
+			return active, false, nil
+		}
+	}
 }
 
 func (c SlackCollector) fetchUser(ctx context.Context, token, userID string, opts *CollectOpts, directiveID string) (slackUser, error) {

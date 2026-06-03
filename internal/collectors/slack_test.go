@@ -81,6 +81,17 @@ func newSlackDirective() userdata.Directive {
 	}
 }
 
+// slackDirectiveNoDiscovery returns a directive with DM discovery
+// disabled, so the collector fans out conversations.history across every
+// DM (the original behavior). Used by tests that assert on the per-DM
+// history fan-out, retries, and tolerable-error handling rather than the
+// discovery prune.
+func slackDirectiveNoDiscovery() userdata.Directive {
+	d := newSlackDirective()
+	d.Config["dm_discovery"] = "off"
+	return d
+}
+
 func slackOK(payload map[string]any) map[string]any {
 	out := map[string]any{"ok": true}
 	for k, v := range payload {
@@ -287,7 +298,7 @@ func TestSlackCollectScopeSelf(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -379,7 +390,7 @@ func TestSlackCollectScopeInvolvedAddsThreadAndContext(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeInvolved,
 	})
 	if err != nil {
@@ -625,7 +636,7 @@ func TestSlackCollectSkipsDeletedAndArchivedDMs(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -707,7 +718,7 @@ func TestSlackCallAPIRetriesOn429(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -771,7 +782,7 @@ func TestSlackCallAPIGivesUpAfterMaxRetries(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	_, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	_, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err == nil {
@@ -847,6 +858,7 @@ func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
 
 	d := newSlackDirective()
 	d.Config["history_concurrency"] = strconv.Itoa(concurrency)
+	d.Config["dm_discovery"] = "off" // exercise the full fan-out path
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
 	if _, err := c.Collect(context.Background(), d, &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
@@ -923,7 +935,7 @@ func TestSlackCollectTolerablePerChannelHistoryErrors(t *testing.T) {
 			})
 
 			c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-			items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+			items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 				Since: since, Until: now, Scope: ScopeSelf,
 			})
 			if err != nil {
@@ -970,7 +982,7 @@ func TestSlackCollectIntolerableSlackErrorStillFails(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	_, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	_, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err == nil {
@@ -1074,7 +1086,7 @@ func TestSlackCollectCachesUserIdentities(t *testing.T) {
 	c := SlackCollector{Clock: func() time.Time { return now1 }, BaseURL: srv.URL}
 
 	// --- Run 1: cold cache resolves and persists U_PEER. ---
-	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	if _, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		UserdataDir: userdataDir, Since: now1.Add(-7 * 24 * time.Hour), Until: now1, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatalf("run 1: %v", err)
@@ -1088,7 +1100,7 @@ func TestSlackCollectCachesUserIdentities(t *testing.T) {
 	// --- Run 2: author identity should come from the on-disk cache. ---
 	now2 := now1.Add(24 * time.Hour)
 	c.Clock = func() time.Time { return now2 }
-	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	if _, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		UserdataDir: userdataDir, Since: now2.Add(-7 * 24 * time.Hour), Until: now2, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatalf("run 2: %v", err)
@@ -1097,6 +1109,219 @@ func TestSlackCollectCachesUserIdentities(t *testing.T) {
 	defer mu.Unlock()
 	if usersInfo != 1 {
 		t.Errorf("run 2 should reuse the cached author; usersInfo=%d (want 1)", usersInfo)
+	}
+}
+
+// TestSlackCollectDMDiscoveryPrunesInactiveIMs verifies the default
+// discovery path: only IMs returned by the to:<@me> search are polled,
+// MPIMs are always polled, and idle IMs are skipped.
+func TestSlackCollectDMDiscoveryPrunesInactiveIMs(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	var (
+		mu          sync.Mutex
+		historyByCh = map[string]int{}
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_ACTIVE", "is_im": true, "user": "U_A"},
+					{"id": "D_IDLE", "is_im": true, "user": "U_B"},
+					{"id": "G_GROUP", "is_mpim": true, "name": "mpdm-foo"},
+				},
+			})
+		case "search.messages":
+			if strings.Contains(req.Query.Get("query"), "to:<@"+userID+">") {
+				return http.StatusOK, slackOK(map[string]any{
+					"messages": map[string]any{
+						"matches": []map[string]any{
+							{"type": "message", "user": "U_A", "text": "ping", "ts": "1778500000.000000",
+								"channel": map[string]any{"id": "D_ACTIVE"}},
+						},
+					},
+				})
+			}
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		case "conversations.history":
+			ch := req.Query.Get("channel")
+			mu.Lock()
+			historyByCh[ch]++
+			mu.Unlock()
+			if ch == "D_ACTIVE" {
+				return http.StatusOK, slackOK(map[string]any{
+					"messages": []map[string]any{
+						{"type": "message", "user": "U_A", "text": "ping", "ts": "1778500000.000000"},
+					},
+				})
+			}
+			return http.StatusOK, slackOK(map[string]any{"messages": []map[string]any{}})
+		case "users.info":
+			return http.StatusOK, slackOK(map[string]any{
+				"user": map[string]any{"id": req.Query.Get("user"), "name": "user-" + req.Query.Get("user")},
+			})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if historyByCh["D_ACTIVE"] != 1 {
+		t.Errorf("active IM should be polled once; got %d", historyByCh["D_ACTIVE"])
+	}
+	if historyByCh["G_GROUP"] != 1 {
+		t.Errorf("MPIM should always be polled; got %d", historyByCh["G_GROUP"])
+	}
+	if historyByCh["D_IDLE"] != 0 {
+		t.Errorf("idle IM (no inbound in to:me search) should be pruned; got %d", historyByCh["D_IDLE"])
+	}
+	var dm *StatusItem
+	for i := range items {
+		if items[i].Kind == "slack_dm" {
+			dm = &items[i]
+		}
+	}
+	if dm == nil {
+		t.Fatalf("expected slack_dm from the active IM, got items=%+v", items)
+	}
+}
+
+// TestSlackCollectDMDiscoveryFallsBackOnSearchError verifies that when the
+// discovery search fails (e.g. free-tier not_allowed_token_type), the
+// collector falls back to polling every DM rather than dropping any.
+func TestSlackCollectDMDiscoveryFallsBackOnSearchError(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	var (
+		mu          sync.Mutex
+		historyByCh = map[string]int{}
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_ONE", "is_im": true, "user": "U_A"},
+					{"id": "D_TWO", "is_im": true, "user": "U_B"},
+				},
+			})
+		case "search.messages":
+			if strings.Contains(req.Query.Get("query"), "to:<@"+userID+">") {
+				return http.StatusOK, map[string]any{"ok": false, "error": "not_allowed_token_type"}
+			}
+			return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+		case "conversations.history":
+			mu.Lock()
+			historyByCh[req.Query.Get("channel")]++
+			mu.Unlock()
+			return http.StatusOK, slackOK(map[string]any{"messages": []map[string]any{}})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	}); err != nil {
+		t.Fatalf("discovery failure should not fail the run: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if historyByCh["D_ONE"] != 1 || historyByCh["D_TWO"] != 1 {
+		t.Errorf("on discovery error, all DMs should be polled; got %+v", historyByCh)
+	}
+}
+
+// TestSlackCollectDMDiscoveryPaginates verifies the discovery search walks
+// every page of to:<@me> results before deciding which IMs to poll.
+func TestSlackCollectDMDiscoveryPaginates(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+
+	var (
+		mu          sync.Mutex
+		historyByCh = map[string]int{}
+	)
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_P1", "is_im": true, "user": "U_A"},
+					{"id": "D_P2", "is_im": true, "user": "U_B"},
+					{"id": "D_NONE", "is_im": true, "user": "U_C"},
+				},
+			})
+		case "search.messages":
+			if !strings.Contains(req.Query.Get("query"), "to:<@"+userID+">") {
+				return http.StatusOK, slackOK(map[string]any{"messages": map[string]any{"matches": []map[string]any{}}})
+			}
+			match := func(ch string) map[string]any {
+				return map[string]any{"type": "message", "user": "U_X", "text": "hi", "ts": "1778500000.000000",
+					"channel": map[string]any{"id": ch}}
+			}
+			if req.Query.Get("page") == "2" {
+				return http.StatusOK, slackOK(map[string]any{
+					"messages": map[string]any{
+						"matches": []map[string]any{match("D_P2")},
+						"paging":  map[string]any{"page": 2, "pages": 2},
+					},
+				})
+			}
+			return http.StatusOK, slackOK(map[string]any{
+				"messages": map[string]any{
+					"matches": []map[string]any{match("D_P1")},
+					"paging":  map[string]any{"page": 1, "pages": 2},
+				},
+			})
+		case "conversations.history":
+			mu.Lock()
+			historyByCh[req.Query.Get("channel")]++
+			mu.Unlock()
+			return http.StatusOK, slackOK(map[string]any{"messages": []map[string]any{}})
+		case "users.info":
+			return http.StatusOK, slackOK(map[string]any{
+				"user": map[string]any{"id": req.Query.Get("user"), "name": "u"},
+			})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeSelf,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if historyByCh["D_P1"] != 1 || historyByCh["D_P2"] != 1 {
+		t.Errorf("IMs discovered across pages should be polled; got %+v", historyByCh)
+	}
+	if historyByCh["D_NONE"] != 0 {
+		t.Errorf("IM absent from all discovery pages should be pruned; got %d", historyByCh["D_NONE"])
 	}
 }
 

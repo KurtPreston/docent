@@ -97,6 +97,14 @@ scopes resolved.
     # plan still feels slow despite skipping inactive DMs; the collector
     # transparently waits on Retry-After if Slack starts rate-limiting.
     history_concurrency: "4"
+    # Optional. DM discovery (default "auto"/on). When enabled, the
+    # collector runs a single `to:<@me>` search to find which 1:1 DMs
+    # actually received messages in the window and only calls
+    # conversations.history on those (plus all group DMs), instead of
+    # fanning out across every DM you can see. Set to "off" to always
+    # poll every DM (the original behavior). Any search failure falls
+    # back to the full fan-out automatically.
+    dm_discovery: "auto"
   credential_refs:
     token: SLAKKR_SLACK_TOKEN
 ```
@@ -120,13 +128,21 @@ fresh lookup; it will be rebuilt on the next run.
 1. One `auth.test` call to resolve the workspace + user identity.
 2. One `conversations.list?types=im,mpim` cursor walk to enumerate DMs
    and group DMs you can see.
-3. One `conversations.history` per remaining DM/MPIM channel, fanned out
-   across `history_concurrency` workers. DMs whose peer user has been
-   deactivated (`is_user_deleted: true`) and any archived channels are
-   skipped before this fan-out, which on long-lived accounts usually
-   eliminates the majority of dead channels.
-4. Two `search.messages` calls — one for `@me` mentions and one for your
-   sent messages.
+3. One `conversations.history` per DM/MPIM channel that needs polling,
+   fanned out across `history_concurrency` workers. Three things keep
+   this set small:
+   - DMs whose peer user has been deactivated (`is_user_deleted: true`)
+     and archived channels are dropped first.
+   - **DM discovery** (on by default; see below) runs one `to:<@me>`
+     search to find the 1:1 DMs that actually received messages in the
+     window and polls only those. Group DMs (MPIMs) are always polled
+     because `to:` searches don't surface them.
+   On long-lived accounts this collapses the fan-out dramatically — in
+   one observed run, 576 DM history calls (of which only ~75 returned
+   anything) drop to a single search plus a handful of history calls.
+4. `search.messages` calls — one for `@me` mentions, one for your sent
+   messages, and (when DM discovery is on) one paginated `to:<@me>` sweep
+   to find which DMs received messages.
 5. One `conversations.replies` per unique thread you posted in (involved
    tier), plus two non-inclusive `conversations.history` calls per sent
    message for the 3-before / 3-after context window.
@@ -147,6 +163,42 @@ single stale DM that `conversations.list` reports but
 errors (`invalid_auth`, `account_inactive`, `token_revoked`, etc.) still
 abort the run so a broken token surfaces clearly instead of silently
 returning an empty result set.
+
+## DM discovery
+
+The single biggest cost of a Slack run is the per-DM
+`conversations.history` fan-out: on a long-lived account you may be able
+to see hundreds of DMs, the vast majority of which have had no message in
+the collection window, yet each still costs a request against Slack's
+heavily-throttled `conversations.history` tier and contributes to the
+`429`/`Retry-After` backoff that dominates wall-clock time.
+
+DM discovery (enabled by default, `dm_discovery: auto`) avoids that by
+asking Slack which DMs are actually active. Because the received-DM
+signal only cares about messages *other people* sent you (your own DM
+messages are reported via the `from:@me` "sent" path), a single
+`to:<@me> after:DATE` search returns exactly the conversations worth
+polling. The collector then calls `conversations.history` on just those
+1:1 DMs — plus every group DM (MPIM), since `to:` searches only surface
+1:1 IMs — to pull the authoritative, complete message list.
+
+This stays correct because:
+
+- Search may collapse multiple nearby matches into one, but it still
+  surfaces each active channel at least once, which is all discovery
+  needs; the messages themselves come from `conversations.history`.
+- The `to:` query uses `after:` one day before the window start (it's
+  day-granular) so a boundary message can't cause a channel to be
+  missed. Over-polling is harmless — history re-applies the exact window.
+- Any search failure (e.g. free-tier `not_allowed_token_type`), or a
+  result that exceeds the internal page cap, falls back to polling every
+  DM, logged as a `note` line. So discovery can only make a run faster,
+  never lossier in those cases.
+
+The one real tradeoff is **search index lag**: a DM message indexed by
+Slack a few seconds after the run starts won't be discovered until the
+next run. For a periodic activity digest this is negligible. If you'd
+rather always pull every DM directly, set `dm_discovery: off`.
 
 `scope: all` only collects extra messages when `config.followed_channels`
 is non-empty. Without it, `all` behaves like `involved` for this
