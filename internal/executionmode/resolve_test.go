@@ -207,15 +207,24 @@ func TestResolveDaysOverrideForcesDaysLookback(t *testing.T) {
 	}
 }
 
-func TestResolveCustomPromptAsksForPrompt(t *testing.T) {
+func TestResolveCustomPromptAsksForLookbackAndPrompt(t *testing.T) {
 	mode := mustFindBuiltin(t, BuiltinCustomPrompt)
-	prompter := &scriptedPrompter{answers: []string{"summarize me"}}
+	// Lookback is asked first (custom-prompt leaves it nil), then the
+	// prompt instruction.
+	prompter := &scriptedPrompter{answers: []string{"3", "summarize me"}}
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
 	res, err := Resolve(mode, ResolveOpts{
-		Now:      time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC),
+		Now:      now,
 		Prompter: prompter,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if res.LookbackDays != 3 {
+		t.Fatalf("LookbackDays: got %d want 3", res.LookbackDays)
+	}
+	if want := now.Add(-3 * 24 * time.Hour); !res.Since.Equal(want) {
+		t.Fatalf("since: got %v want %v", res.Since, want)
 	}
 	if res.Instruction != "summarize me" {
 		t.Fatalf("instruction: got %q", res.Instruction)
@@ -223,17 +232,34 @@ func TestResolveCustomPromptAsksForPrompt(t *testing.T) {
 	if res.Scope != ScopeInvolved {
 		t.Fatalf("custom-prompt scope: %q", res.Scope)
 	}
-	if len(prompter.calls) != 1 {
-		t.Fatalf("expected exactly one prompt ask, got %v", prompter.calls)
+	if len(prompter.calls) != 2 {
+		t.Fatalf("expected lookback + prompt asks, got %v", prompter.calls)
+	}
+}
+
+func TestResolveCustomPromptDefaultsLookbackToSeven(t *testing.T) {
+	// An empty answer to the lookback ask keeps the documented 7-day default.
+	mode := mustFindBuiltin(t, BuiltinCustomPrompt)
+	prompter := &scriptedPrompter{answers: []string{"", "summarize me"}}
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+	res, err := Resolve(mode, ResolveOpts{Now: now, Prompter: prompter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.LookbackDays != 7 {
+		t.Fatalf("expected default 7 days, got %d", res.LookbackDays)
 	}
 }
 
 func TestResolveCustomPromptOverrideSkipsAsk(t *testing.T) {
 	mode := mustFindBuiltin(t, BuiltinCustomPrompt)
 	prompter := &scriptedPrompter{}
+	// DaysOverride suppresses the lookback ask so this test isolates the
+	// prompt-override behavior.
 	res, err := Resolve(mode, ResolveOpts{
 		Now:            time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC),
 		Prompter:       prompter,
+		DaysOverride:   7,
 		PromptOverride: "from flag",
 	})
 	if err != nil {

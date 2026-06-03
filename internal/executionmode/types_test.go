@@ -122,6 +122,9 @@ func TestBuiltinModesValid(t *testing.T) {
 				t.Fatalf("recent-activity should leave Scope unset so the user is asked, got %q", m.Scope)
 			}
 		case BuiltinCustomPrompt:
+			if m.Lookback != nil {
+				t.Fatalf("custom-prompt should leave Lookback nil so the user is asked, got %+v", m.Lookback)
+			}
 			if m.Prompt != nil {
 				t.Fatalf("custom-prompt should leave Prompt nil so the user is asked, got %+v", m.Prompt)
 			}

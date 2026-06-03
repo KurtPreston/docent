@@ -17,6 +17,10 @@ const (
 // have a single intended audience (the user's own day). `recent-activity`
 // leaves Scope unset on purpose so Resolve prompts for it interactively,
 // letting the user broaden to `all` or narrow to `self` on a per-run basis.
+//
+// `recent-activity` and `custom-prompt` leave Lookback nil so Resolve asks
+// the user for the lookback size (default 7 days) at runtime; `daily-plan`
+// pins the previous-weekday window since it always plans around one day.
 func BuiltinModes() []ExecutionMode {
 	return []ExecutionMode{
 		{
@@ -37,9 +41,11 @@ func BuiltinModes() []ExecutionMode {
 			Prompt: &Prompt{Instruction: recentActivityInstruction},
 		},
 		{
-			ID:       BuiltinCustomPrompt,
-			Name:     "Custom prompt",
-			Lookback: &Lookback{Kind: LookbackKindDays, Days: 7},
+			ID:   BuiltinCustomPrompt,
+			Name: "Custom prompt",
+			// Lookback left nil on purpose: Resolve prompts the user for
+			// days (default 7) at runtime, matching recent-activity's
+			// "default 7, or prompt" lookback. --days still overrides.
 			// Prompt left nil on purpose: the user supplies the prompt
 			// interactively (or via --prompt / --prompt-file).
 			Scope: ScopeInvolved,
