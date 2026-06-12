@@ -81,6 +81,13 @@
         "scope": {
           "type": "string",
           "enum": ["self", "involved", "all"]
+        },
+        "collectors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },

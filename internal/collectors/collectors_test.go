@@ -51,6 +51,55 @@ func TestRegistrySkipsDisabled(t *testing.T) {
 	}
 }
 
+// stubCollector records whether it was collected and emits one item so
+// the filter test can assert which directives actually ran.
+type stubCollector struct {
+	id     string
+	called *[]string
+}
+
+func (s stubCollector) Collect(_ context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+	*s.called = append(*s.called, d.ID)
+	return []StatusItem{{DirectiveID: d.ID, Source: d.Collector, Kind: "stub", Title: d.ID}}, nil
+}
+
+func TestRegistryOnlyCollectorTypes(t *testing.T) {
+	var called []string
+	r := NewRegistry(func() time.Time { return time.Unix(0, 0).UTC() })
+	r.Register("alpha", stubCollector{id: "alpha", called: &called})
+	r.Register("beta", stubCollector{id: "beta", called: &called})
+
+	directives := []userdata.Directive{
+		{ID: "a", Name: "A", Collector: "alpha", Enabled: true},
+		{ID: "b", Name: "B", Collector: "beta", Enabled: true},
+		{ID: "a2", Name: "A2", Collector: "alpha", Enabled: true},
+	}
+	items, err := r.Collect(context.Background(), directives, &CollectOpts{
+		OnlyCollectorTypes: []string{"alpha"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected only the 2 alpha directives, got %d: %#v", len(items), items)
+	}
+	for _, id := range called {
+		if id == "b" {
+			t.Fatalf("beta collector should have been skipped, called: %v", called)
+		}
+	}
+
+	// Empty set collects everything (historical default).
+	called = nil
+	items, err = r.Collect(context.Background(), directives, &CollectOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("empty OnlyCollectorTypes should collect all 3, got %d", len(items))
+	}
+}
+
 type stubValidator struct {
 	Issues []ValidationIssue
 	Err    error

@@ -97,6 +97,15 @@ type CollectOpts struct {
 	// Mirrors executionmode.Scope without importing that package to keep
 	// the dependency direction.
 	Scope Scope
+	// OnlyCollectorTypes, when non-empty, restricts collection to
+	// directives whose `collector` value is in this set. Empty collects
+	// every enabled directive (the historical default). Used by modes
+	// that only need a subset of sources (e.g. `prs` → GitHub only).
+	OnlyCollectorTypes []string
+	// PRReviewReadiness switches the GitHub collectors into "list my
+	// open PRs with draft + checks status" mode instead of the usual
+	// activity-timeline collection. Other collectors ignore it.
+	PRReviewReadiness bool
 	// RunLog routes per-directive HTTP and subprocess activity into
 	// the per-run log directory. Nil disables logging (the default for
 	// tests). The runlog.Run type satisfies this interface; collectors
@@ -164,6 +173,21 @@ func (o *CollectOpts) EffectiveScope() Scope {
 		return ScopeInvolved
 	}
 	return o.Scope
+}
+
+// collectorAllowed reports whether a directive using the named collector
+// should run under the current options. An empty OnlyCollectorTypes set
+// allows everything (the historical default).
+func (o *CollectOpts) collectorAllowed(name string) bool {
+	if o == nil || len(o.OnlyCollectorTypes) == 0 {
+		return true
+	}
+	for _, allowed := range o.OnlyCollectorTypes {
+		if allowed == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *CollectOpts) windowEnd(clock func() time.Time) time.Time {
@@ -271,6 +295,9 @@ func (r *Registry) Collect(ctx context.Context, directives []userdata.Directive,
 	enabled := make([]userdata.Directive, 0, len(directives))
 	for _, directive := range directives {
 		if !directive.Enabled {
+			continue
+		}
+		if !opts.collectorAllowed(directive.Collector) {
 			continue
 		}
 		enabled = append(enabled, directive)

@@ -45,6 +45,31 @@ func (p *scriptedPrompter) Select(prompt string, options []string, defaultValue 
 	return ans, nil
 }
 
+func TestResolvePRsDoesNotPromptAndCarriesCollectors(t *testing.T) {
+	mode := mustFindBuiltin(t, BuiltinPRs)
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+	prompter := &scriptedPrompter{}
+	res, err := Resolve(mode, ResolveOpts{Now: now, Prompter: prompter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompter.calls) != 0 {
+		t.Fatalf("prs must not prompt the user, got calls: %v", prompter.calls)
+	}
+	if res.Scope != ScopeSelf {
+		t.Fatalf("prs scope: %q", res.Scope)
+	}
+	want := map[string]bool{"github": true, "github-enterprise": true}
+	if len(res.Collectors) != len(want) {
+		t.Fatalf("prs collectors: %v", res.Collectors)
+	}
+	for _, c := range res.Collectors {
+		if !want[c] {
+			t.Fatalf("unexpected collector %q in resolved run", c)
+		}
+	}
+}
+
 func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	mode := mustFindBuiltin(t, BuiltinDailyPlan)
 	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC) // Tuesday

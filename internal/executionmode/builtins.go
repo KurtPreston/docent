@@ -7,6 +7,8 @@ const (
 	dailyPlanInstruction = "Create a practical daily plan. Section `## Yesterday` summarizes factual work from the aggregated activity below. Section `## Today` proposes a focused plan for today using that activity."
 
 	recentActivityInstruction = "Summarize the developer's recent activity. Activity below is grouped by Git repository where each item's repository field is set (usually org/repo); treat it as ground truth. Return one Markdown document with a brief executive summary at the top and noteworthy callouts. Do not invent activity not present in the input."
+
+	prsInstruction = "List the developer's open GitHub pull requests grouped into `Ready for review:` (not a draft and all checks passing) and `Work in progress:` (everything else). For each PR emit a Markdown bullet linking the Jira ticket key (when present in the title) to the PR URL, followed by the PR title with the Jira ticket stripped. This mode is rendered deterministically; the instruction is a fallback description only."
 )
 
 // BuiltinModes returns the three built-in execution modes in canonical
@@ -41,10 +43,25 @@ func BuiltinModes() []ExecutionMode {
 			Prompt: &Prompt{Instruction: recentActivityInstruction},
 		},
 		{
+			ID:   BuiltinPRs,
+			Name: "Pull request status",
+			// `prs` lists your currently-open PRs, not a time window of
+			// activity. Lookback is pinned to previous-weekday only so
+			// Resolve never prompts; the GitHub review-readiness
+			// collection ignores the window and queries `--state open`.
+			Lookback: &Lookback{Kind: LookbackKindPreviousWeekday},
+			Prompt:   &Prompt{Instruction: prsInstruction},
+			Scope:    ScopeSelf,
+			// Only the GitHub collectors can answer "what are my open
+			// PRs and are they ready for review"; skip everything else.
+			Collectors: []string{"github", "github-enterprise"},
+		},
+		{
 			ID:   BuiltinCustomPrompt,
 			Name: "Custom prompt",
-			// Lookback left nil on purpose: Resolve prompts the user for
-			// days (default 7) at runtime, matching recent-activity's
+			// Custom prompt is always last in the menu. Lookback left
+			// nil on purpose: Resolve prompts the user for days
+			// (default 7) at runtime, matching recent-activity's
 			// "default 7, or prompt" lookback. --days still overrides.
 			// Prompt left nil on purpose: the user supplies the prompt
 			// interactively (or via --prompt / --prompt-file).

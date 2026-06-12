@@ -59,6 +59,11 @@ func (p OllamaProvider) formatterOrDefault() ActivityFormatter {
 // formatter is depth-adjusted for daily-plan / custom-prompt to keep model
 // section headings from colliding with repo headings.
 func (p OllamaProvider) RunMode(ctx context.Context, in RunInput) (string, error) {
+	// The `prs` report is fully deterministic (draft + checks status are
+	// resolved during collection); never send it to the model.
+	if in.ModeID == prsModeID {
+		return RenderPRsMarkdown(in), nil
+	}
 	formatter := p.formatterOrDefault()
 	if needsNested(in.ModeID) {
 		formatter = NestRepoChronologicalDepth(formatter)

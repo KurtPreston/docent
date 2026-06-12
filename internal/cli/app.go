@@ -53,7 +53,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	var configPath string
 	fs.StringVar(&configPath, "config", "", "config file path (default <userdata>/config.yaml)")
 	fs.StringVar(&configPath, "c", "", "shorthand for --config")
-	modeFlag := fs.String("mode", "", "execution mode id (built-in: daily-plan, recent-activity, custom-prompt; plus any user-declared)")
+	modeFlag := fs.String("mode", "", "execution mode id (built-in: daily-plan, recent-activity, custom-prompt, prs; plus any user-declared)")
 	outPath := fs.String("out", "", "output markdown path (default userdata/output/<date>-<mode>.md; if the file exists, -2, -3, … are appended before the extension)")
 	noSave := fs.Bool("no-save", false, "do not write output file")
 	dateStr := fs.String("date", "", "date label YYYY-MM-DD for output filename (default today)")
@@ -243,7 +243,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 			progress.Update(p)
 		},
 		RunLog: runLogAdapter{run: run},
-	}, cfg, *userdataDir, resolved.Since, resolved.Until, collectors.Scope(resolved.Scope))
+	}, cfg, *userdataDir, workflow.RunOptions{
+		Since:              resolved.Since,
+		Until:              resolved.Until,
+		Scope:              collectors.Scope(resolved.Scope),
+		OnlyCollectorTypes: resolved.Collectors,
+		PRReviewReadiness:  resolved.ModeID == executionmode.BuiltinPRs,
+	})
 	collectDuration := a.Now().Sub(collectStart)
 	if err != nil {
 		writeRunLogCollectError(run.RunInfo(), err, collectDuration)

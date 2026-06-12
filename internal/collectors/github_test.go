@@ -122,6 +122,62 @@ func TestDedupeGitHubItemsIsSelfWins(t *testing.T) {
 	}
 }
 
+func TestRollupChecksState(t *testing.T) {
+	cases := []struct {
+		name   string
+		rollup []ghCheckRollupEntry
+		want   string
+	}{
+		{name: "empty is none", rollup: nil, want: "none"},
+		{
+			name: "all success passing",
+			rollup: []ghCheckRollupEntry{
+				{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
+				{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SKIPPED"},
+				{Typename: "StatusContext", State: "SUCCESS"},
+			},
+			want: "passing",
+		},
+		{
+			name: "in progress pending",
+			rollup: []ghCheckRollupEntry{
+				{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "SUCCESS"},
+				{Typename: "CheckRun", Status: "IN_PROGRESS"},
+			},
+			want: "pending",
+		},
+		{
+			name: "any failure fails over pending",
+			rollup: []ghCheckRollupEntry{
+				{Typename: "CheckRun", Status: "IN_PROGRESS"},
+				{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "FAILURE"},
+			},
+			want: "failing",
+		},
+		{
+			name: "status context failure",
+			rollup: []ghCheckRollupEntry{
+				{Typename: "StatusContext", State: "FAILURE"},
+			},
+			want: "failing",
+		},
+		{
+			name: "status context pending",
+			rollup: []ghCheckRollupEntry{
+				{Typename: "StatusContext", State: "PENDING"},
+			},
+			want: "pending",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rollupChecksState(tc.rollup); got != tc.want {
+				t.Fatalf("rollupChecksState = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func containsArg(args []string, want string) bool {
 	for _, a := range args {
 		if strings.EqualFold(a, want) {

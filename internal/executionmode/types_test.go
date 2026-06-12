@@ -89,8 +89,8 @@ func TestExecutionModeDisplay(t *testing.T) {
 
 func TestBuiltinModesValid(t *testing.T) {
 	modes := BuiltinModes()
-	if len(modes) != 3 {
-		t.Fatalf("expected 3 built-ins, got %d", len(modes))
+	if len(modes) != 4 {
+		t.Fatalf("expected 4 built-ins, got %d", len(modes))
 	}
 	for _, m := range modes {
 		if err := m.Validate(); err != nil {
@@ -130,6 +130,27 @@ func TestBuiltinModesValid(t *testing.T) {
 			}
 			if m.Scope != ScopeInvolved {
 				t.Fatalf("custom-prompt scope: %q", m.Scope)
+			}
+		case BuiltinPRs:
+			// prs pins everything so a non-interactive `--mode prs`
+			// never prompts, and declares the GitHub-only collector set.
+			if m.Prompt == nil {
+				t.Fatal("prs should have a (fallback) prompt so Resolve does not prompt")
+			}
+			if m.Lookback == nil {
+				t.Fatalf("prs should pin a lookback so Resolve does not prompt, got %+v", m.Lookback)
+			}
+			if m.Scope != ScopeSelf {
+				t.Fatalf("prs scope: %q", m.Scope)
+			}
+			wantCollectors := map[string]bool{"github": true, "github-enterprise": true}
+			if len(m.Collectors) != len(wantCollectors) {
+				t.Fatalf("prs collectors: %v", m.Collectors)
+			}
+			for _, c := range m.Collectors {
+				if !wantCollectors[c] {
+					t.Fatalf("prs unexpected collector %q", c)
+				}
 			}
 		}
 	}

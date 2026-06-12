@@ -66,6 +66,11 @@ func defaultCursorArgs() []string {
 // RunMode builds the prompt payload for the resolved mode and shells out to
 // cursor-agent.
 func (p CursorCLIProvider) RunMode(ctx context.Context, in RunInput) (string, error) {
+	// The `prs` report is fully deterministic (draft + checks status are
+	// resolved during collection); never send it to the model.
+	if in.ModeID == prsModeID {
+		return RenderPRsMarkdown(in), nil
+	}
 	formatter := p.formatterOrDefault()
 	if needsNested(in.ModeID) {
 		formatter = NestRepoChronologicalDepth(formatter)

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,11 +27,31 @@ type ghSearchActivityRow struct {
 	Title      string `json:"title"`
 	URL        string `json:"url"`
 	State      string `json:"state"`
+	IsDraft    bool   `json:"isDraft"`
 	UpdatedAt  string `json:"updatedAt"`
 	ClosedAt   string `json:"closedAt"`
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
+}
+
+// ghPRView is the subset of `gh pr view --json` we parse for the PR
+// review-readiness path. statusCheckRollup is a heterogeneous array of
+// CheckRun (GitHub Actions etc.) and StatusContext (legacy commit
+// statuses) entries; see ghCheckRollupEntry.
+type ghPRView struct {
+	StatusCheckRollup []ghCheckRollupEntry `json:"statusCheckRollup"`
+}
+
+// ghCheckRollupEntry covers both shapes returned in statusCheckRollup.
+// CheckRun entries carry Status (QUEUED/IN_PROGRESS/COMPLETED) and
+// Conclusion (SUCCESS/FAILURE/SKIPPED/…); StatusContext entries carry
+// State (SUCCESS/PENDING/FAILURE/ERROR/EXPECTED).
+type ghCheckRollupEntry struct {
+	Typename   string `json:"__typename"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
 }
 
 type ghSearchCommitRow struct {
@@ -95,6 +116,10 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 	// by a handful of commands like `gh auth` and `gh api`.
 	if host != "" && host != "github.com" {
 		env = append(env, "GH_HOST="+host)
+	}
+
+	if opts != nil && opts.PRReviewReadiness {
+		return c.collectPRReviewStatus(ctx, env, directive, user, host, opts)
 	}
 
 	scope := opts.EffectiveScope()
@@ -394,6 +419,152 @@ func dedupeGitHubItems(items []StatusItem) []StatusItem {
 		out = append(out, it)
 	}
 	return out
+}
+
+// collectPRReviewStatus lists the user's currently-open authored PRs and,
+// for each, resolves draft state and aggregate checks status so a report
+// can split them into "ready for review" vs "work in progress". This is a
+// different query shape than the activity-timeline path: it ignores the
+// collection window (PRs are open regardless of when they were last
+// touched) and queries `--state open`.
+//
+// Each open PR becomes one StatusItem with Kind "pr_review_status" and
+// Fields: is_draft, checks (passing|failing|pending|none|unknown), and
+// ready ("true" only when not a draft and checks are passing/none).
+func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string, directive userdata.Directive, user, host string, opts *CollectOpts) ([]StatusItem, error) {
+	listArgs := []string{"search", "prs", "--author", user, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,repository"}
+	cmd := exec.CommandContext(ctx, "gh", listArgs...)
+	cmd.Env = env
+	out, err := runAndLogExec(cmd, opts, directive.ID)
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(listArgs, " "), err, strings.TrimSpace(string(exit.Stderr)))
+		}
+		return nil, fmt.Errorf("gh %s: %w", strings.Join(listArgs, " "), err)
+	}
+	var rows []ghSearchActivityRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+
+	now := opts.windowEnd(c.Clock)
+	totalSteps := len(rows) + 1
+	completed := 1
+	reportProgress(opts, DirectiveProgress{
+		DirectiveID: directive.ID,
+		Description: directive.Name,
+		Status:      "running",
+		Detail:      fmt.Sprintf("%d open PR(s)", len(rows)),
+		Completed:   completed,
+		Total:       totalSteps,
+	})
+
+	var items []StatusItem
+	for _, row := range rows {
+		checks := c.fetchPRChecks(ctx, env, row.URL, directive, opts)
+		completed++
+		reportProgress(opts, DirectiveProgress{
+			DirectiveID: directive.ID,
+			Description: directive.Name,
+			Status:      "running",
+			Detail:      "checking PR status",
+			Completed:   completed,
+			Total:       totalSteps,
+		})
+
+		ready := !row.IsDraft && (checks == "passing" || checks == "none")
+		repo := strings.TrimSpace(row.Repository.NameWithOwner)
+		if repo == "" {
+			repo = gitHubOwnerRepoFromURL(row.URL)
+		}
+		items = append(items, StatusItem{
+			DirectiveID: directive.ID,
+			Repository:  repo,
+			Source:      directive.Collector,
+			Kind:        "pr_review_status",
+			Title:       row.Title,
+			Summary:     fmt.Sprintf("open pr draft=%t checks=%s", row.IsDraft, checks),
+			URL:         row.URL,
+			Severity:    "info",
+			ObservedAt:  now.UTC(),
+			Author:      user,
+			IsSelf:      true,
+			Fields: map[string]string{
+				"username": user,
+				"host":     host,
+				"repo":     repo,
+				"state":    "open",
+				"is_draft": strconv.FormatBool(row.IsDraft),
+				"checks":   checks,
+				"ready":    strconv.FormatBool(ready),
+			},
+		})
+	}
+	return items, nil
+}
+
+// fetchPRChecks resolves the aggregate checks status for a single PR via
+// `gh pr view --json statusCheckRollup`. Returns one of "passing",
+// "failing", "pending", "none", or "unknown" (when the call fails or the
+// payload can't be parsed). Failures are non-fatal: an unknown status
+// keeps the PR out of "ready for review" without aborting the whole run.
+func (c GitHubCollector) fetchPRChecks(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) string {
+	if strings.TrimSpace(prURL) == "" {
+		return "unknown"
+	}
+	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup"}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Env = env
+	out, err := runAndLogExec(cmd, opts, directive.ID)
+	if err != nil {
+		return "unknown"
+	}
+	var view ghPRView
+	if err := json.Unmarshal(out, &view); err != nil {
+		return "unknown"
+	}
+	return rollupChecksState(view.StatusCheckRollup)
+}
+
+// rollupChecksState reduces a statusCheckRollup array to a single label.
+// Precedence is failing > pending > passing; an empty rollup (no checks
+// configured) is "none". SUCCESS/NEUTRAL/SKIPPED count as passing.
+func rollupChecksState(rollup []ghCheckRollupEntry) string {
+	if len(rollup) == 0 {
+		return "none"
+	}
+	failing := false
+	pending := false
+	for _, entry := range rollup {
+		if entry.Typename == "StatusContext" {
+			switch strings.ToUpper(entry.State) {
+			case "SUCCESS":
+			case "PENDING", "EXPECTED", "":
+				pending = true
+			default: // FAILURE, ERROR
+				failing = true
+			}
+			continue
+		}
+		// CheckRun (and any unrecognized shape with a status field).
+		if strings.ToUpper(entry.Status) != "COMPLETED" {
+			pending = true
+			continue
+		}
+		switch strings.ToUpper(entry.Conclusion) {
+		case "SUCCESS", "NEUTRAL", "SKIPPED", "":
+		default: // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE
+			failing = true
+		}
+	}
+	switch {
+	case failing:
+		return "failing"
+	case pending:
+		return "pending"
+	default:
+		return "passing"
+	}
 }
 
 // ValidateDirective checks that `gh` is installed, the optional token env var

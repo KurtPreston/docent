@@ -72,15 +72,32 @@ directives:
 
 ## Modes
 
-Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, and a **scope**. Built-in modes ship with the binary; users can declare additional modes in `userdata/config.yaml` under `execution_modes:`.
+Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, a **scope**, and an optional **collector allow-list**. Built-in modes ship with the binary; users can declare additional modes in `userdata/config.yaml` under `execution_modes:`.
 
 | Mode | Lookback | Scope | Behavior |
 |------|----------|-------|----------|
 | `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | `involved` | AI output should use `## Yesterday` and `## Today`. Pulls your own activity plus PRs/issues you reviewed, were assigned, or were mentioned in (see *Scope semantics* below). |
 | `recent-activity` | `--days N` (default 7, or prompt) | prompt (default `involved`) | Summarize activity; grouped markdown. The scope picker lets you broaden to `all` or narrow to `self` per run. |
+| `prs` (Pull request status) | n/a (lists currently-open PRs) | `self` | Lists your open GitHub PRs split into **Ready for review:** (not a draft, all checks passing) and **Work in progress:** (everything else). Each bullet links the Jira ticket key (parsed from the title) to the PR, followed by the title with the ticket stripped. **Only runs the `github` / `github-enterprise` collectors** (see *Restricting collectors* below). Rendered deterministically — the AI provider is not consulted. |
 | `custom-prompt` | `--days N` (default 7, or prompt) | `involved` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions over the same `involved` set. Override with `scope: all` on a user-declared mode if you want everything. |
 
 Run without `--mode` on a TTY to pick interactively.
+
+### Restricting collectors
+
+A mode may declare a `collectors:` allow-list of collector types. When set, only directives whose `collector` matches an entry participate in that run; all other enabled directives are skipped. The built-in `prs` mode uses this to run GitHub-only:
+
+```yaml
+execution_modes:
+  - id: github-only
+    name: GitHub only
+    lookback: { kind: days, days: 7 }
+    prompt:
+      instruction: "Summarize my GitHub activity."
+    collectors: [github, github-enterprise]
+```
+
+Leaving `collectors:` unset (the default) collects from every enabled directive, as before.
 
 ### Declaring your own modes
 

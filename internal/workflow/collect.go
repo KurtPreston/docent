@@ -19,22 +19,36 @@ type Deps struct {
 	RunLog collectors.RunLog
 }
 
-// CollectStatuses runs all enabled directives in date-based mode since `until` is d.Now().
-// scope is forwarded into CollectOpts as a placeholder for future
-// scope-aware collection (collectors ignore it today).
-func CollectStatuses(ctx context.Context, d Deps, cfg userdata.ConfigFile, userdataDir string, since, until time.Time, scope collectors.Scope) ([]collectors.StatusItem, error) {
+// RunOptions carries the per-run knobs that vary by resolved execution
+// mode: the collection window, scope, an optional collector-type allow
+// list, and whether GitHub should collect PR review-readiness instead of
+// the usual activity timeline.
+type RunOptions struct {
+	Since              time.Time
+	Until              time.Time
+	Scope              collectors.Scope
+	OnlyCollectorTypes []string
+	PRReviewReadiness  bool
+}
+
+// CollectStatuses runs the enabled directives for one run. When
+// run.OnlyCollectorTypes is set, only directives using those collector
+// types participate (e.g. `prs` → GitHub only).
+func CollectStatuses(ctx context.Context, d Deps, cfg userdata.ConfigFile, userdataDir string, run RunOptions) ([]collectors.StatusItem, error) {
 	expand := d.ExpandRepoPath
 	if expand == nil {
 		expand = func(s string) string { return s }
 	}
 	opts := &collectors.CollectOpts{
-		UserdataDir:       userdataDir,
-		ExpandRepoPath:    expand,
-		OnDirectiveUpdate: d.OnDirectiveUpdate,
-		Since:             since,
-		Until:             until,
-		Scope:             scope,
-		RunLog:            d.RunLog,
+		UserdataDir:        userdataDir,
+		ExpandRepoPath:     expand,
+		OnDirectiveUpdate:  d.OnDirectiveUpdate,
+		Since:              run.Since,
+		Until:              run.Until,
+		Scope:              run.Scope,
+		OnlyCollectorTypes: run.OnlyCollectorTypes,
+		PRReviewReadiness:  run.PRReviewReadiness,
+		RunLog:             d.RunLog,
 	}
 	return d.Registry.Collect(ctx, cfg.Directives, opts)
 }

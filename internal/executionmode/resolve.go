@@ -55,6 +55,9 @@ type ResolvedRun struct {
 	Formatter    string // resolved formatter name; "" => provider/global default
 	Instruction  string // LLM instruction (verbatim; provider appends activity body)
 	Scope        Scope
+	// Collectors restricts collection to these collector types (by their
+	// directive `collector` value). Empty means "all enabled directives".
+	Collectors []string
 }
 
 // Resolve produces a ResolvedRun from a mode + per-run options. It is
@@ -89,6 +92,13 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 		formatter = strings.TrimSpace(opts.ConfigActivityFormatter)
 	}
 
+	var collectorTypes []string
+	for _, c := range mode.Collectors {
+		if c = strings.TrimSpace(c); c != "" {
+			collectorTypes = append(collectorTypes, c)
+		}
+	}
+
 	return ResolvedRun{
 		ModeID:       mode.ID,
 		ModeName:     mode.Display(),
@@ -98,6 +108,7 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 		Formatter:    formatter,
 		Instruction:  instruction,
 		Scope:        scope,
+		Collectors:   collectorTypes,
 	}, nil
 }
 

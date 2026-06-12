@@ -54,6 +54,8 @@ func (p RuleBasedProvider) RunMode(_ context.Context, in RunInput) (string, erro
 		return RenderRecentActivityMarkdown(in, p.formatterOrDefault()), nil
 	case "custom-prompt":
 		return RenderCustomPromptMarkdown(in, p.formatterOrDefault()), nil
+	case prsModeID:
+		return RenderPRsMarkdown(in), nil
 	default:
 		return RenderGenericMarkdown(in, p.formatterOrDefault()), nil
 	}

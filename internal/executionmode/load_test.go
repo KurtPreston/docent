@@ -19,14 +19,14 @@ func TestLoadAppendsUserModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(modes) != 4 {
-		t.Fatalf("expected 4 modes, got %d", len(modes))
+	if len(modes) != 5 {
+		t.Fatalf("expected 5 modes, got %d", len(modes))
 	}
-	if modes[3].ID != "repo-activity" {
-		t.Fatalf("user mode should be appended last, got %q", modes[3].ID)
+	if modes[4].ID != "repo-activity" {
+		t.Fatalf("user mode should be appended last, got %q", modes[4].ID)
 	}
 	// Built-in order preserved.
-	for i, want := range []string{BuiltinDailyPlan, BuiltinRecentActivity, BuiltinCustomPrompt} {
+	for i, want := range []string{BuiltinDailyPlan, BuiltinRecentActivity, BuiltinPRs, BuiltinCustomPrompt} {
 		if modes[i].ID != want {
 			t.Fatalf("position %d: got %q want %q", i, modes[i].ID, want)
 		}
@@ -45,8 +45,8 @@ func TestLoadUserOverridesBuiltinByID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(modes) != 3 {
-		t.Fatalf("expected 3 modes after override, got %d", len(modes))
+	if len(modes) != 4 {
+		t.Fatalf("expected 4 modes after override, got %d", len(modes))
 	}
 	if modes[0].ID != BuiltinDailyPlan {
 		t.Fatalf("override should preserve position, got %q at index 0", modes[0].ID)

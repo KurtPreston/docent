@@ -22,6 +22,7 @@ const (
 	BuiltinDailyPlan      = "daily-plan"
 	BuiltinRecentActivity = "recent-activity"
 	BuiltinCustomPrompt   = "custom-prompt"
+	BuiltinPRs            = "prs"
 )
 
 // Lookback kinds (extensible — add "duration", "previous-week", … without
@@ -59,6 +60,15 @@ type ExecutionMode struct {
 	Formatter string    `yaml:"formatter,omitempty"`
 	Prompt    *Prompt   `yaml:"prompt,omitempty"`
 	Scope     Scope     `yaml:"scope,omitempty"`
+
+	// Collectors optionally restricts a run to a subset of collector
+	// types (by their directive `collector` value, e.g. "github" /
+	// "github-enterprise"). When empty, every enabled directive is
+	// collected (the historical behavior). Modes that only need data
+	// from one source — like the built-in `prs` mode, which only needs
+	// GitHub — declare the collectors they care about here so unrelated
+	// directives are skipped.
+	Collectors []string `yaml:"collectors,omitempty"`
 }
 
 // Lookback is a tagged union over the supported lookback strategies.
@@ -106,6 +116,11 @@ func (m ExecutionMode) Validate() error {
 	}
 	if err := m.Scope.Validate(); err != nil {
 		return err
+	}
+	for i, c := range m.Collectors {
+		if strings.TrimSpace(c) == "" {
+			return fmt.Errorf("collectors[%d] must not be empty", i)
+		}
 	}
 	return nil
 }
