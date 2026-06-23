@@ -176,7 +176,7 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 	var sel string
 	prompt := &survey.Select{
 		Message: "Which AI provider?",
-		Options: []string{"cursor", "ollama", "none (offline rule-based)"},
+		Options: []string{"cursor", "claude", "ollama", "none (offline rule-based)"},
 		Default: providerDefaultLabel(cfg.AI.Provider),
 	}
 	if err := survey.AskOne(prompt, &sel, surveyOpt); err != nil {
@@ -186,12 +186,21 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 	case strings.HasPrefix(sel, "cursor"):
 		cfg.AI.Provider = "cursor"
 		cfg.AI.Ollama = userdata.AIProviderOllama{}
+		cfg.AI.Claude = userdata.AIProviderClaude{}
 		if err := fillAINested(cfg, model, "cursor", surveyOpt); err != nil {
+			return err
+		}
+	case strings.HasPrefix(sel, "claude"):
+		cfg.AI.Provider = "claude"
+		cfg.AI.Ollama = userdata.AIProviderOllama{}
+		cfg.AI.Cursor = userdata.AIProviderCursor{}
+		if err := fillAINested(cfg, model, "claude", surveyOpt); err != nil {
 			return err
 		}
 	case strings.HasPrefix(sel, "ollama"):
 		cfg.AI.Provider = "ollama"
 		cfg.AI.Cursor = userdata.AIProviderCursor{}
+		cfg.AI.Claude = userdata.AIProviderClaude{}
 		if err := fillAINested(cfg, model, "ollama", surveyOpt); err != nil {
 			return err
 		}
@@ -199,6 +208,7 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 		cfg.AI.Provider = "rule-based"
 		cfg.AI.Ollama = userdata.AIProviderOllama{}
 		cfg.AI.Cursor = userdata.AIProviderCursor{}
+		cfg.AI.Claude = userdata.AIProviderClaude{}
 	}
 	return pickActivityFormatter(cfg, model, surveyOpt)
 }
@@ -257,6 +267,8 @@ func providerDefaultLabel(p string) string {
 	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), "_", "-")) {
 	case "cursor":
 		return "cursor"
+	case "claude":
+		return "claude"
 	case "ollama":
 		return "ollama"
 	default:
@@ -278,8 +290,15 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 	for _, f := range branch.Fields {
 		if f.IsArgs {
 			def := ""
-			if nestedKey == "cursor" && cfg.AI.Cursor.Args != nil {
-				def = strings.Join(cfg.AI.Cursor.Args, ",")
+			switch nestedKey {
+			case "cursor":
+				if cfg.AI.Cursor.Args != nil {
+					def = strings.Join(cfg.AI.Cursor.Args, ",")
+				}
+			case "claude":
+				if cfg.AI.Claude.Args != nil {
+					def = strings.Join(cfg.AI.Claude.Args, ",")
+				}
 			}
 			var line string
 			p := &survey.Input{Message: f.Prompt, Default: def}
@@ -295,7 +314,12 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 						parts = append(parts, p)
 					}
 				}
-				cfg.AI.Cursor.Args = parts
+				switch nestedKey {
+				case "cursor":
+					cfg.AI.Cursor.Args = parts
+				case "claude":
+					cfg.AI.Claude.Args = parts
+				}
 			}
 			continue
 		}
@@ -311,6 +335,10 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 		case "cursor":
 			if f.Key == "command" && cfg.AI.Cursor.Command != "" {
 				def = cfg.AI.Cursor.Command
+			}
+		case "claude":
+			if f.Key == "command" && cfg.AI.Claude.Command != "" {
+				def = cfg.AI.Claude.Command
 			}
 		}
 		var val string
@@ -340,6 +368,10 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 		case "cursor":
 			if f.Key == "command" {
 				cfg.AI.Cursor.Command = val
+			}
+		case "claude":
+			if f.Key == "command" {
+				cfg.AI.Claude.Command = val
 			}
 		}
 	}

@@ -170,7 +170,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	provider := ai.SelectProvider(cfg.AI, a.AI)
 	var stream io.Writer
 	switch provider.(type) {
-	case ai.OllamaProvider, ai.CursorCLIProvider:
+	case ai.OllamaProvider, ai.CursorCLIProvider, ai.ClaudeCLIProvider:
 		stream = a.Err
 	}
 
@@ -395,6 +395,9 @@ func withFormatter(p ai.Provider, f ai.ActivityFormatter) ai.Provider {
 		pp.Formatter = f
 		return pp
 	case ai.CursorCLIProvider:
+		pp.Formatter = f
+		return pp
+	case ai.ClaudeCLIProvider:
 		pp.Formatter = f
 		return pp
 	default:

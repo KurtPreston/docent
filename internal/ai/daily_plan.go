@@ -56,7 +56,7 @@ func RenderDailyPlanMarkdown(in RunInput, formatter ActivityFormatter) string {
 	fmt.Fprintf(&b, "## Yesterday\n\n")
 	fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(body, "\n"))
 	fmt.Fprintf(&b, "## Today\n\n")
-	fmt.Fprintf(&b, "_Suggested next steps (configure `ai.provider` to `ollama` or `cursor` for model-generated planning):_\n\n")
+	fmt.Fprintf(&b, "_Suggested next steps (configure `ai.provider` to `ollama`, `cursor`, or `claude` for model-generated planning):_\n\n")
 	fmt.Fprintf(&b, "- Review the activity above and pick 1–3 focus items.\n")
 	fmt.Fprintf(&b, "- Block time for the highest-signal work.\n")
 	return b.String()

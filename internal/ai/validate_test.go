@@ -158,8 +158,43 @@ func TestValidateOllamaUnreachable(t *testing.T) {
 }
 
 func TestValidateUnknownProvider(t *testing.T) {
-	issues := Validate(context.Background(), userdata.AIConfig{Provider: "claude"}, nil)
+	issues := Validate(context.Background(), userdata.AIConfig{Provider: "gemini"}, nil)
 	if len(issues) == 0 || !strings.Contains(issues[0].Message, "unknown") {
 		t.Fatalf("expected unknown provider issue, got %#v", issues)
+	}
+}
+
+func TestValidateClaudeMissingBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // empty PATH so claude definitely missing
+	issues := Validate(context.Background(), userdata.AIConfig{Provider: "claude"}, nil)
+	if len(issues) == 0 || !strings.Contains(issues[0].Message, "claude") {
+		t.Fatalf("expected claude missing issue, got %#v", issues)
+	}
+	if issues[0].Provider != "claude" {
+		t.Fatalf("expected provider 'claude', got %q", issues[0].Provider)
+	}
+}
+
+func TestValidateClaudeCustomCommand(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	issues := Validate(context.Background(), userdata.AIConfig{
+		Provider: "claude",
+		Claude:   userdata.AIProviderClaude{Command: "totally-fake-claude-12345"},
+	}, nil)
+	if len(issues) == 0 || !strings.Contains(issues[0].Message, "totally-fake-claude-12345") {
+		t.Fatalf("expected issue mentioning custom command, got %#v", issues)
+	}
+}
+
+func TestValidateClaudeOnPath(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "claude")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	issues := Validate(context.Background(), userdata.AIConfig{Provider: "claude"}, nil)
+	if len(issues) != 0 {
+		t.Fatalf("expected no issues when claude is on PATH, got %#v", issues)
 	}
 }

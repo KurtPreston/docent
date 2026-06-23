@@ -22,7 +22,7 @@ Bootstrap or refresh `userdata/config.yaml` and reconcile secret placeholders in
 # or: go run ./cmd/slakkr-setup --userdata userdata
 ```
 
-The wizard picks an AI provider (cursor / ollama / offline `rule-based`), an activity formatter, walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
+The wizard picks an AI provider (cursor / claude / ollama / offline `rule-based`), an activity formatter, walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
 
 Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`internal/configschema/config.schema.json`](internal/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
 
@@ -49,7 +49,7 @@ Example:
 ```yaml
 # yaml-language-server: $schema=../jsonschema/config.schema.json
 ai:
-  provider: ollama   # or cursor, rule-based
+  provider: ollama   # or cursor, claude, rule-based
   activity_formatter: repo-chronological  # optional; or json-signal-list
   ollama:
     base_url: http://127.0.0.1:11434
@@ -182,6 +182,7 @@ Without these fields, `scope: all` collects the same set as `scope: involved` (t
 - **`rule-based`**: Deterministic markdown (no network); uses the same `activity_formatter` shaping as cloud providers.
 - **`ollama`**: HTTP chat to Ollama; streams to stderr when connected to a TTY.
 - **`cursor`**: Shells out to `cursor-agent` (override with `ai.cursor.command` / `args`). Each call runs from a fresh temp directory in read-only `--mode=ask`, so the agent cannot edit files or run shell commands. `--sandbox=enabled` is intentionally not part of the defaults (it's host-dependent on Linux and `--mode=ask` already blocks the behaviors it would constrain); opt in via `ai.cursor.args` if you want it. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
+- **`claude`**: Shells out to the Claude Code CLI `claude` (override with `ai.claude.command` / `args`). Each call runs from a fresh temp directory in non-interactive `--print` mode with the file-mutating and shell tools disabled (`--disallowedTools=Bash,Edit,Write,MultiEdit,NotebookEdit`), so the agent cannot edit files or run shell commands; override the whole flag set via `ai.claude.args` if you need different behavior. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
 
 ## Collectors
 
@@ -202,7 +203,7 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `userdata/logs/<date>-<mode>/` — one directory per run, matching the saved markdown filename sans `.md` (including any `-2`/`-3` collision suffix). Contains:
   - `run.log` — resolved mode/options + per-directive collection summary.
   - `<directive-id>.log` — one file per enabled directive, recording every HTTP request and subprocess invocation the collector made (status, payload sizes, duration).
-  - `<provider>-summary-request.json` / `<provider>-summary-response.json` — the LLM provider's full request/response payloads (`cursor` or `ollama`); `<provider>-summary-error.json` appears when the call fails. The deterministic `rule-based` provider writes nothing here.
+  - `<provider>-summary-request.json` / `<provider>-summary-response.json` — the LLM provider's full request/response payloads (`cursor`, `claude`, or `ollama`); `<provider>-summary-error.json` appears when the call fails. The deterministic `rule-based` provider writes nothing here.
   - Only the 20 most recent run directories are kept; older ones are pruned automatically.
 - `jsonschema/config.schema.json` — JSON Schema for `userdata/config.yaml` (canonical copy alongside embedded duplicate).
 

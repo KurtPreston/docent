@@ -183,6 +183,44 @@
           },
           "required": ["provider"],
           "additionalProperties": false
+        },
+        {
+          "properties": {
+            "provider": {
+              "type": "string",
+              "const": "claude"
+            },
+            "activity_formatter": {
+              "type": "string",
+              "enum": ["repo-chronological", "json-signal-list"],
+              "default": "repo-chronological",
+              "x-slakkr-prompt": "Activity formatter",
+              "x-slakkr-default": "repo-chronological",
+              "x-slakkr-setup-skip-prompt": true
+            },
+            "claude": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "x-slakkr-prompt": "claude command",
+                  "x-slakkr-default": "claude",
+                  "x-slakkr-setup-skip-prompt": true
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "x-slakkr-prompt": "Extra claude args (optional, comma-separated)",
+                  "x-slakkr-setup-skip-prompt": true
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["provider"],
+          "additionalProperties": false
         }
       ]
     },

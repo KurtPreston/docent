@@ -16,7 +16,7 @@ import (
 // (or degrade) generation. The CLI converts these into the unified
 // collectors.ValidationIssue shape for rendering alongside directive issues.
 type Issue struct {
-	Provider    string // "cursor", "ollama", "rule-based"
+	Provider    string // "cursor", "claude", "ollama", "rule-based"
 	Field       string // pointer at the offending config field
 	Message     string
 	Remediation string
@@ -47,6 +47,20 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 		}
 		if iss := validateCursorAuth(ctx, cmd); iss != nil {
 			return []Issue{*iss}
+		}
+		return nil
+	case "claude":
+		cmd := strings.TrimSpace(cfg.Claude.Command)
+		if cmd == "" {
+			cmd = "claude"
+		}
+		if _, err := exec.LookPath(cmd); err != nil {
+			return []Issue{{
+				Provider:    "claude",
+				Field:       "ai.claude.command",
+				Message:     fmt.Sprintf("%q not found on PATH", cmd),
+				Remediation: "install the Claude Code CLI (https://docs.claude.com/en/docs/claude-code) or set ai.claude.command to a binary on PATH",
+			}}
 		}
 		return nil
 	case "ollama":
@@ -91,7 +105,7 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 			Provider:    provider,
 			Field:       "ai.provider",
 			Message:     fmt.Sprintf("unknown AI provider %q", provider),
-			Remediation: "set ai.provider to one of: cursor, ollama, rule-based",
+			Remediation: "set ai.provider to one of: cursor, claude, ollama, rule-based",
 		}}
 	}
 }

@@ -27,7 +27,7 @@ func TestConfigValidateDirectives(t *testing.T) {
 }
 
 func TestAIProfilesAgainstSchema(t *testing.T) {
-	for _, p := range []string{"ollama", "cursor", "rule-based"} {
+	for _, p := range []string{"ollama", "cursor", "claude", "rule-based"} {
 		cfg := ConfigFile{AI: AIConfig{Provider: p}}
 		if p == "ollama" {
 			cfg.AI.Ollama.BaseURL = "http://127.0.0.1:11434"
@@ -35,6 +35,9 @@ func TestAIProfilesAgainstSchema(t *testing.T) {
 		}
 		if p == "cursor" {
 			cfg.AI.Cursor.Command = "cursor-agent"
+		}
+		if p == "claude" {
+			cfg.AI.Claude.Command = "claude"
 		}
 		raw, err := yaml.Marshal(cfg)
 		if err != nil {

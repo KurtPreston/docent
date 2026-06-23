@@ -71,6 +71,11 @@ func parseAIProviders(aiDef any) ([]AIProviderBranch, error) {
 			if om := nestedMap(bm, "properties", "cursor"); om != nil {
 				branch.Fields = append(branch.Fields, extractAIFields(om)...)
 			}
+		case "claude":
+			branch.NestedKey = "claude"
+			if om := nestedMap(bm, "properties", "claude"); om != nil {
+				branch.Fields = append(branch.Fields, extractAIFields(om)...)
+			}
 		}
 		extractAITopLevelEnumFields(&branch, bm)
 		out = append(out, branch)

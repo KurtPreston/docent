@@ -29,6 +29,12 @@ func SelectProvider(cfg userdata.AIConfig, fallback Provider) Provider {
 			cmd = "cursor-agent"
 		}
 		return CursorCLIProvider{Command: cmd, Args: cfg.Cursor.Args, Formatter: formatter}
+	case "claude":
+		cmd := strings.TrimSpace(cfg.Claude.Command)
+		if cmd == "" {
+			cmd = "claude"
+		}
+		return ClaudeCLIProvider{Command: cmd, Args: cfg.Claude.Args, Formatter: formatter}
 	case "", "rule-based":
 		return RuleBasedProvider{Formatter: formatter}
 	default:
