@@ -233,8 +233,19 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	writeRunLogHeader(run.RunInfo(), a.Now(), resolved, cfg, *userdataDir, outPathResolved, *noSave)
 
+	// Collection runs under its own cancellable context so the user can
+	// abort slow collectors (e.g. Slack) with a keypress and still proceed
+	// to run the prompt against whatever was gathered. The abort must not
+	// cancel the AI run below, so we keep the parent ctx for that.
+	collectCtx, collectCancel := context.WithCancel(ctx)
+	defer collectCancel()
+	if a.stdinIsTerminal() {
+		fmt.Fprintln(a.Out, abortKeyHint)
+	}
+	stopAbort := startAbortListener(a.In, collectCancel)
+
 	collectStart := a.Now()
-	statuses, err := workflow.CollectStatuses(ctx, workflow.Deps{
+	statuses, err := workflow.CollectStatuses(collectCtx, workflow.Deps{
 		Registry: a.Reg,
 		Now:      a.Now,
 		ExpandRepoPath: expand,
@@ -250,12 +261,16 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		OnlyCollectorTypes: resolved.Collectors,
 		PRReviewReadiness:  resolved.ModeID == executionmode.BuiltinPRs,
 	})
+	stopAbort()
 	collectDuration := a.Now().Sub(collectStart)
 	if err != nil {
 		writeRunLogCollectError(run.RunInfo(), err, collectDuration)
 		return err
 	}
 	progress.Done()
+	if collectCtx.Err() != nil {
+		fmt.Fprintln(a.Err, "Collection aborted; running the prompt against the data collected so far.")
+	}
 
 	writeRunLogCollectSummary(run.RunInfo(), tracker, statuses, collectDuration)
 

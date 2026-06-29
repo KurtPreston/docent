@@ -100,6 +100,37 @@ func TestRegistryOnlyCollectorTypes(t *testing.T) {
 	}
 }
 
+// abortStubCollector simulates a collector that gathered one item and
+// then unwound with a context error because the run was aborted.
+type abortStubCollector struct{}
+
+func (abortStubCollector) Collect(ctx context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+	return []StatusItem{{DirectiveID: d.ID, Source: d.Collector, Kind: "partial", Title: "partial"}}, ctx.Err()
+}
+
+func TestRegistryAbortKeepsPartialResults(t *testing.T) {
+	r := NewRegistry(func() time.Time { return time.Unix(0, 0).UTC() })
+	r.Register("aborty", abortStubCollector{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // user pressed the abort key before this directive finished
+
+	items, err := r.Collect(ctx, []userdata.Directive{
+		{ID: "a", Name: "A", Collector: "aborty", Enabled: true},
+	}, &CollectOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != "partial" {
+		t.Fatalf("expected the partial item to be kept, got %#v", items)
+	}
+	for _, it := range items {
+		if it.Kind == "collector_error" {
+			t.Fatalf("aborted collection must not emit a collector_error row: %#v", items)
+		}
+	}
+}
+
 type stubValidator struct {
 	Issues []ValidationIssue
 	Err    error

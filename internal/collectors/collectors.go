@@ -405,6 +405,21 @@ func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, o
 	})
 	items, err := collector.Collect(ctx, d, opts)
 	if err != nil {
+		// When the run was aborted (the user pressed the abort key, which
+		// cancels the collection context), don't surface a collector_error
+		// row. Treat it as a clean stop and keep whatever partial items the
+		// collector managed to return before unwinding.
+		if ctx.Err() != nil {
+			reportProgress(opts, DirectiveProgress{
+				DirectiveID: d.ID,
+				Description: d.Name,
+				Status:      "done",
+				Detail:      fmt.Sprintf("aborted, %d item(s)", len(items)),
+				Completed:   1,
+				Total:       1,
+			})
+			return items
+		}
 		reportProgress(opts, DirectiveProgress{
 			DirectiveID: d.ID,
 			Description: d.Name,

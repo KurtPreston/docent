@@ -416,11 +416,100 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		bucket = append(bucket, item)
 	}
 
+	// finalize resolves authors for whatever is currently in the bucket
+	// and turns it into the sorted StatusItem slice the caller expects.
+	// It is invoked both on the normal happy path and when collection is
+	// aborted mid-flight (ctx cancelled): in the abort case we keep every
+	// message gathered so far and skip any further network work.
+	finalize := func() []StatusItem {
+		// Resolve unique authors so StatusItem.Author renders as a name
+		// when possible, falling back to the bare user ID. When the run
+		// has been aborted we stop spending users.info calls and just use
+		// cached identities (or the bare ID).
+		for _, b := range bucket {
+			if b.message.User == "" {
+				continue
+			}
+			if _, ok := userCache.get(b.message.User); ok {
+				continue
+			}
+			// Reuse a previously-resolved identity from the persistent
+			// cache before spending a users.info call. Display names
+			// change rarely, so this eliminates almost all author lookups
+			// on repeat runs.
+			if u, ok := persistent.cachedUser(b.message.User, now); ok {
+				userCache.put(u)
+				continue
+			}
+			if ctx.Err() != nil {
+				userCache.put(slackUser{ID: b.message.User})
+				continue
+			}
+			u, err := c.fetchUser(ctx, token, b.message.User, opts, directive.ID)
+			if err != nil {
+				// Best-effort: skip on lookup failure (rate limit, missing scope).
+				userCache.put(slackUser{ID: b.message.User})
+				continue
+			}
+			userCache.put(u)
+			persistent.putUser(u, now)
+		}
+
+		if err := persistent.save(); err != nil {
+			loggerFor(opts, directive.ID).Note("slack: failed to persist cache: %v", err)
+		}
+
+		items := make([]StatusItem, 0, len(bucket))
+		for _, b := range bucket {
+			obs, err := slackTSToTime(b.message.TS)
+			if err != nil {
+				continue
+			}
+			channelKey := slackChannelKey(b.channel, userCache, userID)
+			fields := map[string]string{
+				"channel":    channelKey,
+				"channel_id": b.channel.ID,
+				"ts":         b.message.TS,
+				"kind":       b.kind,
+				"team":       auth.Team,
+			}
+			if b.message.ThreadTS != "" {
+				fields["thread_ts"] = b.message.ThreadTS
+			}
+			for k, v := range b.fields {
+				fields[k] = v
+			}
+			title := slackTruncate(b.message.Text, 200)
+			author := slackAuthorDisplay(b.message, userCache)
+			items = append(items, StatusItem{
+				DirectiveID: directive.ID,
+				Repository:  channelKey,
+				Source:      "slack",
+				Kind:        b.kind,
+				Title:       title,
+				Summary:     "",
+				URL:         slackPermalink(teamURL, b.channel.ID, b.message.TS),
+				Severity:    "info",
+				ObservedAt:  obs.UTC(),
+				IsSelf:      b.isSelf,
+				Author:      author,
+				Fields:      fields,
+			})
+		}
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].ObservedAt.Before(items[j].ObservedAt)
+		})
+		return items
+	}
+
 	// --- self-tier signals (always run) ---
 
 	progress.SetStage("listing DMs")
 	dmChannels, err := c.fetchAllConversations(ctx, token, "im,mpim", channelCache, opts, directive.ID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return finalize(), nil
+		}
 		return nil, fmt.Errorf("slack conversations.list (dm): %w", err)
 	}
 	// Skip IMs whose peer user has been deactivated and archived MPIMs:
@@ -459,6 +548,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 	progress.AddUnits(len(pollDMs))
 	dmResults, err := c.fanOutHistorySince(ctx, token, pollDMs, since, now, opts, directive, progress)
 	if err != nil {
+		if ctx.Err() != nil {
+			return finalize(), nil
+		}
 		return nil, err
 	}
 	for i, ch := range pollDMs {
@@ -471,10 +563,16 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			})
 		}
 	}
+	if ctx.Err() != nil {
+		return finalize(), nil
+	}
 
 	progress.SetStage("mentions")
 	mentionMatches, err := c.fetchSearchMessages(ctx, token, "<@"+userID+"> after:"+slackAfterDate(since), opts, directive.ID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return finalize(), nil
+		}
 		return nil, fmt.Errorf("slack search.messages (mentions): %w", err)
 	}
 	for _, m := range mentionMatches {
@@ -490,9 +588,15 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		})
 	}
 
+	if ctx.Err() != nil {
+		return finalize(), nil
+	}
 	progress.SetStage("sent")
 	sentMatches, err := c.fetchSearchMessages(ctx, token, "from:<@"+userID+"> after:"+slackAfterDate(since), opts, directive.ID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return finalize(), nil
+		}
 		return nil, fmt.Errorf("slack search.messages (sent): %w", err)
 	}
 	type selfMessageRef struct {
@@ -515,6 +619,10 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		selfRefs = append(selfRefs, selfMessageRef{
 			channel: ch, ts: m.TS, thread: msg.ThreadTS,
 		})
+	}
+
+	if ctx.Err() != nil {
+		return finalize(), nil
 	}
 
 	// --- involved-tier signals ---
@@ -561,6 +669,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 					)
 					continue
 				}
+				if ctx.Err() != nil {
+					return finalize(), nil
+				}
 				return nil, fmt.Errorf("slack conversations.replies %s/%s: %w", ref.channel.ID, ts, err)
 			}
 			for _, rm := range replies {
@@ -577,6 +688,10 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			}
 		}
 
+		if ctx.Err() != nil {
+			return finalize(), nil
+		}
+
 		// Context window: 3 messages before and after each self message.
 		progress.SetStage("context windows")
 		progress.AddUnits(len(selfRefs))
@@ -589,6 +704,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 						"slack: skipping context window for %s/%s: %v", ref.channel.ID, ref.ts, err,
 					)
 					continue
+				}
+				if ctx.Err() != nil {
+					return finalize(), nil
 				}
 				return nil, fmt.Errorf("slack context window %s/%s: %w", ref.channel.ID, ref.ts, err)
 			}
@@ -604,6 +722,10 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 				})
 			}
 		}
+	}
+
+	if ctx.Err() != nil {
+		return finalize(), nil
 	}
 
 	// --- all-tier signals ---
@@ -628,6 +750,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 				// We need the public/private channel directory to map names.
 				// Lazily fetch on first miss.
 				if _, err := c.fetchAllConversations(ctx, token, "public_channel,private_channel", channelCache, opts, directive.ID); err != nil {
+					if ctx.Err() != nil {
+						return finalize(), nil
+					}
 					return nil, fmt.Errorf("slack conversations.list (followed): %w", err)
 				}
 				if ch, ok := channelCache.byName(e); ok {
@@ -646,6 +771,9 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 			progress.AddUnits(len(followedChans))
 			followedResults, err := c.fanOutHistorySince(ctx, token, followedChans, since, now, opts, directive, progress)
 			if err != nil {
+				if ctx.Err() != nil {
+					return finalize(), nil
+				}
 				return nil, err
 			}
 			for i, ch := range followedChans {
@@ -660,78 +788,8 @@ func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directiv
 		}
 	}
 
-	// Resolve unique authors so StatusItem.Author renders as a name when
-	// possible, falling back to the bare user ID.
 	progress.SetStage("authors")
-	for _, b := range bucket {
-		if b.message.User == "" {
-			continue
-		}
-		if _, ok := userCache.get(b.message.User); ok {
-			continue
-		}
-		// Reuse a previously-resolved identity from the persistent cache
-		// before spending a users.info call. Display names change rarely,
-		// so this eliminates almost all author lookups on repeat runs.
-		if u, ok := persistent.cachedUser(b.message.User, now); ok {
-			userCache.put(u)
-			continue
-		}
-		u, err := c.fetchUser(ctx, token, b.message.User, opts, directive.ID)
-		if err != nil {
-			// Best-effort: skip on lookup failure (rate limit, missing scope).
-			userCache.put(slackUser{ID: b.message.User})
-			continue
-		}
-		userCache.put(u)
-		persistent.putUser(u, now)
-	}
-
-	if err := persistent.save(); err != nil {
-		loggerFor(opts, directive.ID).Note("slack: failed to persist cache: %v", err)
-	}
-
-	items := make([]StatusItem, 0, len(bucket))
-	for _, b := range bucket {
-		obs, err := slackTSToTime(b.message.TS)
-		if err != nil {
-			continue
-		}
-		channelKey := slackChannelKey(b.channel, userCache, userID)
-		fields := map[string]string{
-			"channel":    channelKey,
-			"channel_id": b.channel.ID,
-			"ts":         b.message.TS,
-			"kind":       b.kind,
-			"team":       auth.Team,
-		}
-		if b.message.ThreadTS != "" {
-			fields["thread_ts"] = b.message.ThreadTS
-		}
-		for k, v := range b.fields {
-			fields[k] = v
-		}
-		title := slackTruncate(b.message.Text, 200)
-		author := slackAuthorDisplay(b.message, userCache)
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			Repository:  channelKey,
-			Source:      "slack",
-			Kind:        b.kind,
-			Title:       title,
-			Summary:     "",
-			URL:         slackPermalink(teamURL, b.channel.ID, b.message.TS),
-			Severity:    "info",
-			ObservedAt:  obs.UTC(),
-			IsSelf:      b.isSelf,
-			Author:      author,
-			Fields:      fields,
-		})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].ObservedAt.Before(items[j].ObservedAt)
-	})
-	return items, nil
+	return finalize(), nil
 }
 
 // ValidateDirective resolves the configured token, verifies it via auth.test,

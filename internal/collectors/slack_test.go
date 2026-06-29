@@ -1349,3 +1349,61 @@ func TestSlackRetryAfterParsing(t *testing.T) {
 		})
 	}
 }
+
+// TestSlackCollectAbortReturnsPartial verifies that cancelling the
+// collection context partway through (the "press 'c' to abort" path)
+// makes Collect return the messages it had already gathered with a nil
+// error, rather than discarding them behind a context-cancelled error.
+func TestSlackCollectAbortReturnsPartial(t *testing.T) {
+	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-7 * 24 * time.Hour)
+	const userID = "U_SELF"
+	dmTS := fmt.Sprintf("%d.000000", now.Add(-time.Hour).Unix())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// DM discovery is disabled so conversations.history (the DM fan-out)
+	// runs before any search.messages call; we then simulate the user
+	// hitting 'c' as the mentions search begins.
+	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
+		switch pathFor(req.Path) {
+		case "auth.test":
+			return http.StatusOK, authTestPayload(userID)
+		case "conversations.list":
+			return http.StatusOK, slackOK(map[string]any{
+				"channels": []map[string]any{
+					{"id": "D_DM1", "is_im": true, "user": "U_PEER"},
+				},
+			})
+		case "conversations.history":
+			return http.StatusOK, slackOK(map[string]any{
+				"messages": []map[string]any{
+					{"type": "message", "user": "U_PEER", "text": "hi there", "ts": dmTS},
+				},
+			})
+		case "search.messages":
+			// The DM history has already been collected by now; abort.
+			cancel()
+			return http.StatusOK, slackOK(map[string]any{
+				"messages": map[string]any{"matches": []map[string]any{}},
+			})
+		}
+		return http.StatusNotFound, map[string]any{"ok": false, "error": "unknown:" + req.Path}
+	})
+
+	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
+	items, err := c.Collect(ctx, slackDirectiveNoDiscovery(), &CollectOpts{
+		Since: since, Until: now, Scope: ScopeInvolved,
+	})
+	if err != nil {
+		t.Fatalf("aborted collection should return nil error, got %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected the 1 DM gathered before abort, got %d: %+v", len(items), items)
+	}
+	if items[0].Kind != "slack_dm" || items[0].Title != "hi there" {
+		t.Fatalf("unexpected partial item: %+v", items[0])
+	}
+}
