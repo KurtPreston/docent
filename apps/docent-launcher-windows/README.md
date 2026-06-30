@@ -1,6 +1,33 @@
 # docent-launcher-windows
-# Port of docent WPF launcher: use docent-launcher.ps1 from the legacy docent repo
-# until a native shell is wired here. Point it at docentd /sessions and local docent-wm /focus.
 
-See /Users/kurt/Code/docent/launcher/docent-launcher.ps1 for the reference implementation.
-Update focus URLs to post to http://127.0.0.1:39788/focus (local docent-wm).
+A Spotlight-style, always-on-top picker for docent on Windows, bound to a global
+hotkey (default **Ctrl+Alt+Space**). Type to fuzzy-filter your live Cursor
+sessions / JIRA tickets / GitHub PRs; **Enter** focuses the session window or
+opens the ticket/PR URL; **Esc** hides it.
+
+Built on WPF + Win32 `RegisterHotKey` (both ship with Windows) — no extra
+runtime, no admin. It is a faithful port of the legacy docent WPF launcher,
+adapted for the monorepo split:
+
+- **Session rows** come from docentd's `GET /sessions` (`-SessionsUrl`, which may
+  point at a **remote** docentd).
+- **Focusing a session** POSTs to the **local** `docent-wm` `/focus` (`-WmUrl`,
+  default `http://127.0.0.1:39788`) — the window manager that owns the windows
+  on this machine.
+
+```powershell
+# defaults: sessions from 127.0.0.1:39787, focus via 127.0.0.1:39788
+pwsh -File docent-launcher.ps1
+
+# remote docentd, local window manager
+pwsh -File docent-launcher.ps1 -SessionsUrl http://desktop:39787 -WmUrl http://127.0.0.1:39788
+
+# connectivity / parsing check (no GUI)
+pwsh -File docent-launcher.ps1 -SelfTest
+```
+
+`scripts/install-docent-windows.ps1` registers this as a hidden, auto-restarting
+Scheduled Task (see the repo `docent-powershell` README for the watchdog
+pattern). `SessionsUrl`/`WmUrl`/`Token`/`Hotkey` may also be supplied via the
+`DOCENT_SESSIONS_URL` (or `DOCENT_URL`), `DOCENT_WM_URL`, and `DOCENT_TOKEN`
+environment variables.
