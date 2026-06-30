@@ -1,6 +1,6 @@
-# slakkr-ai (docent monorepo)
+# docent
 
-Local-first tooling for developer activity: **docent** (live dashboard + window management) and **docent-reporter** (collectors → AI → Markdown reports).
+Monorepo suite containing local-first tooling for developer activity: **docent** (live dashboard + window management) and **docent-reporter** (collectors → AI → Markdown reports).
 
 ## Monorepo layout
 
