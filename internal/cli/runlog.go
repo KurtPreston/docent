@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/ai"
-	"github.com/kurt/slakkr-ai/internal/collectors"
+	"github.com/kurt/slakkr-ai/libs/ai"
+	"github.com/kurt/slakkr-ai/libs/collectors"
 	"github.com/kurt/slakkr-ai/internal/executionmode"
 	"github.com/kurt/slakkr-ai/internal/userdata"
 )

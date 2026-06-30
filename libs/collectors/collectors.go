@@ -9,7 +9,11 @@ import (
 	"time"
 
 	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/model"
 )
+
+// StatusItem is the historical name for model.Signal.
+type StatusItem = model.Signal
 
 // parseFollowedList splits a directive config string (used for
 // `followed_repos` / `followed_projects`) into trimmed, non-empty entries.
@@ -65,24 +69,6 @@ func FilterToSelf(items []StatusItem) []StatusItem {
 		}
 	}
 	return out
-}
-
-type StatusItem struct {
-	DirectiveID    string            `json:"directive_id"`
-	Repository     string            `json:"repository,omitempty"` // grouping key when known (e.g. org/repo, local folder name)
-	Source         string            `json:"source"`
-	Kind           string            `json:"kind"`
-	Title          string            `json:"title"`
-	Summary        string            `json:"summary"`
-	URL            string            `json:"url,omitempty"`
-	Severity       string            `json:"severity,omitempty"`
-	ObservedAt     time.Time         `json:"observed_at"`
-	Fields         map[string]string `json:"fields,omitempty"`
-	StableID       string            `json:"stable_id,omitempty"`
-	AttentionClass string            `json:"attention_class,omitempty"`
-	ChangeState    string            `json:"change_state,omitempty"`
-	Author         string            `json:"author,omitempty"`  // best-effort actor identity (email, login, or "name <email>")
-	IsSelf         bool              `json:"is_self,omitempty"` // true when collector confirms this is the configured user's own activity
 }
 
 // CollectOpts carries env resolution and the collection time window.

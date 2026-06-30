@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kurt/slakkr-ai/internal/collectors"
+	"github.com/kurt/slakkr-ai/libs/collectors"
 )
 
 func TestSplitJiraKey(t *testing.T) {
