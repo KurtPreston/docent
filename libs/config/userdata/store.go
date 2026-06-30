@@ -27,11 +27,19 @@ func NewStore(root string) Store {
 // re-issuing users.info every run). Wiping it here would defeat that, so
 // we no longer remove it. Stale legacy ai-debug payloads from old
 // installs are harmless leftovers and can be deleted manually.
-func (s Store) Ensure(_ context.Context) error {
+func (s Store) Ensure(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Join(s.Root, "output"), 0o755); err != nil {
 		return err
 	}
-	return writeDefaultYAML(filepath.Join(s.Root, "config.yaml"), ConfigFile{
+	return s.EnsureConfig(ctx)
+}
+
+// EnsureConfig writes a default config.yaml under Root if one does not
+// already exist, without creating an output directory. Callers that
+// manage their own output location (e.g. docent-reporter's XDG layout)
+// use this instead of Ensure.
+func (s Store) EnsureConfig(_ context.Context) error {
+	return writeDefaultYAML(s.ConfigPath(), ConfigFile{
 		AI: AIConfig{Provider: "rule-based"},
 	})
 }

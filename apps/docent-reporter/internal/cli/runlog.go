@@ -70,7 +70,7 @@ type directiveSnapshot struct {
 // writeRunLogHeader records the resolved run options at the top of
 // run.log so users can correlate logged HTTP/exec activity back to
 // the run that produced them.
-func writeRunLogHeader(w io.Writer, now time.Time, resolved executionmode.ResolvedRun, cfg userdata.ConfigFile, userdataDir, outPath string, noSave bool) {
+func writeRunLogHeader(w io.Writer, now time.Time, resolved executionmode.ResolvedRun, cfg userdata.ConfigFile, configDir, outPath string, noSave bool) {
 	if w == nil {
 		return
 	}
@@ -148,7 +148,7 @@ func writeRunLogHeader(w io.Writer, now time.Time, resolved executionmode.Resolv
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "## Output")
-	fmt.Fprintf(w, "  userdata:   %s\n", userdataDir)
+	fmt.Fprintf(w, "  config:     %s\n", configDir)
 	if noSave {
 		fmt.Fprintln(w, "  markdown:   (no-save)")
 	} else {

@@ -16,6 +16,10 @@ type ConfigFile struct {
 	AI             AIConfig                      `yaml:"ai,omitempty"`
 	Directives     []Directive                   `yaml:"directives,omitempty"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"execution_modes,omitempty"`
+	// OutputDir overrides where docent-reporter writes generated markdown.
+	// Supports a leading ~ for the home directory. When empty, the reporter
+	// falls back to its --out-dir flag, then ~/docent.
+	OutputDir string `yaml:"output_dir,omitempty"`
 }
 
 type Directive struct {

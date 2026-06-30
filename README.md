@@ -46,12 +46,13 @@ The wizard picks an AI provider (cursor / claude / ollama / offline `rule-based`
 
 Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`libs/config/configschema/config.schema.json`](libs/config/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
 
-## Configuration (`userdata/config.yaml`)
+## Configuration (`~/.config/docent/config.yaml`)
 
-Single file: `ai` and `directives`.
+Single file: `ai`, `directives`, optional `execution_modes`, and optional `output_dir`.
 
-- **`directives`**: Collector, target, config, `credential_refs` for secrets in `userdata/.env`.
+- **`directives`**: Collector, target, config, `credential_refs` for secrets in `~/.config/docent/.env`.
 - **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory’s immediate children that contain `.git`.
+- **`output_dir`** (optional): where `docent-reporter` writes generated markdown (supports a leading `~`). Defaults to `~/docent`; override per-run with `--out-dir`.
 
 ### Activity formatter (`ai.activity_formatter`)
 
@@ -188,9 +189,14 @@ Without these fields, `scope: all` collects the same set as `scope: involved` (t
 
 ### Common flags
 
-- `--userdata DIR` (default `userdata`)
-- `--config PATH`, `-c PATH` (default `userdata/config.yaml`)
-- `--out PATH` — default `userdata/output/<date>-<mode>.md`
+Paths follow the XDG base-directory layout by default:
+
+- `--config-dir DIR` — config.yaml + .env (default `~/.config/docent`, i.e. `$XDG_CONFIG_HOME/docent`)
+- `--config PATH`, `-c PATH` (default `<config-dir>/config.yaml`)
+- `--state-dir DIR` — run logs under `<state-dir>/logs/` (default `~/.local/state/docent`, i.e. `$XDG_STATE_HOME/docent`)
+- `--out-dir DIR` — generated markdown (default config `output_dir`, then `~/docent`)
+- `--out PATH` — explicit output file (default `<out-dir>/<date>-<mode>.md`)
+- `--userdata DIR` — legacy: put config.yaml/.env/logs/output all under one dir (overrides the three above)
 - `--no-save` — stdout only
 - `--date YYYY-MM-DD` — label for default output filename only
 - `--mode ID` — execution mode (built-in or from `execution_modes:`); prompts interactively when omitted on a TTY
@@ -225,5 +231,7 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `apps/docent-reporter/` — reporter CLI
 - `apps/docent-setup/` — config wizard + `check`
 - `apps/docentd/` — daemon + dashboard
-- `~/.config/docent/` (or `userdata/` for local dev) — `config.yaml`, `docentd.yaml`, `.env`
-- `userdata/output/` — saved markdown from the reporter
+- `~/.config/docent/` — `config.yaml`, `docentd.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
+- `~/.local/state/docent/logs/<run>/` — reporter run logs (`$XDG_STATE_HOME/docent`)
+- `~/docent/` — saved markdown from the reporter (override via `output_dir` in config.yaml or `--out-dir`)
+- `--userdata DIR` keeps the legacy all-in-one layout (config + .env + logs + output under one dir)

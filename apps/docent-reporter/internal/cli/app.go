@@ -16,6 +16,7 @@ import (
 	"github.com/kurt/slakkr-ai/libs/ai"
 	"github.com/kurt/slakkr-ai/libs/collectors"
 	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/docentconfig"
 	"github.com/kurt/slakkr-ai/libs/config/executionmode"
 	"github.com/kurt/slakkr-ai/apps/docent-reporter/internal/runlog"
 	"github.com/kurt/slakkr-ai/libs/config/userdata"
@@ -49,12 +50,15 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("docent-reporter", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
 
-	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")
+	userdataDir := fs.String("userdata", "", "legacy combined dir holding config.yaml/.env/logs/output (overrides --config-dir/--state-dir/--out-dir when set)")
+	configDirFlag := fs.String("config-dir", "", "directory holding config.yaml + .env (default ~/.config/docent)")
+	stateDirFlag := fs.String("state-dir", "", "directory for run logs (default ~/.local/state/docent)")
+	outDirFlag := fs.String("out-dir", "", "directory for generated markdown (default config output_dir, then ~/docent)")
 	var configPath string
-	fs.StringVar(&configPath, "config", "", "config file path (default <userdata>/config.yaml)")
+	fs.StringVar(&configPath, "config", "", "config file path (default <config-dir>/config.yaml)")
 	fs.StringVar(&configPath, "c", "", "shorthand for --config")
 	modeFlag := fs.String("mode", "", "execution mode id (built-in: daily-plan, recent-activity, custom-prompt, prs; plus any user-declared)")
-	outPath := fs.String("out", "", "output markdown path (default userdata/output/<date>-<mode>.md; if the file exists, -2, -3, … are appended before the extension)")
+	outPath := fs.String("out", "", "output markdown path (default <out-dir>/<date>-<mode>.md; if the file exists, -2, -3, … are appended before the extension)")
 	noSave := fs.Bool("no-save", false, "do not write output file")
 	dateStr := fs.String("date", "", "date label YYYY-MM-DD for output filename (default today)")
 
@@ -68,14 +72,35 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	store := userdata.NewStore(*userdataDir)
-	if err := os.MkdirAll(filepath.Join(*userdataDir, "output"), 0o755); err != nil {
-		return err
+	// Resolve config / state / output locations. Passing --userdata selects
+	// the legacy all-in-one layout (config.yaml, .env, logs/, output/ all
+	// under that dir), preserving older invocations and tests. Otherwise we
+	// use XDG-style defaults:
+	//   config + .env -> ~/.config/docent      (docentconfig.DefaultDir)
+	//   run logs      -> ~/.local/state/docent  (docentconfig.StateDir)
+	//   markdown out  -> ~/docent               (or config output_dir / --out-dir)
+	legacy := strings.TrimSpace(*userdataDir) != ""
+	var configDir, logsParent string
+	if legacy {
+		configDir = *userdataDir
+		logsParent = *userdataDir
+	} else {
+		configDir = strings.TrimSpace(*configDirFlag)
+		if configDir == "" {
+			configDir = docentconfig.DefaultDir()
+		}
+		logsParent = docentconfig.StateDir()
 	}
-	// Opportunistically remove the legacy `.cache/` directory: AI debug
-	// logs now live in userdata/logs/<run>/ and nothing else uses this
-	// path. Errors (permission denied, already removed) are ignored.
-	_ = os.RemoveAll(filepath.Join(*userdataDir, ".cache"))
+	if v := strings.TrimSpace(*stateDirFlag); v != "" {
+		logsParent = v
+	}
+	// Collectors resolve credential_refs from <envDir>/.env (and cache there).
+	envDir := configDir
+
+	store := userdata.NewStore(configDir)
+	// Opportunistically remove the legacy `.cache/` directory next to the
+	// config. Errors (permission denied, already removed) are ignored.
+	_ = os.RemoveAll(filepath.Join(configDir, ".cache"))
 
 	configPath = strings.TrimSpace(configPath)
 	var (
@@ -87,7 +112,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		cfgSource = configPath
 		cfg, err = loadConfigFromPath(configPath)
 	} else {
-		if err := store.Ensure(ctx); err != nil {
+		if err := store.EnsureConfig(ctx); err != nil {
 			return err
 		}
 		cfgSource = store.ConfigPath()
@@ -96,7 +121,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := mergeDirectivesFromLegacyFile(*userdataDir, &cfg); err != nil {
+	if err := mergeDirectivesFromLegacyFile(configDir, &cfg); err != nil {
 		return err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -113,7 +138,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	expand := expandRepoPathFromStdin(a.In)
 	validateOpts := &collectors.ValidateOpts{
-		UserdataDir:    *userdataDir,
+		UserdataDir:    envDir,
 		ExpandRepoPath: expand,
 	}
 
@@ -216,12 +241,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	// before collection so the run-log directory name matches the
 	// markdown file we will eventually save. When --no-save is set we
 	// still derive a basename so logs still get a stable home.
-	outPathResolved, outBasename, err := resolveOutputPath(*userdataDir, *outPath, outDate, resolved.ModeID, *noSave)
+	outputDir := resolveOutputDir(legacy, *userdataDir, *outDirFlag, cfg.OutputDir)
+	outPathResolved, outBasename, err := resolveOutputPath(outputDir, *outPath, outDate, resolved.ModeID, *noSave)
 	if err != nil {
 		return err
 	}
 
-	run, err := runlog.NewRun(*userdataDir, outBasename, a.Now())
+	run, err := runlog.NewRun(logsParent, outBasename, a.Now())
 	if err != nil {
 		return err
 	}
@@ -231,7 +257,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	progress := newDirectiveProgressTable(a.Out)
 	defer progress.Done()
 
-	writeRunLogHeader(run.RunInfo(), a.Now(), resolved, cfg, *userdataDir, outPathResolved, *noSave)
+	writeRunLogHeader(run.RunInfo(), a.Now(), resolved, cfg, configDir, outPathResolved, *noSave)
 
 	// Collection runs under its own cancellable context so the user can
 	// abort slow collectors (e.g. Slack) with a keypress and still proceed
@@ -254,7 +280,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 			progress.Update(p)
 		},
 		RunLog: runLogAdapter{run: run},
-	}, cfg, *userdataDir, workflow.RunOptions{
+	}, cfg, envDir, workflow.RunOptions{
 		Since:              resolved.Since,
 		Until:              resolved.Until,
 		Scope:              collectors.Scope(resolved.Scope),
@@ -321,7 +347,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	writeRunLogFinalSummary(run.RunInfo(), provider, aiDuration, finalOutPath, *noSave)
 
-	if err := runlog.PruneRunLogs(*userdataDir, runlog.DefaultRetention); err != nil {
+	if err := runlog.PruneRunLogs(logsParent, runlog.DefaultRetention); err != nil {
 		fmt.Fprintf(a.Err, "warning: prune run logs: %v\n", err)
 	}
 
@@ -338,6 +364,39 @@ func (a runLogAdapter) Directive(id string) collectors.DirectiveLogger {
 	return a.run.Directive(id)
 }
 
+// resolveOutputDir decides the directory generated markdown lands in.
+// Precedence: --out-dir flag, then (legacy) <userdata>/output, then the
+// config's output_dir, then ~/docent. Tilde paths are expanded.
+func resolveOutputDir(legacy bool, userdataDir, outDirFlag, configOutputDir string) string {
+	if v := strings.TrimSpace(outDirFlag); v != "" {
+		return expandPath(v)
+	}
+	if legacy {
+		return filepath.Join(userdataDir, "output")
+	}
+	if v := strings.TrimSpace(configOutputDir); v != "" {
+		return expandPath(v)
+	}
+	return docentconfig.DefaultOutputDir()
+}
+
+// expandPath expands a leading ~ (or ~/) to the user's home directory.
+func expandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				return home
+			}
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
 // resolveOutputPath decides where the markdown output will land and
 // what basename anchors the run-log directory. When --no-save is set
 // we still derive a basename from outDate + modeID so logs have a
@@ -345,11 +404,11 @@ func (a runLogAdapter) Directive(id string) collectors.DirectiveLogger {
 // save cases, an existing file triggers `-2`, `-3`, … suffixing
 // (uniqueOutputPath) so the run-log dir name matches the file we
 // actually create.
-func resolveOutputPath(userdataDir, outFlag, outDate, modeID string, noSave bool) (path, basename string, err error) {
+func resolveOutputPath(outputDir, outFlag, outDate, modeID string, noSave bool) (path, basename string, err error) {
 	out := strings.TrimSpace(outFlag)
 	defaultName := fmt.Sprintf("%s-%s.md", outDate, modeID)
 	if out == "" {
-		out = filepath.Join(userdataDir, "output", defaultName)
+		out = filepath.Join(outputDir, defaultName)
 	}
 	if !noSave {
 		out, err = uniqueOutputPath(out)

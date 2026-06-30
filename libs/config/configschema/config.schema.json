@@ -19,6 +19,10 @@
       "items": {
         "$ref": "#/$defs/executionMode"
       }
+    },
+    "output_dir": {
+      "type": "string",
+      "description": "Directory where docent-reporter writes generated markdown. Supports a leading ~ for the home directory. Defaults to ~/docent."
     }
   },
   "$defs": {

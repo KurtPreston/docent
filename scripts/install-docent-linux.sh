@@ -23,7 +23,6 @@ SRC_ENV="$ROOT/userdata/.env"
 
 INSTALL_SYSTEMD=1
 SKIP_BUILD=0
-COPY_CONFIG=0   # default: symlink config.yaml/.env from repo for live iteration
 ENABLE_LINGER=0
 DRY_RUN=0
 GO="${DOCENT_GO:-}"
@@ -35,13 +34,14 @@ Usage: install-docent-linux.sh [options]
 Builds docentd, lays down config under ~/.config/docent, and registers a
 systemd --user service that serves the dashboard on 127.0.0.1:39787.
 
-By default config.yaml and .env are symlinked from the repo's userdata/ so you
-can keep iterating on them in place; pass --copy to snapshot them instead.
+config.yaml and .env are canonical real files in ~/.config/docent. On first
+run they are seeded from the repo's userdata/ (or the bundled examples) when
+missing; an existing config is left untouched. A leftover symlink from an
+earlier install is converted into a real file in place.
 
 Options:
   --no-systemd      Skip systemd unit install (build + config only)
   --no-build        Skip go build (reuse existing binary in BIN_DIR)
-  --copy            Copy config.yaml/.env instead of symlinking them
   --linger          Enable lingering so docentd runs without an active login
   --port N          Dashboard port (default: 39787)
   --bin-dir PATH    Install binary here (default: ~/.local/bin)
@@ -69,7 +69,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-systemd) INSTALL_SYSTEMD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
-    --copy) COPY_CONFIG=1 ;;
     --linger) ENABLE_LINGER=1 ;;
     --port) shift; DOCENT_PORT="${1:?--port requires a number}" ;;
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
@@ -123,19 +122,35 @@ else
 fi
 
 # --- Config -------------------------------------------------------------------
-link_or_copy() {
-  local src="$1" dst="$2"
-  if [ ! -e "$src" ]; then
-    echo "  (source $src missing — skipping $dst)" >&2
+# Seed dst as a real file (from the first existing source) when missing. An
+# existing real file is left untouched. A leftover symlink (from an earlier
+# install that symlinked into the repo) is converted to a real file in place.
+seed_real_file() {
+  local dst="$1"; shift
+  if [ -L "$dst" ]; then
+    local target; target="$(readlink -f "$dst" 2>/dev/null || true)"
+    log "converting symlink $dst -> real file"
+    if [ "$DRY_RUN" -eq 0 ]; then
+      if [ -n "$target" ] && [ -f "$target" ]; then
+        cp "$target" "$dst.tmp.$$" && rm -f "$dst" && mv "$dst.tmp.$$" "$dst"
+      else
+        rm -f "$dst"
+      fi
+    fi
+  fi
+  if [ -f "$dst" ] && [ ! -L "$dst" ]; then
+    log "$(basename "$dst") present (leaving as-is)"
     return 0
   fi
-  if [ "$COPY_CONFIG" -eq 1 ]; then
-    log "copy $src -> $dst"
+  local src
+  for src in "$@"; do
+    [ -n "$src" ] && [ -f "$src" ] || continue
+    log "seed $dst from $src"
     run cp "$src" "$dst"
-  else
-    log "symlink $dst -> $src"
-    run ln -sfn "$src" "$dst"
-  fi
+    return 0
+  done
+  log "no source for $dst (skipping)"
+  return 0
 }
 
 bootstrap_config() {
@@ -161,17 +176,13 @@ EOF
     log "daemon config present at $CONFIG_PATH (leaving as-is)"
   fi
 
-  link_or_copy "$SRC_CONFIG" "$CONFIG_DIR/config.yaml"
+  seed_real_file "$CONFIG_DIR/config.yaml" "$SRC_CONFIG" "$ROOT/config/docent/config.yaml.example"
 
-  if [ -f "$SRC_ENV" ]; then
-    link_or_copy "$SRC_ENV" "$CONFIG_DIR/.env"
-    if [ "$COPY_CONFIG" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
-      chmod 600 "$CONFIG_DIR/.env"
-    fi
-  elif [ ! -f "$CONFIG_DIR/.env" ]; then
-    run touch "$CONFIG_DIR/.env"
-    [ "$DRY_RUN" -eq 0 ] && chmod 600 "$CONFIG_DIR/.env"
+  seed_real_file "$CONFIG_DIR/.env" "$SRC_ENV"
+  if [ ! -f "$CONFIG_DIR/.env" ] && [ "$DRY_RUN" -eq 0 ]; then
+    touch "$CONFIG_DIR/.env"
   fi
+  [ -f "$CONFIG_DIR/.env" ] && [ "$DRY_RUN" -eq 0 ] && chmod 600 "$CONFIG_DIR/.env"
   return 0
 }
 
@@ -236,10 +247,10 @@ cat <<EOF
 
 Installed:
   docentd      $DOCENTD_BIN
-  config       $CONFIG_DIR/
+  config       $CONFIG_DIR/   (canonical, real files)
     docentd.yaml   daemon settings
-    config.yaml    collector directives ($([ "$COPY_CONFIG" -eq 1 ] && echo copied || echo "symlink -> $SRC_CONFIG"))
-    .env           secrets ($([ "$COPY_CONFIG" -eq 1 ] && echo copied || echo "symlink -> $SRC_ENV"))
+    config.yaml    collector directives + optional ai
+    .env           secrets (credential_refs)
   dashboard    http://127.0.0.1:$DOCENT_PORT/
 EOF
 
