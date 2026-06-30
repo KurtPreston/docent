@@ -19,6 +19,7 @@ type DaemonConfig struct {
 	TicketPattern  string `yaml:"ticketPattern"`
 	RegistryPath   string `yaml:"registryPath"`
 	ConfigDir      string `yaml:"configDir"`              // ~/.config/docent — config.yaml + .env
+	BindHost       string `yaml:"bindHost"`               // listen interface; default 0.0.0.0 when token set, else 127.0.0.1
 	UserdataDir    string `yaml:"userdataDir,omitempty"`  // deprecated alias for configDir
 	SlakkrConfig   string `yaml:"slakkrConfig,omitempty"` // optional extra config from slakkr userdata
 	DocentWMURL    string `yaml:"docentWmUrl"`            // local wm URL injected into dashboard
@@ -56,6 +57,33 @@ func Load(path string) (DaemonConfig, error) {
 		cfg.Token = token
 	}
 	return cfg, nil
+}
+
+// ResolveBindHost picks the listen interface. Precedence: an explicit -host
+// flag, then docentd.yaml's bindHost, then a token-gated default: when a shared
+// secret is configured docentd binds all interfaces (so it is reachable off the
+// loopback) — otherwise it stays loopback-only. Binding externally is only safe
+// because the data endpoints require the token (see server.requireAuth).
+func ResolveBindHost(cfg DaemonConfig, flagHost string) string {
+	if flagHost != "" {
+		return flagHost
+	}
+	if cfg.BindHost != "" {
+		return cfg.BindHost
+	}
+	if cfg.Token != "" {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
+// IsLoopbackHost reports whether host is a loopback bind address.
+func IsLoopbackHost(host string) bool {
+	switch host {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	return false
 }
 
 func resolveConfigDir(cfg DaemonConfig) string {

@@ -225,6 +225,42 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `google-calendar` — events from a secret iCal URL.
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [docs/Slack.md](docs/Slack.md) for token setup and required scopes.
 
+## docentd dashboard (binding + auth)
+
+`docentd` serves the live dashboard and its data APIs (`/sessions`, `/api/*`).
+By default it binds **`127.0.0.1` only and serves openly** — fine for localhost
+or when reached over an SSH tunnel / Cursor Remote-SSH port forward.
+
+To reach it directly from another machine, set a **shared secret**. Setting
+`token:` in `docentd.yaml` (or the `DOCENT_TOKEN` env var, which wins) flips two
+things at once:
+
+- docentd binds **all interfaces (`0.0.0.0`)** by default, so it is reachable
+  off the loopback (override with `bindHost:` — e.g. `127.0.0.1` to force
+  loopback even with a token, or `-host` on the command line).
+- Every **data** endpoint now requires `Authorization: Bearer <token>`.
+  `/health` and the static dashboard shell (HTML/CSS/JS) stay open; only the
+  data behind them is protected. Comparison is constant-time.
+
+Clients:
+
+- **Browser dashboard** — open `http://<host>:39787/?token=<secret>` once per
+  browser. The page caches the token in `sessionStorage` (stripping it from the
+  URL) and sends it on every data fetch; subsequent visits in that tab need no
+  query string.
+- **docent launcher (Windows)** — pass `-Token <secret>` (the installer wires
+  this through); it sends the bearer header automatically.
+
+Caveats:
+
+- Binding externally exposes your activity data to anyone who can reach the
+  port. A token is a reasonable bar for a personal dev box; open the host
+  firewall for the port deliberately. There is **no TLS** — front it with a
+  reverse proxy if the host is broadly reachable.
+- With no token configured, behavior is unchanged (loopback-only, open). If you
+  set `bindHost` to a non-loopback address **without** a token, docentd logs a
+  loud startup warning that data is exposed unauthenticated.
+
 ## Layout
 
 - `libs/` — shared packages (`model`, `collectors`, `correlation`, `ai`, `config`, …)

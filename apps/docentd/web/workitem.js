@@ -178,7 +178,7 @@ async function load() {
     return;
   }
   try {
-    const r = await fetch("/api/workitems/" + encodeURIComponent(KEY), { cache: "no-store" });
+    const r = await docentFetch("/api/workitems/" + encodeURIComponent(KEY), { cache: "no-store" });
     if (r.status === 404) {
       board.className = "";
       board.innerHTML = "";

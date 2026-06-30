@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/engine"
@@ -27,6 +28,7 @@ func serve(args []string) {
 	configPath := fs.String("config", "", "docentd config path")
 	webRoot := fs.String("web", "apps/docentd/web", "dashboard static files")
 	port := fs.Int("port", 0, "listen port override")
+	host := fs.String("host", "", "bind address override (default 0.0.0.0 when a token is set, else 127.0.0.1)")
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
@@ -48,8 +50,16 @@ func serve(args []string) {
 	eng.StartScheduler(ctx)
 	srv := server.New(cfg, eng, reg, *webRoot)
 
-	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-	log.Printf("docentd serving on http://%s/", addr)
+	bindHost := config.ResolveBindHost(cfg, *host)
+	addr := net.JoinHostPort(bindHost, strconv.Itoa(cfg.Port))
+	authState := "off"
+	if cfg.Token != "" {
+		authState = "on"
+	}
+	if !config.IsLoopbackHost(bindHost) && cfg.Token == "" {
+		log.Printf("WARNING: docentd is bound to %s with NO token set — data endpoints are exposed unauthenticated. Set a token (DOCENT_TOKEN or token: in docentd.yaml) or bind 127.0.0.1.", bindHost)
+	}
+	log.Printf("docentd serving on http://%s/ (auth: %s)", addr, authState)
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatal(err)
 	}

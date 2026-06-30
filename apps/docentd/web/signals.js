@@ -103,7 +103,7 @@ function render(data) {
 
 async function load() {
   try {
-    const r = await fetch("/api/signals", { cache: "no-store" });
+    const r = await docentFetch("/api/signals", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     render(await r.json());
   } catch (e) {

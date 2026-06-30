@@ -61,6 +61,26 @@ func TestLoad_userdataDirAlias(t *testing.T) {
 	}
 }
 
+func TestResolveBindHost(t *testing.T) {
+	cases := []struct {
+		name     string
+		cfg      DaemonConfig
+		flagHost string
+		want     string
+	}{
+		{"flag overrides everything", DaemonConfig{Token: "x", BindHost: "1.2.3.4"}, "9.9.9.9", "9.9.9.9"},
+		{"bindHost over token default", DaemonConfig{Token: "x", BindHost: "1.2.3.4"}, "", "1.2.3.4"},
+		{"bindHost forces loopback even with token", DaemonConfig{Token: "x", BindHost: "127.0.0.1"}, "", "127.0.0.1"},
+		{"token implies all-interfaces", DaemonConfig{Token: "x"}, "", "0.0.0.0"},
+		{"no token defaults to loopback", DaemonConfig{}, "", "127.0.0.1"},
+	}
+	for _, tc := range cases {
+		if got := ResolveBindHost(tc.cfg, tc.flagHost); got != tc.want {
+			t.Errorf("%s: ResolveBindHost = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestLoad_optionalAI(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`ai:

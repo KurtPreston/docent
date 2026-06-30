@@ -32,16 +32,33 @@ func New(cfg config.DaemonConfig, eng *engine.Engine, reg *registry.Store, webRo
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// /health and the static dashboard shell stay open (the shell carries no
+	// secrets); every data endpoint is gated by requireAuth so that binding
+	// docentd to a non-loopback interface only exposes data to bearers of the
+	// configured token. With no token set, requireAuth is a pass-through.
 	mux.HandleFunc("/health", s.health)
-	mux.HandleFunc("/sessions", s.sessions)
-	mux.HandleFunc("/api/workitems", s.sessions)
-	mux.HandleFunc("/api/workitems/", s.workItemDetail)
-	mux.HandleFunc("/api/signals", s.signalsAPI)
-	mux.HandleFunc("/api/collectors", s.collectorsAPI)
-	mux.HandleFunc("/api/units/", s.collectUnit)
-	mux.HandleFunc("/ingest", s.ingest)
+	mux.HandleFunc("/sessions", s.requireAuth(s.sessions))
+	mux.HandleFunc("/api/workitems", s.requireAuth(s.sessions))
+	mux.HandleFunc("/api/workitems/", s.requireAuth(s.workItemDetail))
+	mux.HandleFunc("/api/signals", s.requireAuth(s.signalsAPI))
+	mux.HandleFunc("/api/collectors", s.requireAuth(s.collectorsAPI))
+	mux.HandleFunc("/api/units/", s.requireAuth(s.collectUnit))
+	mux.HandleFunc("/ingest", s.requireAuth(s.ingest))
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux
+}
+
+// requireAuth gates a handler behind the shared-secret bearer check. When no
+// token is configured, authOK returns true and this is a transparent
+// pass-through (preserving the open, loopback-only default).
+func (s *Server) requireAuth(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authOK(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -100,10 +117,6 @@ func (s *Server) collectUnit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.authOK(r) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
-		return
-	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/units/"), "/"), "/")
 	if len(parts) != 3 || parts[2] != "collect" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "expected /api/units/{directive}/{mode}/collect"})
@@ -126,10 +139,6 @@ func (s *Server) collectUnit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.authOK(r) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 		return
 	}
 	body, err := io.ReadAll(r.Body)

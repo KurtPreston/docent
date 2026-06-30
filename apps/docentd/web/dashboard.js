@@ -171,7 +171,7 @@ function makeStat(value, label) {
 
 async function load() {
   try {
-    const r = await fetch("/sessions", { cache: "no-store" });
+    const r = await docentFetch("/sessions", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
     lastOk = Date.now();

@@ -39,7 +39,7 @@ async function collectNow(directive, mode, btn) {
   const original = btn.textContent;
   btn.textContent = "collecting…";
   try {
-    const r = await fetch("/api/units/" + encodeURIComponent(directive) + "/" + encodeURIComponent(mode) + "/collect", {
+    const r = await docentFetch("/api/units/" + encodeURIComponent(directive) + "/" + encodeURIComponent(mode) + "/collect", {
       method: "POST",
     });
     const d = await r.json().catch(() => ({}));
@@ -103,7 +103,7 @@ function render(data) {
 
 async function load() {
   try {
-    const r = await fetch("/api/collectors", { cache: "no-store" });
+    const r = await docentFetch("/api/collectors", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     render(await r.json());
   } catch (e) {
