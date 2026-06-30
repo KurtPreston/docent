@@ -5,7 +5,7 @@ local DOCENT = {
   port = tonumber(os.getenv("DOCENT_PORT")) or 39787,
   wmPort = tonumber(os.getenv("DOCENT_WM_PORT")) or 39788,
   token = os.getenv("DOCENT_TOKEN"),
-  hotkey = { mods = { "cmd", "alt" }, key = "space" },
+  hotkey = { mods = { "ctrl", "alt" }, key = "space" },
 }
 local base = "http://127.0.0.1:" .. DOCENT.port
 local wmBase = "http://127.0.0.1:" .. DOCENT.wmPort
@@ -25,7 +25,7 @@ local function buildChoices(data, cb)
       table.insert(choices, {
         text = s.name,
         subText = table.concat(subParts, "  ·  "),
-        kind = "session", name = s.name, sort = s.needsFollowup and 0 or (s.live and 1 or 2),
+        kind = "session", name = s.name, host = s.host, sort = s.needsFollowup and 0 or (s.live and 1 or 2),
       })
     end
     for _, pr in ipairs(g.prs or {}) do
@@ -50,8 +50,17 @@ end
 local function activate(choice)
   if not choice then return end
   if choice.kind == "session" then
-    hs.http.asyncPost(wmBase .. "/focus", hs.json.encode({ name = choice.name }), { ["Content-Type"] = "application/json" },
-      function(_, _, _) end)
+    local payload = { name = choice.name }
+    if choice.host then payload.host = choice.host end
+    hs.http.asyncPost(wmBase .. "/focus", hs.json.encode(payload), { ["Content-Type"] = "application/json" },
+      function(status, body, _)
+        if status == 200 then return end
+        local msg = (body and body ~= "") and body or ("HTTP " .. tostring(status))
+        if msg:find("assistive access", 1, true) then
+          msg = "Enable ~/.local/bin/docent-wm-macos in System Settings → Privacy & Security → Accessibility"
+        end
+        hs.notify.new({ title = "docent focus failed", informativeText = msg }):send()
+      end)
   elseif choice.kind == "url" and choice.url then
     hs.urlevent.openURL(choice.url)
   end
