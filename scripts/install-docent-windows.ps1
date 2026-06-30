@@ -21,6 +21,11 @@ host. Local builds docentd.exe, runs docent-setup, and registers a docentd task.
 Remote only verifies the remote /health is reachable and points the launcher +
 dashboard at it.
 
+Re-running is safe and idempotent: before (re)registering each task it stops the
+task and kills the running program tree, so a re-run always restarts the
+programs on the latest code (otherwise the old process keeps serving, since
+MultipleInstances=IgnoreNew makes Start a no-op while one is running).
+
 .PARAMETER RemoteUrl
 Use a remote docentd at this base URL (skips the prompt + local build).
 
@@ -326,8 +331,33 @@ shell.Run "$literal", 0, $waitArg
     Write-Host "  wrote $Path"
 }
 
+# Tear down a previously-installed program so a re-run loads fresh code.
+# Register-ScheduledTask -Force only rewrites the task definition, and
+# Start-ScheduledTask is a no-op while an instance is already running
+# (MultipleInstances=IgnoreNew). The program also runs detached from the task
+# (wscript .vbs -> cmd -> leaf), and Stop-ScheduledTask doesn't reliably reap
+# that leaf -- so stop the task and kill the whole tree, matched by a token that
+# appears in both the wscript host (.vbs name) and the leaf command line
+# (e.g. 'docent-launcher', 'docent-wm', 'docentd').
+function Stop-DocentProgram {
+    param([string]$TaskName, [string]$Match)
+    if ($DryRun) { Write-Host "[dry-run] stop task '$TaskName' + kill processes matching '$Match'"; return }
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+    $procs = @(
+        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='docentd.exe' OR Name='wscript.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($Match)) -and $_.ProcessId -ne $PID }
+    )
+    foreach ($p in $procs) {
+        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host "  stopped old $($p.Name) (pid $($p.ProcessId))" }
+        catch { }
+    }
+}
+
 function Register-DocentTask {
-    param([string]$Name, [string]$Vbs)
+    param([string]$Name, [string]$Vbs, [string]$Match)
+    Stop-DocentProgram -TaskName $Name -Match $Match
     if ($DryRun) { Write-Host "[dry-run] Register-ScheduledTask $Name -> $Vbs (+ Start)"; return }
     $me = "$env:USERDOMAIN\$env:USERNAME"
     $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}"' -f $Vbs)
@@ -347,7 +377,7 @@ if ($NoTasks) {
 }
 else {
     $extra = if ($Mode -eq 'local') { ', docentd' } else { '' }
-    Log "registering Scheduled Tasks (docent-wm, docent-launcher$extra)"
+    Log "registering Scheduled Tasks (docent-wm, docent-launcher$extra) -- stopping any running instances first so fresh code loads"
     $tmp = $env:TEMP
 
     # docent-wm-windows (always)
@@ -356,7 +386,7 @@ else {
     Write-HiddenVbs -Path $wmVbs -Exe $PwshExe `
         -ArgLine ('-NoLogo -NoProfile -File "{0}" -Port {1}' -f $wmScript, $WmPort) `
         -LogFile (Join-Path $tmp 'docent-wm.log')
-    Register-DocentTask -Name 'docent-wm' -Vbs $wmVbs
+    Register-DocentTask -Name 'docent-wm' -Vbs $wmVbs -Match 'docent-wm'
 
     # docent-launcher-windows (always)
     $lnVbs = Join-Path $ConfigDir 'docent-launcher-hidden.vbs'
@@ -365,7 +395,7 @@ else {
     if ($Token) { $lnArgs += (' -Token "{0}"' -f $Token) }
     Write-HiddenVbs -Path $lnVbs -Exe $PwshExe -ArgLine $lnArgs `
         -LogFile (Join-Path $tmp 'docent-launcher.log')
-    Register-DocentTask -Name 'docent-launcher' -Vbs $lnVbs
+    Register-DocentTask -Name 'docent-launcher' -Vbs $lnVbs -Match 'docent-launcher'
 
     # docentd (local only)
     if ($Mode -eq 'local') {
@@ -373,7 +403,7 @@ else {
         $ddArgs = ('-config "{0}" -web "{1}" -port {2}' -f $ConfigPath, $WebRoot, $Port)
         Write-HiddenVbs -Path $ddVbs -Exe $DocentdBin -ArgLine $ddArgs `
             -LogFile (Join-Path $tmp 'docentd.log')
-        Register-DocentTask -Name 'docentd' -Vbs $ddVbs
+        Register-DocentTask -Name 'docentd' -Vbs $ddVbs -Match 'docentd'
     }
 }
 

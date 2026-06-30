@@ -55,11 +55,17 @@ $script:WmUrl = $WmUrl.TrimEnd('/')
 $script:Token = $Token
 
 # --- data: flatten /sessions into pickable entries -------------------------
-function Get-LauncherEntries {
+# Self-contained so it can run inside a background runspace (no access to the
+# parent session's $script: vars or functions): everything it needs is passed in.
+$script:FetchEntries = {
+    param([string]$SessionsUrl, [string]$Token)
+    # Tolerate older/variant /sessions payloads: a group missing jiraUrl, prs,
+    # sessions, etc. should yield $null on access, not throw under StrictMode.
+    Set-StrictMode -Off
     try {
         $headers = @{}
-        if ($script:Token) { $headers['Authorization'] = "Bearer $script:Token" }
-        $data = Invoke-RestMethod -Uri "$script:SessionsUrl/sessions" -Headers $headers -TimeoutSec 5
+        if ($Token) { $headers['Authorization'] = "Bearer $Token" }
+        $data = Invoke-RestMethod -Uri "$SessionsUrl/sessions" -Headers $headers -TimeoutSec 5
     }
     catch { return @() }
 
@@ -114,6 +120,11 @@ function Get-LauncherEntries {
         }
     }
     return @($entries | Sort-Object Sort, Label)
+}
+
+# Thin synchronous wrapper used by -SelfTest (the live UI fetches async instead).
+function Get-LauncherEntries {
+    return @(& $script:FetchEntries $script:SessionsUrl $script:Token)
 }
 
 # Subsequence fuzzy match (chars of query appear in order in target).
@@ -222,6 +233,20 @@ $search = $window.FindName('Search')
 $results = $window.FindName('Results')
 $popOut = $window.FindName('PopOut')
 $script:AllEntries = @()
+$script:Loading = $false
+$script:FetchPS = $null
+$script:FetchHandle = $null
+$script:FetchTimer = $null
+
+# A non-actionable list row (loading / empty states). Carries the full entry
+# shape so Invoke-LauncherEntry stays safe under Set-StrictMode if selected.
+function New-StatusEntry {
+    param([string]$Label)
+    [PSCustomObject]@{
+        Type = $null; Label = $Label; Sub = ''; Name = $null
+        Host = $null; Url = $null; Color = '#3A4060'; Search = ''
+    }
+}
 
 # Open the docentd dashboard (served at SessionsUrl) in the system browser. When
 # a token is configured we pass it as a one-time ?token= query param; the
@@ -237,20 +262,68 @@ function Open-DashboardInBrowser {
 }
 
 function Update-Results {
+    if ($script:Loading) {
+        $results.ItemsSource = @(New-StatusEntry -Label 'Loading…')
+        return
+    }
     $q = $search.Text.ToLowerInvariant().Trim()
     $items = @($script:AllEntries | Where-Object { Test-FuzzyMatch -Query $q -Target $_.Search })
+    if ($items.Count -eq 0 -and @($script:AllEntries).Count -eq 0) {
+        $results.ItemsSource = @(New-StatusEntry -Label 'No sessions (is docentd running?)')
+        return
+    }
     $results.ItemsSource = $items
     if ($items.Count -gt 0) { $results.SelectedIndex = 0 }
 }
 
+# Poll handler for the async /sessions fetch. Defined at top level so it runs in
+# the script scope (and can see $script: state + Update-Results), unlike a
+# GetNewClosure block which would get its own private $script: scope. Runs on the
+# UI thread (DispatcherTimer), so touching the ListBox here is safe.
+$script:OnFetchTick = {
+    if (-not $script:FetchHandle.IsCompleted) { return }
+    $script:FetchTimer.Stop()
+    $ps = $script:FetchPS
+    try { $entries = @($ps.EndInvoke($script:FetchHandle)) }
+    catch { $entries = @() }
+    finally {
+        if ($ps) { $ps.Dispose() }
+        $script:FetchPS = $null
+    }
+    $script:Loading = $false
+    $script:AllEntries = $entries
+    Update-Results
+}
+
+# Fetch /sessions off the UI thread so the window paints instantly. Cancels any
+# in-flight fetch first so a slow request can't clobber a newer summon.
+function Start-LauncherFetch {
+    if ($script:FetchTimer) { $script:FetchTimer.Stop() }
+    if ($script:FetchPS) {
+        try { $script:FetchPS.Stop(); $script:FetchPS.Dispose() } catch { }
+        $script:FetchPS = $null
+    }
+
+    $script:FetchPS = [PowerShell]::Create()
+    [void]$script:FetchPS.AddScript($script:FetchEntries).AddArgument($script:SessionsUrl).AddArgument($script:Token)
+    $script:FetchHandle = $script:FetchPS.BeginInvoke()
+
+    $script:FetchTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $script:FetchTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+    $script:FetchTimer.Add_Tick($script:OnFetchTick)
+    $script:FetchTimer.Start()
+}
+
 function Show-Launcher {
-    $script:AllEntries = @(Get-LauncherEntries)
     $search.Text = ''
+    $script:Loading = $true
+    $script:AllEntries = @()
     Update-Results
     $window.Show()
     $window.Topmost = $true
     $window.Activate() | Out-Null
     $search.Focus() | Out-Null
+    Start-LauncherFetch
 }
 
 function Hide-Launcher { $window.Hide() }
