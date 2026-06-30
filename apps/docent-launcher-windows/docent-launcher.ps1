@@ -4,7 +4,8 @@
 docent launcher (Windows) -- a Spotlight-style, always-on-top picker bound to a
 global hotkey (default Ctrl+Alt+Space). Type to fuzzy-filter your sessions /
 tickets / PRs; Enter focuses the session window or opens the ticket/PR URL; Esc
-hides.
+hides. The "Open ↗" button pops the full dashboard out into your system browser
+(forwarding the -Token as a one-time ?token= query param when set).
 
 .DESCRIPTION
 Built on WPF (PresentationFramework) + Win32 RegisterHotKey -- both ship with
@@ -167,9 +168,33 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
         Visibility="Hidden">
   <Border CornerRadius="14" Background="#F20F1117" BorderBrush="#33FFFFFF" BorderThickness="1" Padding="10">
     <StackPanel>
-      <TextBox x:Name="Search" FontSize="20" Padding="10,8" BorderThickness="0"
-               Background="#1A1E2B" Foreground="#E6E8EF" CaretBrush="#7AA2F7"
-               FontFamily="Segoe UI"/>
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <TextBox x:Name="Search" Grid.Column="0" FontSize="20" Padding="10,8" BorderThickness="0"
+                 Background="#1A1E2B" Foreground="#E6E8EF" CaretBrush="#7AA2F7"
+                 FontFamily="Segoe UI"/>
+        <Button x:Name="PopOut" Grid.Column="1" Margin="8,0,0,0" Focusable="False"
+                Background="#1A1E2B" Foreground="#7AA2F7" BorderThickness="0" Cursor="Hand"
+                Padding="12,8" ToolTip="Open the dashboard in your system browser">
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border x:Name="PopOutBg" CornerRadius="8" Background="{TemplateBinding Background}"
+                      Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Border>
+              <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                  <Setter TargetName="PopOutBg" Property="Background" Value="#2A3047"/>
+                </Trigger>
+              </ControlTemplate.Triggers>
+            </ControlTemplate>
+          </Button.Template>
+          <TextBlock Text="Open &#x2197;" FontSize="14" FontWeight="SemiBold" FontFamily="Segoe UI"/>
+        </Button>
+      </Grid>
       <ListBox x:Name="Results" Margin="0,8,0,0" MaxHeight="420" BorderThickness="0"
                Background="Transparent" Foreground="#E6E8EF" FontSize="14"
                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -195,7 +220,21 @@ $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
 $search = $window.FindName('Search')
 $results = $window.FindName('Results')
+$popOut = $window.FindName('PopOut')
 $script:AllEntries = @()
+
+# Open the docentd dashboard (served at SessionsUrl) in the system browser. When
+# a token is configured we pass it as a one-time ?token= query param; the
+# dashboard's auth.js caches it in sessionStorage and strips it from the URL.
+function Open-DashboardInBrowser {
+    $url = "$script:SessionsUrl/"
+    if ($script:Token) {
+        $url += "?token=$([uri]::EscapeDataString($script:Token))"
+    }
+    Hide-Launcher
+    try { Start-Process $url }
+    catch { Write-Warning "Could not open dashboard '$script:SessionsUrl': $_" }
+}
 
 function Update-Results {
     $q = $search.Text.ToLowerInvariant().Trim()
@@ -233,6 +272,7 @@ $search.Add_PreviewKeyDown({
         }
     })
 $results.Add_MouseDoubleClick({ Invoke-Selected })
+$popOut.Add_Click({ Open-DashboardInBrowser })
 $window.Add_Deactivated({ Hide-Launcher })
 
 # --- global hotkey via Win32 RegisterHotKey --------------------------------
