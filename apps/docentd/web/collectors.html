@@ -3,9 +3,8 @@
 
 <head>
   <meta charset="utf-8" />
-  <title>docent</title>
+  <title>docent · collectors</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="docent-wm-url" content="http://127.0.0.1:39788" />
   <link rel="icon"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%237aa2f7'/></svg>" />
   <link rel="stylesheet" href="/dashboard.css" />
@@ -18,22 +17,20 @@
       <h1>docent</h1>
     </div>
     <nav class="nav">
-      <a href="/" class="active">Dashboard</a>
+      <a href="/">Dashboard</a>
       <a href="/signals">Signals</a>
-      <a href="/collectors">Collectors</a>
+      <a href="/collectors" class="active">Collectors</a>
     </nav>
     <div class="stats" id="stats"></div>
     <div class="controls">
-      <label class="toggle"><input type="checkbox" id="auto" checked /> auto</label>
       <button id="refresh" title="Refresh now">↻</button>
     </div>
   </header>
 
-  <main id="board" class="board" aria-live="polite"></main>
-
+  <main id="board" class="wrap" aria-live="polite"></main>
   <div id="toast" class="toast" role="status"></div>
 
-  <script src="/dashboard.js"></script>
+  <script src="/collectors.js"></script>
 </body>
 
 </html>

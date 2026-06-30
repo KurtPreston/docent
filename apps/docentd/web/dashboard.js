@@ -108,7 +108,13 @@ function renderGroup(g) {
   const card = el("div", "group" + (g.needsFollowup ? " followup" : ""));
   if (g.color) card.style.setProperty("--g-color", g.color);
 
-  const head = el("div", "group-head");
+  const head = el("div", "group-head clickable");
+  head.title = "Open work-item details";
+  head.addEventListener("click", (e) => {
+    // Let the Jira link handle its own click without navigating away.
+    if (e.target.closest("a.ticket")) return;
+    window.location.href = "/workitem?key=" + encodeURIComponent(g.key || g.ticket || "");
+  });
   const sw = el("span", "swatch");
   head.appendChild(sw);
 

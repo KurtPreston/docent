@@ -15,6 +15,7 @@ import (
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/engine"
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/registry"
+	"github.com/kurt/slakkr-ai/libs/collectors"
 	"github.com/kurt/slakkr-ai/libs/webhook"
 )
 
@@ -34,6 +35,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.health)
 	mux.HandleFunc("/sessions", s.sessions)
 	mux.HandleFunc("/api/workitems", s.sessions)
+	mux.HandleFunc("/api/workitems/", s.workItemDetail)
+	mux.HandleFunc("/api/signals", s.signalsAPI)
+	mux.HandleFunc("/api/collectors", s.collectorsAPI)
+	mux.HandleFunc("/api/units/", s.collectUnit)
 	mux.HandleFunc("/ingest", s.ingest)
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux
@@ -49,14 +54,73 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	d, err := s.engine.Refresh(ctx)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+	writeJSON(w, http.StatusOK, s.engine.RefreshOnRequest(ctx))
+}
+
+func (s *Server) signalsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, http.StatusOK, s.engine.Signals())
+}
+
+func (s *Server) collectorsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.engine.Collectors())
+}
+
+func (s *Server) workItemDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/workitems/"), "/")
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "work item key required"})
+		return
+	}
+	detail, ok := s.engine.WorkItem(key)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "work item not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// collectUnit force-collects one (directive, mode) unit now, ignoring its
+// poll interval, then rebuilds. Path: /api/units/{directive}/{mode}/collect.
+func (s *Server) collectUnit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authOK(r) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/units/"), "/"), "/")
+	if len(parts) != 3 || parts[2] != "collect" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "expected /api/units/{directive}/{mode}/collect"})
+		return
+	}
+	directiveID, mode := parts[0], collectors.Mode(parts[1])
+	if mode != collectors.ModeState && mode != collectors.ModeEvents {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "mode must be state or events"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	if !s.engine.CollectUnitNow(ctx, directiveID, mode) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such collection unit"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "directive": directiveID, "mode": string(mode)})
 }
 
 func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +188,11 @@ func (s *Server) staticOrIndex(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" || path == "dashboard" {
 		path = "index.html"
+	}
+	// Map extensionless app routes (e.g. /signals, /collectors, /workitem)
+	// to their backing HTML page.
+	if path != "" && filepath.Ext(path) == "" {
+		path += ".html"
 	}
 	full := filepath.Join(s.webRoot, filepath.Clean(path))
 	if !strings.HasPrefix(full, s.webRoot) {
