@@ -146,7 +146,7 @@ func needsFollowup(attention string) bool {
 func SignalsToEntities(signals []model.Signal, cfg Config) []model.Entity {
 	out := make([]model.Entity, 0, len(signals))
 	for _, s := range signals {
-		ent := signalToEntity(s, cfg)
+		ent := SignalToEntity(s, cfg)
 		if ent.ID != "" {
 			out = append(out, ent)
 		}
@@ -154,7 +154,10 @@ func SignalsToEntities(signals []model.Signal, cfg Config) []model.Entity {
 	return out
 }
 
-func signalToEntity(s model.Signal, cfg Config) model.Entity {
+// SignalToEntity maps a single collector signal to the participant entity it
+// becomes during correlation. It is deterministic, so callers can recompute a
+// signal's entity ID to link raw signals back to the work item they joined.
+func SignalToEntity(s model.Signal, cfg Config) model.Entity {
 	coords := map[string]string{}
 	if s.Repository != "" {
 		coords["repo"] = s.Repository

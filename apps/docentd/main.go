@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -42,6 +43,9 @@ func serve(args []string) {
 		log.Fatal(err)
 	}
 	eng := engine.New(cfg, reg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.StartScheduler(ctx)
 	srv := server.New(cfg, eng, reg, *webRoot)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
