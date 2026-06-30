@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../../jsonschema/config.schema.json
+# Unified docent config. Copy to ~/.config/docent/config.yaml and edit.
+# Directives drive collectors; ai is optional (for future dashboard features).
+
+# ai:
+#   provider: ollama
+#   ollama:
+#     base_url: http://127.0.0.1:11434
+#     model: qwen3
+
+directives:
+  - id: local-git-status
+    name: git repo working trees
+    collector: local-git
+    enabled: true
+    code_home: /Users/me/Code
+
+  # - id: github-activity
+  #   name: GitHub Activity
+  #   collector: github
+  #   enabled: true
+  #   target:
+  #     username: me
+  #   credential_refs:
+  #     token: SLAKKR_GITHUB_TOKEN

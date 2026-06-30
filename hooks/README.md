@@ -30,5 +30,8 @@ Focus actions go to docent-wm; session list comes from docentd `/sessions`.
 ## doctor
 
 ```
-go run ./apps/docentd doctor -config userdata/docentd.yaml
+docentd doctor
+# or: go run ./apps/docentd doctor
 ```
+
+Config lives in `~/.config/docent/` (`docentd.yaml`, `config.yaml`, `.env`). Override with `DOCENT_CONFIG` or `DOCENT_CONFIG_DIR`.

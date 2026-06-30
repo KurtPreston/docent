@@ -6,7 +6,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${DOCENT_BIN_DIR:-$HOME/.local/bin}"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
-CONFIG_PATH="$ROOT/userdata/docentd.yaml"
+CONFIG_DIR="${DOCENT_CONFIG_DIR:-$HOME/.config/docent}"
+CONFIG_PATH="$CONFIG_DIR/docentd.yaml"
+LEGACY_CONFIG_DIR="$ROOT/userdata"
 WEB_ROOT="$ROOT/apps/docentd/web"
 DOCENT_PORT=39787
 WM_PORT=39788
@@ -34,7 +36,8 @@ Options:
   -h, --help        Show this help
 
 Environment:
-  DOCENT_BIN_DIR    Same as --bin-dir
+  DOCENT_BIN_DIR     Same as --bin-dir
+  DOCENT_CONFIG_DIR  Config root (default: ~/.config/docent)
 
 After install, grant Accessibility to docent-wm-macos (or Terminal) in
 System Settings → Privacy & Security → Accessibility so window focus works.
@@ -80,6 +83,42 @@ else
   log "skipping build (--no-build)"
 fi
 
+bootstrap_docent_config() {
+  log "docent config at $CONFIG_DIR"
+  run mkdir -p "$CONFIG_DIR"
+
+  if [ ! -f "$CONFIG_PATH" ]; then
+    if [ -f "$LEGACY_CONFIG_DIR/docentd.yaml" ]; then
+      log "migrating $LEGACY_CONFIG_DIR/docentd.yaml → $CONFIG_PATH"
+      run cp "$LEGACY_CONFIG_DIR/docentd.yaml" "$CONFIG_PATH"
+      if [ "$DRY_RUN" -eq 0 ]; then
+        sed -i.bak '/^userdataDir:/d' "$CONFIG_PATH" 2>/dev/null || sed -i '/^userdataDir:/d' "$CONFIG_PATH"
+        rm -f "$CONFIG_PATH.bak"
+      fi
+    elif [ -f "$ROOT/config/docent/docentd.yaml.example" ]; then
+      run cp "$ROOT/config/docent/docentd.yaml.example" "$CONFIG_PATH"
+    fi
+  fi
+
+  local directives="$CONFIG_DIR/config.yaml"
+  if [ ! -f "$directives" ]; then
+    if [ -f "$LEGACY_CONFIG_DIR/config.yaml" ]; then
+      log "migrating $LEGACY_CONFIG_DIR/config.yaml → $directives"
+      run cp "$LEGACY_CONFIG_DIR/config.yaml" "$directives"
+    elif [ -f "$ROOT/config/docent/config.yaml.example" ]; then
+      run cp "$ROOT/config/docent/config.yaml.example" "$directives"
+    fi
+  fi
+
+  local env_file="$CONFIG_DIR/.env"
+  if [ ! -f "$env_file" ] && [ -f "$LEGACY_CONFIG_DIR/.env" ]; then
+    log "migrating $LEGACY_CONFIG_DIR/.env → $env_file"
+    run cp "$LEGACY_CONFIG_DIR/.env" "$env_file"
+  fi
+}
+
+bootstrap_docent_config
+
 if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
   log "writing launchd plists"
   run mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR"
@@ -99,7 +138,7 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
     <string>-web</string>
     <string>$WEB_ROOT</string>
   </array>
-  <key>WorkingDirectory</key><string>$ROOT</string>
+  <key>WorkingDirectory</key><string>$CONFIG_DIR</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$LOG_DIR/docentd.log</string>
@@ -285,7 +324,10 @@ cat <<EOF
 Installed:
   docentd           $DOCENTD_BIN
   docent-wm-macos   $WM_BIN
-  config            $CONFIG_PATH
+  config            $CONFIG_DIR/
+    docentd.yaml    daemon settings
+    config.yaml     collector directives
+    .env            secrets (optional)
   dashboard         http://127.0.0.1:$DOCENT_PORT/
   window manager    http://127.0.0.1:$WM_PORT/
 

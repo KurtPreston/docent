@@ -301,6 +301,12 @@
             },
             {
               "$ref": "#/$defs/directive.slack"
+            },
+            {
+              "$ref": "#/$defs/directive.webhook"
+            },
+            {
+              "$ref": "#/$defs/directive.docent-wm"
             }
           ]
         }
@@ -768,6 +774,44 @@
         }
       },
       "required": ["collector", "credential_refs"]
+    },
+    "directive.webhook": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "webhook",
+          "x-slakkr-display-name": "Webhook inbox"
+        }
+      },
+      "required": ["collector"]
+    },
+    "directive.docent-wm": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "docent-wm",
+          "x-slakkr-display-name": "Local docent-wm"
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "x-slakkr-prompt": "docent-wm HTTP base URL (e.g. http://127.0.0.1:39788)"
+            },
+            "machine": {
+              "type": "string",
+              "x-slakkr-prompt": "Machine label reported with live windows"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["collector"]
     }
   }
 }

@@ -24,7 +24,7 @@ func runDoctor(args []string) {
 	}
 	cfg.Directives = engine.EnsureDirectives(cfg.Directives)
 	reg := collectors.NewRegistry(nil)
-	opts := &collectors.ValidateOpts{UserdataDir: cfg.UserdataDir}
+	opts := &collectors.ValidateOpts{UserdataDir: cfg.ConfigDir}
 	issues := reg.Validate(context.Background(), cfg.Directives, opts)
 	if len(issues) == 0 {
 		fmt.Println("doctor: all enabled directives PASS")

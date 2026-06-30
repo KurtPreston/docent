@@ -104,7 +104,7 @@ func (e *Engine) Snapshot() Dashboard {
 func (e *Engine) collect(ctx context.Context) (Dashboard, error) {
 	since := time.Now().Add(-7 * 24 * time.Hour)
 	opts := &collectors.CollectOpts{
-		UserdataDir: e.cfg.UserdataDir,
+		UserdataDir: e.cfg.ConfigDir,
 		Since:       since,
 		Until:       time.Now(),
 		Scope:       collectors.ScopeInvolved,

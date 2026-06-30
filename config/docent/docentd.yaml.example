@@ -1,0 +1,6 @@
+port: 39787
+refreshSec: 30
+docentWmUrl: http://127.0.0.1:39788
+# Directives, optional ai, and secrets live alongside this file:
+#   ~/.config/docent/config.yaml   unified app config (directives + optional ai)
+#   ~/.config/docent/.env          credential_refs secrets
