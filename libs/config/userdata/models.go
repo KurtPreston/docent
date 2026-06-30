@@ -3,7 +3,9 @@ package userdata
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kurt/slakkr-ai/libs/config/executionmode"
 )
@@ -32,6 +34,55 @@ type Directive struct {
 	Target         map[string]string `yaml:"target,omitempty"`
 	Config         map[string]string `yaml:"config,omitempty"`
 	CredentialRefs map[string]string `yaml:"credential_refs,omitempty"`
+
+	// State and Events configure the directive's collection units. A
+	// directive can fan out into a state unit, an events unit, or both.
+	// When neither is set, the engine creates a single default unit for
+	// whatever capability the collector supports.
+	State  *ModeConfig `yaml:"state,omitempty"`
+	Events *ModeConfig `yaml:"events,omitempty"`
+}
+
+// ModeConfig configures one collection mode (state or events) of a directive.
+type ModeConfig struct {
+	Poll PollConfig `yaml:"poll,omitempty"`
+	// Query overrides config.query for this mode (e.g. a state-view JQL).
+	Query string `yaml:"query,omitempty"`
+	// Lookback is the initial/first-poll window for an events unit (e.g.
+	// "7d", "1h"). Ignored for state units. Empty falls back to the engine
+	// default.
+	Lookback string `yaml:"lookback,omitempty"`
+}
+
+// PollConfig controls how often a collection unit is polled.
+type PollConfig struct {
+	// Interval is the background poll cadence (e.g. "15m", "1h"). Empty or
+	// "0" disables background polling (manual/on-request only).
+	Interval string `yaml:"interval,omitempty"`
+	// OnRequest collects the unit inline when a page is requested. Reserved
+	// for fast, high-priority sources (e.g. docent-wm).
+	OnRequest bool `yaml:"on_request,omitempty"`
+	// OnLoad collects the unit once at daemon startup so the cache isn't
+	// empty before the first interval elapses.
+	OnLoad bool `yaml:"on_load,omitempty"`
+}
+
+// ParseDuration parses a poll interval / lookback. It accepts everything
+// time.ParseDuration does, plus a trailing "d" for whole days (e.g. "7d").
+// An empty string or "0" parses to a zero duration.
+func ParseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(s, "d")))
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
 }
 
 type AIConfig struct {
@@ -76,8 +127,24 @@ func (f ConfigFile) Validate() error {
 		if d.ID != "" {
 			seen[d.ID] = true
 		}
+		problems = append(problems, validateModeConfig(path+".state", d.State)...)
+		problems = append(problems, validateModeConfig(path+".events", d.Events)...)
 	}
 	return validationResult(problems)
+}
+
+func validateModeConfig(path string, m *ModeConfig) []string {
+	if m == nil {
+		return nil
+	}
+	var problems []string
+	if _, err := ParseDuration(m.Poll.Interval); err != nil {
+		problems = append(problems, fmt.Sprintf("%s.poll.interval %q is not a valid duration", path, m.Poll.Interval))
+	}
+	if _, err := ParseDuration(m.Lookback); err != nil {
+		problems = append(problems, fmt.Sprintf("%s.lookback %q is not a valid duration", path, m.Lookback))
+	}
+	return problems
 }
 
 func validationResult(problems []string) error {

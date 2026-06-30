@@ -274,9 +274,50 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "state": {
+          "$ref": "#/$defs/modeConfig"
+        },
+        "events": {
+          "$ref": "#/$defs/modeConfig"
         }
       },
       "additionalProperties": false
+    },
+    "poll": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "interval": {
+          "type": "string",
+          "description": "Background poll cadence (e.g. 15m, 1h). Empty or 0 disables background polling."
+        },
+        "on_request": {
+          "type": "boolean",
+          "description": "Collect inline when a page is requested (for fast, high-priority sources)."
+        },
+        "on_load": {
+          "type": "boolean",
+          "description": "Collect once at daemon startup."
+        }
+      }
+    },
+    "modeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "poll": {
+          "$ref": "#/$defs/poll"
+        },
+        "query": {
+          "type": "string",
+          "description": "Overrides config.query for this collection mode (e.g. a state-view JQL)."
+        },
+        "lookback": {
+          "type": "string",
+          "description": "Initial/first-poll window for an events unit (e.g. 7d, 1h). Ignored for state units."
+        }
+      }
     },
     "directiveItem": {
       "allOf": [
