@@ -18,13 +18,21 @@ INSTALL_HAMMERSPOON=0
 INSTALL_LAUNCHD=1
 SKIP_BUILD=0
 DRY_RUN=0
+DOCENTD_MODE=""  # local | remote (resolved after arg parse)
+DOCENTD_URL="${DOCENTD_URL:-}"
+DOCENTD_TOKEN="${DOCENTD_TOKEN:-${DOCENT_TOKEN:-}}"
 
 usage() {
   cat <<'EOF'
 Usage: install-docent-macos.sh [options]
 
-Builds docentd and docent-wm-macos, installs binaries, and registers launchd
-LaunchAgents. Optional Cursor hooks and Hammerspoon launcher.
+Installs docent-wm-macos (always) and optionally docentd locally, with
+launchd LaunchAgents. Optional Cursor hooks and Hammerspoon launcher.
+
+On first run, asks whether docentd runs on this Mac (local) or remotely.
+Local installs build docentd, run docent-setup when needed, and register
+both LaunchAgents. Remote installs only docent-wm-macos locally and point
+hooks/launcher at the remote docentd URL you provide.
 
 Options:
   --hooks           Install ~/.cursor/hooks/docent-notify.sh and merge hooks.json
@@ -38,9 +46,8 @@ Options:
 Environment:
   DOCENT_BIN_DIR     Same as --bin-dir
   DOCENT_CONFIG_DIR  Config root (default: ~/.config/docent)
-
-After install, grant Accessibility to docent-wm-macos (or Terminal) in
-System Settings → Privacy & Security → Accessibility so window focus works.
+  DOCENTD_URL        Remote docentd base URL (skips local docentd install)
+  DOCENTD_TOKEN      Bearer token for remote docentd / hooks
 EOF
 }
 
@@ -69,15 +76,119 @@ done
 
 command -v go >/dev/null 2>&1 || { echo "go is required on PATH" >&2; exit 1; }
 
+resolve_docentd_location() {
+  if [ -n "$DOCENTD_URL" ]; then
+    DOCENTD_MODE=remote
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
+    DOCENTD_MODE=local
+    return 0
+  fi
+  echo ""
+  echo "Where does docentd run?"
+  echo "  1) This Mac (build + launchd docentd locally) [default]"
+  echo "  2) Remote machine (only install docent-wm-macos here)"
+  printf "Choice [1]: "
+  read -r choice
+  case "${choice:-1}" in
+    2|remote|Remote) DOCENTD_MODE=remote ;;
+    *) DOCENTD_MODE=local ;;
+  esac
+}
+
+prompt_remote_endpoint() {
+  if [ -n "$DOCENTD_URL" ]; then
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    DOCENTD_URL="https://docent.example.invalid"
+    DOCENTD_TOKEN="${DOCENTD_TOKEN:-dry-run-token}"
+    return 0
+  fi
+  printf "Remote docentd base URL (e.g. https://ubuntu.example:39787): "
+  read -r DOCENTD_URL
+  DOCENTD_URL="${DOCENTD_URL%/}"
+  if [ -z "$DOCENTD_URL" ]; then
+    echo "remote docentd URL is required" >&2
+    exit 2
+  fi
+  if [ -z "$DOCENTD_TOKEN" ]; then
+    printf "Bearer token for %s: " "$DOCENTD_URL"
+    read -r DOCENTD_TOKEN
+  fi
+}
+
+write_remote_config() {
+  local env_file="$CONFIG_DIR/.env"
+  run mkdir -p "$CONFIG_DIR"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run printf '%s\n' "write DOCENT_URL/DOCENT_TOKEN to $env_file"
+    run printf '%s\n' "write $CONFIG_DIR/launcher.lua"
+    return 0
+  fi
+  touch "$env_file"
+  upsert_env() {
+    local key="$1" val="$2" file="$3"
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+      sed -i.bak "s|^${key}=.*|${key}=${val}|" "$file" && rm -f "$file.bak"
+    else
+      printf '%s=%s\n' "$key" "$val" >>"$file"
+    fi
+  }
+  upsert_env DOCENT_URL "$DOCENTD_URL" "$env_file"
+  if [ -n "$DOCENTD_TOKEN" ]; then
+    upsert_env DOCENT_TOKEN "$DOCENTD_TOKEN" "$env_file"
+  fi
+  chmod 600 "$env_file"
+  cat >"$CONFIG_DIR/launcher.lua" <<EOF
+return {
+  url = "$DOCENTD_URL",
+  token = "$DOCENTD_TOKEN",
+  wmPort = $WM_PORT,
+}
+EOF
+}
+
+run_docent_setup_if_needed() {
+  local directives="$CONFIG_DIR/config.yaml"
+  if [ -f "$directives" ] && grep -q '^directives:' "$directives" 2>/dev/null; then
+    if grep -A1 '^directives:' "$directives" | grep -q '^  -'; then
+      log "directives config present at $directives"
+      return 0
+    fi
+  fi
+  log "running docent-setup to populate $directives"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run go run "$ROOT/apps/docent-setup" --config-dir "$CONFIG_DIR"
+    return 0
+  fi
+  if [ -t 0 ]; then
+    go run "$ROOT/apps/docent-setup" --config-dir "$CONFIG_DIR"
+  else
+    echo "No directives in $directives — run: go run ./apps/docent-setup --config-dir $CONFIG_DIR" >&2
+  fi
+}
+
+resolve_docentd_location
+if [ "$DOCENTD_MODE" = remote ]; then
+  prompt_remote_endpoint
+  write_remote_config
+fi
+
 DOCENTD_BIN="$BIN_DIR/docentd"
 WM_BIN="$BIN_DIR/docent-wm-macos"
 PLIST_DOCENTD="$LAUNCH_AGENTS/com.slakkr.docentd.plist"
 PLIST_WM="$LAUNCH_AGENTS/com.slakkr.docent-wm-macos.plist"
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
-  log "building docentd and docent-wm-macos"
   run mkdir -p "$BIN_DIR"
-  run go build -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
+  if [ "$DOCENTD_MODE" = local ]; then
+    log "building docentd and docent-wm-macos"
+    run go build -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
+  else
+    log "building docent-wm-macos (remote docentd)"
+  fi
   run go build -o "$WM_BIN" "$ROOT/apps/docent-wm-macos"
 else
   log "skipping build (--no-build)"
@@ -119,12 +230,17 @@ bootstrap_docent_config() {
 
 bootstrap_docent_config
 
+if [ "$DOCENTD_MODE" = local ]; then
+  run_docent_setup_if_needed
+fi
+
 if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
   log "writing launchd plists"
   run mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR"
 
   if [ "$DRY_RUN" -eq 0 ]; then
-    cat >"$PLIST_DOCENTD" <<EOF
+    if [ "$DOCENTD_MODE" = local ]; then
+      cat >"$PLIST_DOCENTD" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -146,6 +262,7 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
 </dict>
 </plist>
 EOF
+    fi
 
     cat >"$PLIST_WM" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -167,8 +284,10 @@ EOF
 </plist>
 EOF
   else
-  run printf '%s\n' "write $PLIST_DOCENTD"
-  run printf '%s\n' "write $PLIST_WM"
+    if [ "$DOCENTD_MODE" = local ]; then
+      run printf '%s\n' "write $PLIST_DOCENTD"
+    fi
+    run printf '%s\n' "write $PLIST_WM"
   fi
 
   uid="$(id -u)"
@@ -180,8 +299,19 @@ EOF
     run launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || run launchctl load "$plist"
   }
 
+  unload_agent() {
+    local label="$1" plist="$2"
+    if launchctl print "gui/$uid/$label" &>/dev/null; then
+      run launchctl bootout "gui/$uid" "$plist" 2>/dev/null || run launchctl unload "$plist" 2>/dev/null || true
+    fi
+  }
+
   log "loading launch agents"
-  reload_agent com.slakkr.docentd "$PLIST_DOCENTD"
+  if [ "$DOCENTD_MODE" = local ]; then
+    reload_agent com.slakkr.docentd "$PLIST_DOCENTD"
+  else
+    unload_agent com.slakkr.docentd "$PLIST_DOCENTD"
+  fi
   reload_agent com.slakkr.docent-wm-macos "$PLIST_WM"
 fi
 
@@ -307,19 +437,26 @@ prompt_accessibility_if_needed() {
 }
 
 if [ "$DRY_RUN" -eq 0 ]; then
-  log "running doctor"
-  "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
+  if [ "$DOCENTD_MODE" = local ]; then
+    log "running doctor"
+    "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
+  fi
 
   log "health checks"
   sleep 1
-  curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null && echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok" || echo "  docentd     FAIL (see $LOG_DIR/docentd.log)" >&2
+  if [ "$DOCENTD_MODE" = local ]; then
+    curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null && echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok" || echo "  docentd     FAIL (see $LOG_DIR/docentd.log)" >&2
+  else
+    echo "  docentd     remote  $DOCENTD_URL"
+  fi
   curl -sf "http://127.0.0.1:$WM_PORT/health" >/dev/null && echo "  docent-wm   http://127.0.0.1:$WM_PORT/  ok" || echo "  docent-wm   FAIL (see $LOG_DIR/docent-wm-macos.log)" >&2
 
   log "accessibility probe (registers docent-wm-macos with TCC)"
   prompt_accessibility_if_needed
 fi
 
-cat <<EOF
+if [ "$DOCENTD_MODE" = local ]; then
+  cat <<EOF
 
 Installed:
   docentd           $DOCENTD_BIN
@@ -341,3 +478,22 @@ Unload: launchctl bootout gui/\$(id -u) <plist>   (or launchctl unload <plist>)
 If /windows still fails, enable docent-wm-macos under
 Privacy & Security → Accessibility (the install probes /windows to register it).
 EOF
+else
+  cat <<EOF
+
+Installed (remote docentd):
+  docent-wm-macos   $WM_BIN
+  docentd           $DOCENTD_URL  (remote — not installed locally)
+  config            $CONFIG_DIR/
+    .env            DOCENT_URL, DOCENT_TOKEN
+    launcher.lua    Hammerspoon overrides
+  window manager    http://127.0.0.1:$WM_PORT/
+
+LaunchAgents:
+  $PLIST_WM
+  logs: $LOG_DIR/docent-wm-macos.log
+
+If /windows still fails, enable docent-wm-macos under
+Privacy & Security → Accessibility (the install probes /windows to register it).
+EOF
+fi

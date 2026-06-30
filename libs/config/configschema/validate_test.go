@@ -6,19 +6,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kurt/slakkr-ai/internal/configschema"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"gopkg.in/yaml.v3"
 )
 
 func TestEmbeddedMatchesRepoJSONSchema(t *testing.T) {
-	wantPath := filepath.Join("..", "..", "jsonschema", "config.schema.json")
+	wantPath := filepath.Join("..", "..", "..", "jsonschema", "config.schema.json")
 	want, err := os.ReadFile(wantPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", wantPath, err)
 	}
 	if string(want) != string(configschema.SchemaBytes) {
-		t.Fatalf("internal/configschema/config.schema.json is out of sync with %s — copy schema files", wantPath)
+		t.Fatalf("libs/config/configschema/config.schema.json is out of sync with %s — copy schema files", wantPath)
 	}
 }
 

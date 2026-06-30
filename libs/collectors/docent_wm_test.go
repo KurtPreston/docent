@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 func TestDocentWMCollector_ValidateDirective(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"github.com/kurt/slakkr-ai/libs/webhook"
 )
 

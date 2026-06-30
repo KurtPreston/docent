@@ -49,8 +49,21 @@ if [ -z "$token" ] && [ -f "$HOME/.cursor/docent-token" ]; then
   token="$(tr -d '\r\n' < "$HOME/.cursor/docent-token" 2>/dev/null || true)"
 fi
 
-port="${DOCENT_PORT:-39787}"
-url="http://127.0.0.1:${port}/ingest"
+env_file="${DOCENT_ENV_FILE:-$HOME/.config/docent/.env}"
+if [ -f "$env_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$env_file"
+  set +a
+  token="${DOCENT_TOKEN:-$token}"
+fi
+
+if [ -n "${DOCENT_URL:-}" ]; then
+  url="${DOCENT_URL%/}/ingest"
+else
+  port="${DOCENT_PORT:-39787}"
+  url="http://127.0.0.1:${port}/ingest"
+fi
 
 if [ "$have_jq" -eq 1 ]; then
   payload="$(jq -nc \

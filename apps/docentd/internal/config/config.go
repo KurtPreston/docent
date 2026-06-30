@@ -4,10 +4,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kurt/slakkr-ai/internal/configschema"
-	"github.com/kurt/slakkr-ai/internal/docentconfig"
-	"github.com/kurt/slakkr-ai/internal/executionmode"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/docentconfig"
+	"github.com/kurt/slakkr-ai/libs/config/executionmode"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"gopkg.in/yaml.v3"
 )
 

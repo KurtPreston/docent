@@ -15,11 +15,11 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/kurt/slakkr-ai/libs/ai"
 	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/internal/configschema"
-	"github.com/kurt/slakkr-ai/internal/executionmode"
-	"github.com/kurt/slakkr-ai/internal/runlog"
-	"github.com/kurt/slakkr-ai/internal/userdata"
-	"github.com/kurt/slakkr-ai/internal/workflow"
+	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/executionmode"
+	"github.com/kurt/slakkr-ai/apps/docent-reporter/internal/runlog"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/kurt/slakkr-ai/apps/docent-reporter/internal/workflow"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -46,7 +46,7 @@ func New(out, errOut io.Writer, in io.Reader) *App {
 }
 
 func (a *App) Run(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("slakkr", flag.ContinueOnError)
+	fs := flag.NewFlagSet("docent-reporter", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
 
 	userdataDir := fs.String("userdata", userdata.DefaultDir, "userdata directory")

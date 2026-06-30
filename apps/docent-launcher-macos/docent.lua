@@ -7,7 +7,17 @@ local DOCENT = {
   token = os.getenv("DOCENT_TOKEN"),
   hotkey = { mods = { "ctrl", "alt" }, key = "space" },
 }
-local base = "http://127.0.0.1:" .. DOCENT.port
+
+local launcher_cfg = (os.getenv("HOME") or "") .. "/.config/docent/launcher.lua"
+local chunk = loadfile(launcher_cfg)
+if chunk then
+  local ok, overrides = pcall(chunk)
+  if ok and type(overrides) == "table" then
+    for k, v in pairs(overrides) do DOCENT[k] = v end
+  end
+end
+
+local base = DOCENT.url or ("http://127.0.0.1:" .. DOCENT.port)
 local wmBase = "http://127.0.0.1:" .. DOCENT.wmPort
 
 local chooser = nil

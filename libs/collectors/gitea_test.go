@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // giteaTestRequest captures one inbound request the collector made so the

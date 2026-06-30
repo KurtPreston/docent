@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // Deps bundles dependencies for running collectors (CLI and tests).

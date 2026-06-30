@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kurt/slakkr-ai/internal/executionmode"
+	"github.com/kurt/slakkr-ai/libs/config/executionmode"
 )
 
 const DefaultDir = "userdata"

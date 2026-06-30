@@ -10,8 +10,8 @@ import (
 
 	"github.com/kurt/slakkr-ai/libs/ai"
 	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/internal/executionmode"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/executionmode"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // directiveStatusTracker captures the latest known progress event per

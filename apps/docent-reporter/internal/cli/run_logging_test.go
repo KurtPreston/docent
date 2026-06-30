@@ -11,7 +11,7 @@ import (
 
 	"github.com/kurt/slakkr-ai/libs/ai"
 	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // fakeCollector emits a single status item and records both an HTTP

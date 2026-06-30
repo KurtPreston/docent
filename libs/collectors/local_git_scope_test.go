@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // TestLocalGitCollectScopes drives the LocalGitCollector through scope=self,

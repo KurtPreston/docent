@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/kurt/slakkr-ai/internal/configschema"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -118,7 +118,7 @@ func Run(opts Options) error {
 
 	fmt.Fprintf(errOut, "\nWrote %s\n", cfgPath)
 	if len(missing) > 0 {
-		fmt.Fprintf(errOut, "\nPopulate these variables in userdata/.env (or your environment):\n")
+		fmt.Fprintf(errOut, "\nPopulate these variables in %s/.env (or your environment):\n", root)
 		for _, k := range missing {
 			fmt.Fprintf(errOut, "  - %s\n", k)
 		}

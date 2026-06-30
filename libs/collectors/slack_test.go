@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // slackTestRequest captures one inbound API call so tests can assert what

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 type GiteaCollector struct {

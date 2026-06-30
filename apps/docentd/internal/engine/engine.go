@@ -8,7 +8,7 @@ import (
 
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/registry"
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"github.com/kurt/slakkr-ai/libs/collectors"
 	"github.com/kurt/slakkr-ai/libs/correlation"
 	"github.com/kurt/slakkr-ai/libs/model"

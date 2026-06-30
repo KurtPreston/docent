@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kurt/slakkr-ai/internal/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/configschema"
 	"gopkg.in/yaml.v3"
 )
 

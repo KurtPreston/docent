@@ -1,30 +1,50 @@
-# slakkr-ai
+# slakkr-ai (docent monorepo)
 
-Local-first CLI: collect **time-bounded activity** from configured sources, send it to an AI provider, and get a **Markdown** document (printed to stdout and saved under `userdata/output/`).
+Local-first tooling for developer activity: **docent** (live dashboard + window management) and **docent-reporter** (collectors → AI → Markdown reports).
 
-## Quick start
+## Monorepo layout
+
+```
+libs/           shared Go packages (model, collectors, correlation, ai, config, …)
+apps/
+  docentd/              merged daemon (collectors, dashboard, /ingest)
+  docent-wm-macos/      local window manager REST service (macOS)
+  docent-wm-windows/    local window manager REST service (Windows)
+  docent-launcher-*/    hotkey + webview launchers
+  docent-reporter/      stateless CLI reporter (was `slakkr`)
+  docent-setup/         config wizard + `check` validator
+```
+
+## Quick start (reporter)
 
 ```sh
 go test ./...
-go run ./cmd/slakkr --help
+go run ./apps/docent-reporter --help
 # First run creates userdata/config.yaml if missing
-go run ./cmd/slakkr --mode recent-activity --days 3
+go run ./apps/docent-reporter --mode recent-activity --days 3
 ```
 
-Or use [`scripts/slakkr`](scripts/slakkr) from the repo root.
+Or use [`scripts/docent-reporter`](scripts/docent-reporter) from the repo root.
 
 ## Setup
 
-Bootstrap or refresh `userdata/config.yaml` and reconcile secret placeholders in `userdata/.env`:
+Bootstrap or refresh docent config (`~/.config/docent/config.yaml` by default) and reconcile secret placeholders in `.env`:
 
 ```sh
 ./scripts/setup
-# or: go run ./cmd/slakkr-setup --userdata userdata
+# or: go run ./apps/docent-setup --config-dir ~/.config/docent
+```
+
+Validate configured collectors without running a report:
+
+```sh
+./scripts/check
+# or: go run ./apps/docent-setup check
 ```
 
 The wizard picks an AI provider (cursor / claude / ollama / offline `rule-based`), an activity formatter, walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
 
-Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`internal/configschema/config.schema.json`](internal/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
+Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`libs/config/configschema/config.schema.json`](libs/config/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
 
 ## Configuration (`userdata/config.yaml`)
 
@@ -186,7 +206,7 @@ Without these fields, `scope: all` collects the same set as `scope: involved` (t
 
 ### Aborting slow collection
 
-On an interactive terminal, slakkr prints `Press 'c' to abort pending collection…` while collectors run. Pressing **`c`** stops any in-flight and not-yet-started collector work and immediately proceeds to run the prompt against whatever was gathered so far (partial data is kept rather than discarded). This is handy when a broad-scope Slack run is taking longer than you want to wait. `Ctrl-C` still terminates the whole process as usual.
+On an interactive terminal, docent-reporter prints `Press 'c' to abort pending collection…` while collectors run. Pressing **`c`** stops any in-flight and not-yet-started collector work and immediately proceeds to run the prompt against whatever was gathered so far (partial data is kept rather than discarded). This is handy when a broad-scope Slack run is taking longer than you want to wait. `Ctrl-C` still terminates the whole process as usual.
 
 ## Collectors
 
@@ -201,14 +221,9 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 
 ## Layout
 
-- `userdata/config.yaml` — only required config file.
-- `userdata/.env` — secret values referenced by `credential_refs` (optional).
-- `userdata/output/` — saved markdown.
-- `userdata/logs/<date>-<mode>/` — one directory per run, matching the saved markdown filename sans `.md` (including any `-2`/`-3` collision suffix). Contains:
-  - `run.log` — resolved mode/options + per-directive collection summary.
-  - `<directive-id>.log` — one file per enabled directive, recording every HTTP request and subprocess invocation the collector made (status, payload sizes, duration).
-  - `<provider>-summary-request.json` / `<provider>-summary-response.json` — the LLM provider's full request/response payloads (`cursor`, `claude`, or `ollama`); `<provider>-summary-error.json` appears when the call fails. The deterministic `rule-based` provider writes nothing here.
-  - Only the 20 most recent run directories are kept; older ones are pruned automatically.
-- `jsonschema/config.schema.json` — JSON Schema for `userdata/config.yaml` (canonical copy alongside embedded duplicate).
-
-The `userdata/` directory is gitignored; initialize with [`scripts/setup`](scripts/setup), run the CLI once (minimal default config), or copy an example by hand.
+- `libs/` — shared packages (`model`, `collectors`, `correlation`, `ai`, `config`, …)
+- `apps/docent-reporter/` — reporter CLI
+- `apps/docent-setup/` — config wizard + `check`
+- `apps/docentd/` — daemon + dashboard
+- `~/.config/docent/` (or `userdata/` for local dev) — `config.yaml`, `docentd.yaml`, `.env`
+- `userdata/output/` — saved markdown from the reporter

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kurt/slakkr-ai/internal/userdata"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 // SlackCollector pulls Slack messages relevant to the configured user.
