@@ -260,6 +260,7 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry.Register("jira", JiraCollector{Clock: clock, HTTP: nil})
 	registry.Register("google-calendar", GoogleCalendarCollector{Clock: clock, HTTP: nil})
 	registry.Register("slack", SlackCollector{Clock: clock, HTTP: nil})
+	registry.Register("docent-wm", DocentWMCollector{Clock: clock})
 	return registry
 }
 
