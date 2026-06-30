@@ -57,7 +57,66 @@ func (c GiteaCollector) client() *http.Client {
 	return http.DefaultClient
 }
 
-// Collect emits issue, pull-request, and repository-update items for the
+// resolve validates config, resolves credentials, and resolves the owner
+// (via /api/v1/user when target.owner is empty), returning the trimmed API
+// base, owner login, and token shared by both collection modes.
+func (c GiteaCollector) resolve(ctx context.Context, directive userdata.Directive, opts *CollectOpts) (apiBase, owner, token string, err error) {
+	base := strings.TrimSpace(directive.Config["base_url"])
+	owner = strings.TrimSpace(directive.Target["owner"])
+	if base == "" {
+		return "", "", "", fmt.Errorf("config.base_url is required")
+	}
+	tokenKey := directive.CredentialRefs["token"]
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
+	}
+	token = userdata.ResolveEnv(userdataDir, tokenKey)
+	if token == "" {
+		return "", "", "", fmt.Errorf("gitea token missing (set %s in environment or userdata/.env)", tokenKey)
+	}
+	u, perr := url.Parse(base)
+	if perr != nil || u.Scheme == "" || u.Host == "" {
+		return "", "", "", fmt.Errorf("invalid base_url")
+	}
+	apiBase = strings.TrimRight(u.String(), "/")
+	if owner == "" {
+		login, lerr := c.fetchAuthenticatedLogin(ctx, apiBase, token, opts, directive.ID)
+		if lerr != nil {
+			return "", "", "", fmt.Errorf("resolve authenticated gitea user: %w", lerr)
+		}
+		owner = login
+	}
+	return apiBase, owner, token, nil
+}
+
+// CollectState emits the user's currently-open issues and pull requests
+// (authored or assigned), independent of any time window: the "what is true
+// right now" view.
+func (c GiteaCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+	apiBase, owner, token, err := c.resolve(ctx, directive, opts)
+	if err != nil {
+		return nil, err
+	}
+	queries := buildGiteaStateQueries(owner)
+	var items []StatusItem
+	for _, q := range queries {
+		rows, err := c.fetchIssues(ctx, apiBase, token, q, opts, directive.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			obs, perr := parseGiteaTime(row.Updated)
+			if perr != nil {
+				obs = c.Clock()
+			}
+			items = append(items, buildGiteaIssueItem(directive, apiBase, owner, q, row, obs))
+		}
+	}
+	return dedupeGiteaItems(items), nil
+}
+
+// CollectEvents emits issue, pull-request, and repository-update items for the
 // resolved owner (and, in ScopeAll, the directive's followed_repos).
 //
 // Scope semantics:
@@ -74,32 +133,10 @@ func (c GiteaCollector) client() *http.Client {
 // When target.owner is empty, the authenticated user is resolved via
 // /api/v1/user and used as the owner so the directive defaults to the
 // caller's own repositories and activity.
-func (c GiteaCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	base := strings.TrimSpace(directive.Config["base_url"])
-	owner := strings.TrimSpace(directive.Target["owner"])
-	if base == "" {
-		return nil, fmt.Errorf("config.base_url is required")
-	}
-	tokenKey := directive.CredentialRefs["token"]
-	userdataDir := ""
-	if opts != nil {
-		userdataDir = opts.UserdataDir
-	}
-	token := userdata.ResolveEnv(userdataDir, tokenKey)
-	if token == "" {
-		return nil, fmt.Errorf("gitea token missing (set %s in environment or userdata/.env)", tokenKey)
-	}
-	u, err := url.Parse(base)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("invalid base_url")
-	}
-	apiBase := strings.TrimRight(u.String(), "/")
-	if owner == "" {
-		login, err := c.fetchAuthenticatedLogin(ctx, apiBase, token, opts, directive.ID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve authenticated gitea user: %w", err)
-		}
-		owner = login
+func (c GiteaCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+	apiBase, owner, token, err := c.resolve(ctx, directive, opts)
+	if err != nil {
+		return nil, err
 	}
 	since := time.Time{}
 	if opts != nil {
@@ -240,8 +277,10 @@ type giteaIssueQuery struct {
 	// type: "issues" or "pulls".
 	issueType string
 	since     time.Time
-	itemKind  string
-	anchor    string
+	// state filters the listing ("all" when empty, "open" for state mode).
+	state    string
+	itemKind string
+	anchor   string
 	// userAnchored is true when the query is filtered by createdBy /
 	// assignedBy / mentionedBy. Rows from such queries are IsSelf=true.
 	userAnchored bool
@@ -303,6 +342,18 @@ func buildGiteaIssueQueries(scope Scope, user string, followedRepos []string, si
 	return out
 }
 
+// buildGiteaStateQueries returns the open-issue/PR listings for the state
+// view: issues and pull requests the user authored or is assigned to, with no
+// time window and state restricted to open.
+func buildGiteaStateQueries(user string) []giteaIssueQuery {
+	return []giteaIssueQuery{
+		{createdBy: user, issueType: "issues", state: "open", itemKind: "gitea_issue", anchor: fmt.Sprintf("created_by:%s state:open type:issues", user), userAnchored: true},
+		{createdBy: user, issueType: "pulls", state: "open", itemKind: "gitea_pr", anchor: fmt.Sprintf("created_by:%s state:open type:pulls", user), userAnchored: true},
+		{assignedBy: user, issueType: "issues", state: "open", itemKind: "gitea_issue", anchor: fmt.Sprintf("assigned_by:%s state:open type:issues", user), userAnchored: true},
+		{assignedBy: user, issueType: "pulls", state: "open", itemKind: "gitea_pr", anchor: fmt.Sprintf("assigned_by:%s state:open type:pulls", user), userAnchored: true},
+	}
+}
+
 // splitFollowedRepo parses an `owner` or `owner/repo` entry from
 // config.followed_repos. A bare owner yields ("owner", "").
 func splitFollowedRepo(entry string) (owner, repo string) {
@@ -326,7 +377,11 @@ func gitOwnerFromFullName(fullName string) string {
 func (c GiteaCollector) fetchIssues(ctx context.Context, apiBase, token string, q giteaIssueQuery, opts *CollectOpts, directiveID string) ([]giteaIssue, error) {
 	values := url.Values{}
 	values.Set("type", q.issueType)
-	values.Set("state", "all")
+	state := q.state
+	if state == "" {
+		state = "all"
+	}
+	values.Set("state", state)
 	values.Set("limit", "50")
 	if !q.since.IsZero() {
 		values.Set("since", q.since.UTC().Format(time.RFC3339))

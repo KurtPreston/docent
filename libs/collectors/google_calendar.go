@@ -35,7 +35,7 @@ func (c GoogleCalendarCollector) client() *http.Client {
 // ORGANIZER property and comparing against a new config.user_email
 // (events where the user is only an attendee would drop to IsSelf=false).
 // That is intentionally out of scope for the current iCal-only collector.
-func (c GoogleCalendarCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+func (c GoogleCalendarCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	rawURL := strings.TrimSpace(directive.Config["ical_url"])
 	if rawURL == "" {
 		rawURL = strings.TrimSpace(directive.Config["url"])

@@ -271,6 +271,12 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	stopAbort := startAbortListener(a.In, collectCancel)
 
 	collectStart := a.Now()
+	collectMode := collectors.ModeEvents
+	if resolved.ModeID == executionmode.BuiltinPRs {
+		// The `prs` mode lists current open PRs (state view) rather than
+		// the activity timeline.
+		collectMode = collectors.ModeState
+	}
 	statuses, err := workflow.CollectStatuses(collectCtx, workflow.Deps{
 		Registry: a.Reg,
 		Now:      a.Now,
@@ -285,7 +291,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		Until:              resolved.Until,
 		Scope:              collectors.Scope(resolved.Scope),
 		OnlyCollectorTypes: resolved.Collectors,
-		PRReviewReadiness:  resolved.ModeID == executionmode.BuiltinPRs,
+		Mode:               collectMode,
 	})
 	stopAbort()
 	collectDuration := a.Now().Sub(collectStart)

@@ -29,7 +29,7 @@ func (c WebhookCollector) clock() func() time.Time {
 	return time.Now
 }
 
-func (c WebhookCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+func (c WebhookCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	events := c.inbox().Drain()
 	items := make([]StatusItem, 0, len(events))
 	for _, ev := range events {

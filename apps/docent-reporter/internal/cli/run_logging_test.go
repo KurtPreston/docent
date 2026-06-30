@@ -19,7 +19,7 @@ import (
 // can verify those wires.
 type fakeCollector struct{}
 
-func (fakeCollector) Collect(_ context.Context, d userdata.Directive, opts *collectors.CollectOpts) ([]collectors.StatusItem, error) {
+func (fakeCollector) CollectEvents(_ context.Context, d userdata.Directive, opts *collectors.CollectOpts) ([]collectors.StatusItem, error) {
 	if opts != nil && opts.RunLog != nil {
 		l := opts.RunLog.Directive(d.ID)
 		if l != nil {

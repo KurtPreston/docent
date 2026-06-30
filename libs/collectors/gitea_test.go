@@ -154,7 +154,7 @@ func TestGiteaCollectScopeSelfQueriesAuthoredOnly(t *testing.T) {
 
 	c := GiteaCollector{Clock: func() time.Time { return now }}
 	directive := newGiteaDirective(srv.URL, nil)
-	items, err := c.Collect(context.Background(), directive, &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
 		Since: now.Add(-7 * 24 * time.Hour),
 		Until: now,
 		Scope: ScopeSelf,
@@ -209,7 +209,7 @@ func TestGiteaCollectScopeInvolvedAddsAssignedAndMentioned(t *testing.T) {
 	})
 	c := GiteaCollector{Clock: func() time.Time { return now }}
 	directive := newGiteaDirective(srv.URL, nil)
-	_, err := c.Collect(context.Background(), directive, &CollectOpts{
+	_, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
 		Since: now.Add(-7 * 24 * time.Hour),
 		Until: now,
 		Scope: ScopeInvolved,
@@ -256,7 +256,7 @@ func TestGiteaCollectScopeAllAddsFollowedRepos(t *testing.T) {
 	directive := newGiteaDirective(srv.URL, map[string]string{
 		"followed_repos": "some-org/some-repo",
 	})
-	items, err := c.Collect(context.Background(), directive, &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
 		Since: now.Add(-7 * 24 * time.Hour),
 		Until: now,
 		Scope: ScopeAll,
@@ -317,7 +317,7 @@ func TestGiteaCollectDedupesAcrossUserQueries(t *testing.T) {
 	})
 	c := GiteaCollector{Clock: func() time.Time { return now }}
 	directive := newGiteaDirective(srv.URL, nil)
-	items, err := c.Collect(context.Background(), directive, &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
 		Since: now.Add(-7 * 24 * time.Hour),
 		Until: now,
 		Scope: ScopeInvolved,

@@ -88,10 +88,12 @@ type CollectOpts struct {
 	// every enabled directive (the historical default). Used by modes
 	// that only need a subset of sources (e.g. `prs` → GitHub only).
 	OnlyCollectorTypes []string
-	// PRReviewReadiness switches the GitHub collectors into "list my
-	// open PRs with draft + checks status" mode instead of the usual
-	// activity-timeline collection. Other collectors ignore it.
-	PRReviewReadiness bool
+	// Mode selects the collection capability to invoke when a collector
+	// supports both. ModeEvents (the default) runs the activity/timeline
+	// path; ModeState runs the current-state snapshot path. The aggregate
+	// Collect honors this; docentd's per-unit path passes the mode
+	// explicitly via CollectUnit.
+	Mode Mode
 	// RunLog routes per-directive HTTP and subprocess activity into
 	// the per-run log directory. Nil disables logging (the default for
 	// tests). The runlog.Run type satisfies this interface; collectors
@@ -211,9 +213,36 @@ func reportProgress(opts *CollectOpts, p DirectiveProgress) {
 	opts.OnDirectiveUpdate(p)
 }
 
-// Collector gathers status items for events since opts.Since through window end.
-type Collector interface {
-	Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
+// Mode selects which collection capability a directive exercises.
+type Mode string
+
+const (
+	// ModeEvents collects activity within [opts.Since, window end]; callers
+	// accumulate and age these out incrementally.
+	ModeEvents Mode = "events"
+	// ModeState collects the complete current set, independent of time;
+	// callers replace prior signals on each collection.
+	ModeState Mode = "state"
+)
+
+// EffectiveMode resolves an unset mode to ModeEvents (the historical default).
+func (o *CollectOpts) EffectiveMode() Mode {
+	if o == nil || o.Mode == "" {
+		return ModeEvents
+	}
+	return o.Mode
+}
+
+// EventCollector answers "what happened recently": it returns events within
+// [opts.Since, window end]. Callers accumulate/age-out these incrementally.
+type EventCollector interface {
+	CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
+}
+
+// StateCollector answers "what is true right now": it returns the complete
+// current set, independent of any time window. Callers replace prior signals.
+type StateCollector interface {
+	CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
 }
 
 // ValidationIssue describes a single problem with a directive's configuration
@@ -244,7 +273,7 @@ type Validator interface {
 }
 
 type Registry struct {
-	collectors map[string]Collector
+	collectors map[string]any
 	clock      func() time.Time
 }
 
@@ -252,7 +281,7 @@ func NewRegistry(clock func() time.Time) *Registry {
 	if clock == nil {
 		clock = time.Now
 	}
-	registry := &Registry{collectors: map[string]Collector{}, clock: clock}
+	registry := &Registry{collectors: map[string]any{}, clock: clock}
 	registry.Register("local-git", LocalGitCollector{Clock: clock})
 	registry.Register("github", GitHubCollector{Clock: clock})
 	registry.Register("github-enterprise", GitHubCollector{Clock: clock})
@@ -265,8 +294,47 @@ func NewRegistry(clock func() time.Time) *Registry {
 	return registry
 }
 
-func (r *Registry) Register(name string, collector Collector) {
+// Register adds a collector under name. A collector may implement
+// StateCollector, EventCollector, or both; capability is resolved at
+// collection time via type assertion.
+func (r *Registry) Register(name string, collector any) {
 	r.collectors[name] = collector
+}
+
+// Capabilities reports which modes the named collector supports.
+func (r *Registry) Capabilities(name string) (state bool, events bool) {
+	c, ok := r.collectors[name]
+	if !ok {
+		return false, false
+	}
+	_, state = c.(StateCollector)
+	_, events = c.(EventCollector)
+	return state, events
+}
+
+// CollectUnit runs a single directive in the given mode, dispatching to the
+// collector's StateCollector or EventCollector capability. It is the entry
+// point docentd uses for per-(directive, mode) collection units; a collector
+// that lacks the requested capability is a hard error here.
+func (r *Registry) CollectUnit(ctx context.Context, d userdata.Directive, mode Mode, opts *CollectOpts) ([]StatusItem, error) {
+	c, ok := r.collectors[d.Collector]
+	if !ok {
+		return nil, fmt.Errorf("directive %s uses unknown collector %q", d.ID, d.Collector)
+	}
+	switch mode {
+	case ModeState:
+		sc, ok := c.(StateCollector)
+		if !ok {
+			return nil, fmt.Errorf("collector %q does not support state mode", d.Collector)
+		}
+		return sc.CollectState(ctx, d, opts)
+	default:
+		ec, ok := c.(EventCollector)
+		if !ok {
+			return nil, fmt.Errorf("collector %q does not support events mode", d.Collector)
+		}
+		return ec.CollectEvents(ctx, d, opts)
+	}
 }
 
 func (r *Registry) Names() []string {
@@ -384,14 +452,20 @@ func (r *Registry) Validate(ctx context.Context, directives []userdata.Directive
 }
 
 func (r *Registry) collectDirective(ctx context.Context, d userdata.Directive, opts *CollectOpts) []StatusItem {
-	collector := r.collectors[d.Collector]
+	mode := opts.EffectiveMode()
+	if state, events := r.Capabilities(d.Collector); (mode == ModeState && !state) || (mode == ModeEvents && !events) {
+		// The directive's collector doesn't participate in this mode
+		// (e.g. an event-only collector during a state run). Skip it
+		// silently rather than emitting a collector_error row.
+		return nil
+	}
 	reportProgress(opts, DirectiveProgress{
 		DirectiveID: d.ID,
 		Description: d.Name,
 		Status:      "running",
 		Detail:      "starting",
 	})
-	items, err := collector.Collect(ctx, d, opts)
+	items, err := r.CollectUnit(ctx, d, mode, opts)
 	if err != nil {
 		// When the run was aborted (the user pressed the abort key, which
 		// cancels the collection context), don't surface a collector_error

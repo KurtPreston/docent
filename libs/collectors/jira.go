@@ -25,32 +25,35 @@ func (c JiraCollector) client() *http.Client {
 }
 
 type jiraSearchResult struct {
-	Issues []struct {
-		Key    string `json:"key"`
-		Fields struct {
-			Summary string `json:"summary"`
-			Status  struct {
-				Name string `json:"name"`
-			} `json:"status"`
-			Priority struct {
-				Name string `json:"name"`
-			} `json:"priority"`
-			Updated  string `json:"updated"`
-			Assignee struct {
-				Name         string `json:"name"`
-				AccountID    string `json:"accountId"`
-				EmailAddress string `json:"emailAddress"`
-			} `json:"assignee"`
-			Reporter struct {
-				Name         string `json:"name"`
-				AccountID    string `json:"accountId"`
-				EmailAddress string `json:"emailAddress"`
-			} `json:"reporter"`
-		} `json:"fields"`
-	} `json:"issues"`
+	Issues []jiraIssue `json:"issues"`
 }
 
-// Collect runs JQL restricted to issues updated on or after opts.Since.
+type jiraIssue struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary string `json:"summary"`
+		Status  struct {
+			Name string `json:"name"`
+		} `json:"status"`
+		Priority struct {
+			Name string `json:"name"`
+		} `json:"priority"`
+		Updated  string `json:"updated"`
+		Assignee struct {
+			Name         string `json:"name"`
+			AccountID    string `json:"accountId"`
+			EmailAddress string `json:"emailAddress"`
+		} `json:"assignee"`
+		Reporter struct {
+			Name         string `json:"name"`
+			AccountID    string `json:"accountId"`
+			EmailAddress string `json:"emailAddress"`
+		} `json:"reporter"`
+	} `json:"fields"`
+}
+
+// CollectEvents runs JQL restricted to issues updated on or after opts.Since,
+// emitting one issue_activity signal per matching issue.
 //
 // Scope shapes the user clause inside the composed JQL:
 //   - ScopeSelf: assignee or reporter is the current user.
@@ -58,25 +61,72 @@ type jiraSearchResult struct {
 //   - ScopeAll: ScopeInvolved expanded with `project in (followed_projects)`
 //     when config.followed_projects is set; falls back to involved when no
 //     projects are configured.
-func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	base := strings.TrimSpace(directive.Config["base_url"])
-	jql := strings.TrimSpace(directive.Config["query"])
-	if base == "" {
-		return nil, fmt.Errorf("config.base_url is required")
-	}
+func (c JiraCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	since := time.Time{}
 	if opts != nil {
 		since = opts.Since
 	}
+	now := c.Clock()
+	if opts != nil {
+		now = opts.windowEnd(c.Clock)
+	}
 	scope := opts.EffectiveScope()
 	followedProjects := parseFollowedList(directive.Config["followed_projects"])
-	effective := buildJiraActivityJQL(jql, since, scope, followedProjects)
+	jql := buildJiraActivityJQL(strings.TrimSpace(directive.Config["query"]), since, scope, followedProjects)
+	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql)
+	if err != nil {
+		return nil, err
+	}
+	email := strings.TrimSpace(directive.Config["email"])
+	items := make([]StatusItem, 0, len(parsed.Issues))
+	for _, iss := range parsed.Issues {
+		obs, err := jiraParseUpdated(iss.Fields.Updated)
+		if err != nil || obs.Before(since) || obs.After(now) {
+			continue
+		}
+		items = append(items, buildJiraItem(directive, base, iss, "issue_activity", obs, jiraIsSelf(iss, scope, email)))
+	}
+	return items, nil
+}
+
+// CollectState runs JQL for the current set of issues matching the directive's
+// query and scope with no time-window filter, emitting one issue signal per
+// matching issue. This is the "what is true right now" view (e.g. tickets
+// assigned to me in a given status), independent of when they last changed.
+func (c JiraCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+	scope := opts.EffectiveScope()
+	followedProjects := parseFollowedList(directive.Config["followed_projects"])
+	jql := buildJiraStateJQL(strings.TrimSpace(directive.Config["query"]), scope, followedProjects)
+	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql)
+	if err != nil {
+		return nil, err
+	}
+	email := strings.TrimSpace(directive.Config["email"])
+	items := make([]StatusItem, 0, len(parsed.Issues))
+	for _, iss := range parsed.Issues {
+		obs, perr := jiraParseUpdated(iss.Fields.Updated)
+		if perr != nil {
+			obs = c.Clock()
+		}
+		items = append(items, buildJiraItem(directive, base, iss, "issue", obs, jiraIsSelf(iss, scope, email)))
+	}
+	return items, nil
+}
+
+// runJiraSearch resolves credentials, executes the JQL search, and returns the
+// parsed result plus the trimmed base URL. Auth prefers a Personal Access
+// Token (Bearer); it falls back to email + API token (Basic) for legacy
+// Atlassian Cloud configs.
+func (c JiraCollector) runJiraSearch(ctx context.Context, directive userdata.Directive, opts *CollectOpts, jql string) (jiraSearchResult, string, error) {
+	var parsed jiraSearchResult
+	base := strings.TrimSpace(directive.Config["base_url"])
+	if base == "" {
+		return parsed, "", fmt.Errorf("config.base_url is required")
+	}
 	userdataDir := ""
 	if opts != nil {
 		userdataDir = opts.UserdataDir
 	}
-	// Prefer Personal Access Token (Bearer auth). Fall back to email + API
-	// token (Basic auth) for legacy Atlassian Cloud configs.
 	patKey := strings.TrimSpace(directive.CredentialRefs["pat"])
 	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
 	email := strings.TrimSpace(directive.Config["email"])
@@ -88,33 +138,29 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	case patKey != "":
 		secret = userdata.ResolveEnv(userdataDir, patKey)
 		if secret == "" {
-			return nil, fmt.Errorf("jira pat env %q is empty", patKey)
+			return parsed, "", fmt.Errorf("jira pat env %q is empty", patKey)
 		}
 		useBearer = true
 	case tokenKey != "":
 		secret = userdata.ResolveEnv(userdataDir, tokenKey)
 		if secret == "" {
-			return nil, fmt.Errorf("jira token env %q is empty", tokenKey)
+			return parsed, "", fmt.Errorf("jira token env %q is empty", tokenKey)
 		}
 		if email == "" {
-			return nil, fmt.Errorf("config.email is required for Jira API token (Basic) auth")
+			return parsed, "", fmt.Errorf("config.email is required for Jira API token (Basic) auth")
 		}
 	default:
-		return nil, fmt.Errorf("jira credential missing (set credential_refs.pat in userdata/.env)")
-	}
-	now := c.Clock()
-	if opts != nil {
-		now = opts.windowEnd(c.Clock)
+		return parsed, "", fmt.Errorf("jira credential missing (set credential_refs.pat in userdata/.env)")
 	}
 	api := strings.TrimRight(base, "/") + "/rest/api/2/search"
 	q := url.Values{}
-	q.Set("jql", effective)
+	q.Set("jql", jql)
 	q.Set("maxResults", "50")
 	q.Set("fields", "summary,status,priority,updated,assignee,reporter")
 	reqURL := api + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return nil, err
+		return parsed, "", err
 	}
 	if useBearer {
 		req.Header.Set("Authorization", "Bearer "+secret)
@@ -124,66 +170,62 @@ func (c JiraCollector) Collect(ctx context.Context, directive userdata.Directive
 	req.Header.Set("Accept", "application/json")
 	res, body, err := doAndReadHTTP(c.client(), req, 4<<20, opts, directive.ID)
 	if err != nil {
-		return nil, err
+		return parsed, "", err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("jira search %s: %s", res.Status, strings.TrimSpace(string(body)))
+		return parsed, "", fmt.Errorf("jira search %s: %s", res.Status, strings.TrimSpace(string(body)))
 	}
-	var parsed jiraSearchResult
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("parse jira response: %w", err)
+		return parsed, "", fmt.Errorf("parse jira response: %w", err)
 	}
-	items := make([]StatusItem, 0, len(parsed.Issues))
-	for _, iss := range parsed.Issues {
-		obs, err := jiraParseUpdated(iss.Fields.Updated)
-		if err != nil || obs.Before(since) || obs.After(now) {
-			continue
-		}
-		priority := iss.Fields.Priority.Name
-		summary := fmt.Sprintf("status=%s priority=%s updated=%s", iss.Fields.Status.Name, priority, iss.Fields.Updated)
-		sev := "info"
-		if strings.EqualFold(iss.Fields.Status.Name, "blocked") || strings.Contains(strings.ToLower(iss.Fields.Status.Name), "block") {
-			sev = "warning"
-		}
-		web := strings.TrimRight(base, "/") + "/browse/" + iss.Key
-		// IsSelf rules:
-		//   - self/involved: JQL guaranteed the user matched (assignee /
-		//     reporter / watcher), so mark true.
-		//   - all: only true when assignee or reporter email matches
-		//     the Basic-auth identity; otherwise the row likely came
-		//     from the followed-projects expansion and isn't the
-		//     user's own activity.
-		isSelf := true
-		if scope == ScopeAll {
-			isSelf = false
-			if email != "" {
-				if strings.EqualFold(iss.Fields.Assignee.EmailAddress, email) ||
-					strings.EqualFold(iss.Fields.Reporter.EmailAddress, email) {
-					isSelf = true
-				}
-			}
-		}
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			Source:      "jira",
-			Kind:        "issue_activity",
-			Title:       iss.Key + " " + iss.Fields.Summary,
-			Summary:     summary,
-			URL:         web,
-			Severity:    sev,
-			ObservedAt:  obs.UTC(),
-			IsSelf:      isSelf,
-			Fields: map[string]string{
-				"key":      iss.Key,
-				"status":   iss.Fields.Status.Name,
-				"priority": priority,
-				"updated":  iss.Fields.Updated,
-				"assignee": iss.Fields.Assignee.Name,
-				"reporter": iss.Fields.Reporter.Name,
-			},
-		})
+	return parsed, strings.TrimRight(base, "/"), nil
+}
+
+// jiraIsSelf applies the IsSelf rules:
+//   - self/involved: JQL guaranteed the user matched (assignee / reporter /
+//     watcher), so mark true.
+//   - all: only true when assignee or reporter email matches the Basic-auth
+//     identity; otherwise the row likely came from the followed-projects
+//     expansion and isn't the user's own activity.
+func jiraIsSelf(iss jiraIssue, scope Scope, email string) bool {
+	if scope != ScopeAll {
+		return true
 	}
-	return items, nil
+	if email != "" {
+		if strings.EqualFold(iss.Fields.Assignee.EmailAddress, email) ||
+			strings.EqualFold(iss.Fields.Reporter.EmailAddress, email) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildJiraItem(directive userdata.Directive, base string, iss jiraIssue, kind string, obs time.Time, isSelf bool) StatusItem {
+	priority := iss.Fields.Priority.Name
+	summary := fmt.Sprintf("status=%s priority=%s updated=%s", iss.Fields.Status.Name, priority, iss.Fields.Updated)
+	sev := "info"
+	if strings.EqualFold(iss.Fields.Status.Name, "blocked") || strings.Contains(strings.ToLower(iss.Fields.Status.Name), "block") {
+		sev = "warning"
+	}
+	return StatusItem{
+		DirectiveID: directive.ID,
+		Source:      "jira",
+		Kind:        kind,
+		Title:       iss.Key + " " + iss.Fields.Summary,
+		Summary:     summary,
+		URL:         base + "/browse/" + iss.Key,
+		Severity:    sev,
+		ObservedAt:  obs.UTC(),
+		IsSelf:      isSelf,
+		Fields: map[string]string{
+			"key":      iss.Key,
+			"status":   iss.Fields.Status.Name,
+			"priority": priority,
+			"updated":  iss.Fields.Updated,
+			"assignee": iss.Fields.Assignee.Name,
+			"reporter": iss.Fields.Reporter.Name,
+		},
+	}
 }
 
 // ValidateDirective checks base_url is well-formed, the configured credential
@@ -324,6 +366,18 @@ func buildJiraActivityJQL(userQuery string, since time.Time, scope Scope, follow
 		return fmt.Sprintf(`%s AND updated >= "%s" ORDER BY updated DESC`, scopeClause, date)
 	}
 	return fmt.Sprintf(`(%s) AND %s AND updated >= "%s" ORDER BY updated DESC`, base, scopeClause, date)
+}
+
+// buildJiraStateJQL composes the JQL for the current-state view: the scope
+// clause (and optional user query) ordered by recency, with no `updated >=`
+// window filter so issues that haven't changed recently still appear.
+func buildJiraStateJQL(userQuery string, scope Scope, followedProjects []string) string {
+	scopeClause := buildJiraScopeClause(scope, followedProjects)
+	base := strings.TrimSpace(userQuery)
+	if base == "" {
+		return scopeClause + " ORDER BY updated DESC"
+	}
+	return fmt.Sprintf("(%s) AND %s ORDER BY updated DESC", base, scopeClause)
 }
 
 func buildJiraScopeClause(scope Scope, followedProjects []string) string {

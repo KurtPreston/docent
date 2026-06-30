@@ -68,7 +68,45 @@ type ghSearchCommitRow struct {
 	} `json:"commit"`
 }
 
-// Collect runs scoped GitHub search queries for PR/issue/comment/commit
+// ghContext resolves the search user, host, and process environment shared by
+// both collection modes. When target.username is empty, the GitHub search
+// literal "@me" is used so the authenticated `gh` user is queried.
+func (c GitHubCollector) ghContext(directive userdata.Directive, opts *CollectOpts) (user, host string, env []string) {
+	user = strings.TrimSpace(directive.Target["username"])
+	if user == "" {
+		user = "@me"
+	}
+	token := ""
+	if opts != nil {
+		token = userdata.ResolveEnv(opts.UserdataDir, directive.CredentialRefs["token"])
+	}
+	baseURL := strings.TrimSpace(directive.Config["base_url"])
+	if baseURL == "" {
+		baseURL = "https://github.com"
+	}
+	host = hostname(baseURL)
+	env = os.Environ()
+	if token != "" {
+		env = append(env, "GITHUB_TOKEN="+token)
+	}
+	// `gh search` (and most other `gh` commands) target the host indicated by
+	// the GH_HOST environment variable; the `--hostname` flag is only honored
+	// by a handful of commands like `gh auth` and `gh api`.
+	if host != "" && host != "github.com" {
+		env = append(env, "GH_HOST="+host)
+	}
+	return user, host, env
+}
+
+// CollectState lists the user's currently-open authored PRs with draft and
+// aggregate checks status: the "what is true right now" view, independent of
+// the collection window.
+func (c GitHubCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+	user, host, env := c.ghContext(directive, opts)
+	return c.collectPRReviewStatus(ctx, env, directive, user, host, opts)
+}
+
+// CollectEvents runs scoped GitHub search queries for PR/issue/comment/commit
 // activity in opts.Since → window end. The exact set of queries depends on
 // the resolved scope:
 //
@@ -79,23 +117,8 @@ type ghSearchCommitRow struct {
 //     entry in `config.followed_repos` (no user filter). With no
 //     followed_repos configured, ScopeAll behaves identically to
 //     ScopeInvolved.
-func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
-	user := strings.TrimSpace(directive.Target["username"])
-	if user == "" {
-		user = "@me"
-	}
-
-	tokenKey := directive.CredentialRefs["token"]
-	token := ""
-	if opts != nil {
-		token = userdata.ResolveEnv(opts.UserdataDir, tokenKey)
-	}
-
-	baseURL := strings.TrimSpace(directive.Config["base_url"])
-	if baseURL == "" {
-		baseURL = "https://github.com"
-	}
-	host := hostname(baseURL)
+func (c GitHubCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+	user, host, env := c.ghContext(directive, opts)
 
 	since := time.Time{}
 	if opts != nil {
@@ -106,21 +129,6 @@ func (c GitHubCollector) Collect(ctx context.Context, directive userdata.Directi
 		now = opts.windowEnd(c.Clock)
 	}
 	dateStr := since.Format("2006-01-02")
-
-	env := os.Environ()
-	if token != "" {
-		env = append(env, "GITHUB_TOKEN="+token)
-	}
-	// `gh search` (and most other `gh` commands) target the host indicated by
-	// the GH_HOST environment variable; the `--hostname` flag is only honored
-	// by a handful of commands like `gh auth` and `gh api`.
-	if host != "" && host != "github.com" {
-		env = append(env, "GH_HOST="+host)
-	}
-
-	if opts != nil && opts.PRReviewReadiness {
-		return c.collectPRReviewStatus(ctx, env, directive, user, host, opts)
-	}
 
 	scope := opts.EffectiveScope()
 	followedRepos := parseFollowedList(directive.Config["followed_repos"])

@@ -21,14 +21,13 @@ type Deps struct {
 
 // RunOptions carries the per-run knobs that vary by resolved execution
 // mode: the collection window, scope, an optional collector-type allow
-// list, and whether GitHub should collect PR review-readiness instead of
-// the usual activity timeline.
+// list, and the collection mode (events timeline vs current-state snapshot).
 type RunOptions struct {
 	Since              time.Time
 	Until              time.Time
 	Scope              collectors.Scope
 	OnlyCollectorTypes []string
-	PRReviewReadiness  bool
+	Mode               collectors.Mode
 }
 
 // CollectStatuses runs the enabled directives for one run. When
@@ -47,7 +46,7 @@ func CollectStatuses(ctx context.Context, d Deps, cfg userdata.ConfigFile, userd
 		Until:              run.Until,
 		Scope:              run.Scope,
 		OnlyCollectorTypes: run.OnlyCollectorTypes,
-		PRReviewReadiness:  run.PRReviewReadiness,
+		Mode:               run.Mode,
 		RunLog:             d.RunLog,
 	}
 	return d.Registry.Collect(ctx, cfg.Directives, opts)

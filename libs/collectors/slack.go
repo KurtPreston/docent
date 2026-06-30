@@ -327,7 +327,7 @@ func (p *slackProgress) emitLocked() {
 //     involved/all modes see surrounding context.
 //   - ScopeAll: involved UNION every message in channels listed in
 //     config.followed_channels (resolved by name #foo or ID Cxxxx).
-func (c SlackCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+func (c SlackCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
 	if tokenKey == "" {
 		return nil, fmt.Errorf("slack credential missing (set credential_refs.token to a SLAKKR_SLACK_TOKEN-style env var)")

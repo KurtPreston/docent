@@ -22,7 +22,7 @@ func (c DocentWMCollector) clock() func() time.Time {
 	return time.Now
 }
 
-func (c DocentWMCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+func (c DocentWMCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	if base == "" {
 		return nil, fmt.Errorf("config.base_url is required for docent-wm collector")

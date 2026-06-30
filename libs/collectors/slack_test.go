@@ -298,7 +298,7 @@ func TestSlackCollectScopeSelf(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -390,7 +390,7 @@ func TestSlackCollectScopeInvolvedAddsThreadAndContext(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeInvolved,
 	})
 	if err != nil {
@@ -484,7 +484,7 @@ func TestSlackCollectScopeAllAddsFollowedChannels(t *testing.T) {
 	d := newSlackDirective()
 	d.Config["followed_channels"] = "#team-x"
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), d, &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), d, &CollectOpts{
 		Since: since, Until: now, Scope: ScopeAll,
 	})
 	if err != nil {
@@ -568,7 +568,7 @@ func TestSlackCollectDeduplicatesAcrossSources(t *testing.T) {
 	d := newSlackDirective()
 	d.Config["followed_channels"] = "#team-x"
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), d, &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), d, &CollectOpts{
 		Since: since, Until: now, Scope: ScopeAll,
 	})
 	if err != nil {
@@ -636,7 +636,7 @@ func TestSlackCollectSkipsDeletedAndArchivedDMs(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -718,7 +718,7 @@ func TestSlackCallAPIRetriesOn429(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -782,7 +782,7 @@ func TestSlackCallAPIGivesUpAfterMaxRetries(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	_, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	_, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err == nil {
@@ -860,7 +860,7 @@ func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
 	d.Config["history_concurrency"] = strconv.Itoa(concurrency)
 	d.Config["dm_discovery"] = "off" // exercise the full fan-out path
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	if _, err := c.Collect(context.Background(), d, &CollectOpts{
+	if _, err := c.CollectEvents(context.Background(), d, &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatal(err)
@@ -935,7 +935,7 @@ func TestSlackCollectTolerablePerChannelHistoryErrors(t *testing.T) {
 			})
 
 			c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-			items, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+			items, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 				Since: since, Until: now, Scope: ScopeSelf,
 			})
 			if err != nil {
@@ -982,7 +982,7 @@ func TestSlackCollectIntolerableSlackErrorStillFails(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	_, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	_, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err == nil {
@@ -1086,7 +1086,7 @@ func TestSlackCollectCachesUserIdentities(t *testing.T) {
 	c := SlackCollector{Clock: func() time.Time { return now1 }, BaseURL: srv.URL}
 
 	// --- Run 1: cold cache resolves and persists U_PEER. ---
-	if _, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	if _, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		UserdataDir: userdataDir, Since: now1.Add(-7 * 24 * time.Hour), Until: now1, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatalf("run 1: %v", err)
@@ -1100,7 +1100,7 @@ func TestSlackCollectCachesUserIdentities(t *testing.T) {
 	// --- Run 2: author identity should come from the on-disk cache. ---
 	now2 := now1.Add(24 * time.Hour)
 	c.Clock = func() time.Time { return now2 }
-	if _, err := c.Collect(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
+	if _, err := c.CollectEvents(context.Background(), slackDirectiveNoDiscovery(), &CollectOpts{
 		UserdataDir: userdataDir, Since: now2.Add(-7 * 24 * time.Hour), Until: now2, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatalf("run 2: %v", err)
@@ -1171,7 +1171,7 @@ func TestSlackCollectDMDiscoveryPrunesInactiveIMs(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), newSlackDirective(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	})
 	if err != nil {
@@ -1238,7 +1238,7 @@ func TestSlackCollectDMDiscoveryFallsBackOnSearchError(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	if _, err := c.CollectEvents(context.Background(), newSlackDirective(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatalf("discovery failure should not fail the run: %v", err)
@@ -1310,7 +1310,7 @@ func TestSlackCollectDMDiscoveryPaginates(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	if _, err := c.Collect(context.Background(), newSlackDirective(), &CollectOpts{
+	if _, err := c.CollectEvents(context.Background(), newSlackDirective(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeSelf,
 	}); err != nil {
 		t.Fatal(err)
@@ -1394,7 +1394,7 @@ func TestSlackCollectAbortReturnsPartial(t *testing.T) {
 	})
 
 	c := SlackCollector{Clock: func() time.Time { return now }, BaseURL: srv.URL}
-	items, err := c.Collect(ctx, slackDirectiveNoDiscovery(), &CollectOpts{
+	items, err := c.CollectEvents(ctx, slackDirectiveNoDiscovery(), &CollectOpts{
 		Since: since, Until: now, Scope: ScopeInvolved,
 	})
 	if err != nil {

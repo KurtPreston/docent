@@ -86,7 +86,7 @@ func TestLocalGitCollectScopes(t *testing.T) {
 
 	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	collect := func(scope Scope) []StatusItem {
-		items, err := c.Collect(context.Background(), directive, &CollectOpts{
+		items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
 			Since: since,
 			Until: clock(),
 			Scope: scope,
@@ -175,7 +175,7 @@ func TestLocalGitCollectSkipsEmptyRepo(t *testing.T) {
 	clock := func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) }
 	c := LocalGitCollector{Clock: clock}
 
-	items, err := c.Collect(context.Background(), directive, &CollectOpts{
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
 		Since: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		Until: clock(),
 		Scope: ScopeAll,

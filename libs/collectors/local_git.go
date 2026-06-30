@@ -30,7 +30,7 @@ type LocalGitCollector struct {
 //     yet.
 //   - ScopeAll: every commit on every ref (`git log --all`), regardless of
 //     author.
-func (c LocalGitCollector) Collect(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	expand := defaultExpandRepoPath(opts)
 	since := time.Time{}
 	if opts != nil {

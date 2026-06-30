@@ -58,7 +58,7 @@ type stubCollector struct {
 	called *[]string
 }
 
-func (s stubCollector) Collect(_ context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+func (s stubCollector) CollectEvents(_ context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
 	*s.called = append(*s.called, d.ID)
 	return []StatusItem{{DirectiveID: d.ID, Source: d.Collector, Kind: "stub", Title: d.ID}}, nil
 }
@@ -104,7 +104,7 @@ func TestRegistryOnlyCollectorTypes(t *testing.T) {
 // then unwound with a context error because the run was aborted.
 type abortStubCollector struct{}
 
-func (abortStubCollector) Collect(ctx context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+func (abortStubCollector) CollectEvents(ctx context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
 	return []StatusItem{{DirectiveID: d.ID, Source: d.Collector, Kind: "partial", Title: "partial"}}, ctx.Err()
 }
 
@@ -137,7 +137,7 @@ type stubValidator struct {
 	Calls  int
 }
 
-func (s *stubValidator) Collect(_ context.Context, _ userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+func (s *stubValidator) CollectEvents(_ context.Context, _ userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
 	return nil, nil
 }
 
