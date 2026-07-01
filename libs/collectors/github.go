@@ -38,9 +38,12 @@ type ghSearchActivityRow struct {
 // ghPRView is the subset of `gh pr view --json` we parse for the PR
 // review-readiness path. statusCheckRollup is a heterogeneous array of
 // CheckRun (GitHub Actions etc.) and StatusContext (legacy commit
-// statuses) entries; see ghCheckRollupEntry.
+// statuses) entries; see ghCheckRollupEntry. reviewDecision is one of
+// APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED (or "" when the repo
+// has no required reviews configured).
 type ghPRView struct {
 	StatusCheckRollup []ghCheckRollupEntry `json:"statusCheckRollup"`
+	ReviewDecision    string               `json:"reviewDecision"`
 }
 
 // ghCheckRollupEntry covers both shapes returned in statusCheckRollup.
@@ -429,47 +432,49 @@ func dedupeGitHubItems(items []StatusItem) []StatusItem {
 	return out
 }
 
-// collectPRReviewStatus lists the user's currently-open authored PRs and,
-// for each, resolves draft state and aggregate checks status so a report
-// can split them into "ready for review" vs "work in progress". This is a
-// different query shape than the activity-timeline path: it ignores the
-// collection window (PRs are open regardless of when they were last
-// touched) and queries `--state open`.
+// collectPRReviewStatus lists the user's currently-open PRs in two
+// relationships that drive the dashboard's status/action_required
+// classification, independent of the collection window (PRs are open
+// regardless of when they were last touched):
+//
+//   - authored (`--author`): each PR resolves draft state, aggregate
+//     checks, and reviewDecision so the engine can tell "approved" from
+//     "awaiting-response".
+//   - review-requested (`--review-requested`): PRs where the user's
+//     review is still requested (GitHub drops you from the requested
+//     reviewers once you submit a review, so presence is a good proxy for
+//     "my review is not yet given").
 //
 // Each open PR becomes one StatusItem with Kind "pr_review_status" and
-// Fields: is_draft, checks (passing|failing|pending|none|unknown), and
-// ready ("true" only when not a draft and checks are passing/none).
+// Fields: relation (authored|review_requested), is_draft, checks
+// (passing|failing|pending|none|unknown), review_decision, and ready
+// ("true" only when authored, not a draft, and checks are passing/none).
 func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string, directive userdata.Directive, user, host string, opts *CollectOpts) ([]StatusItem, error) {
-	listArgs := []string{"search", "prs", "--author", user, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,repository"}
-	cmd := exec.CommandContext(ctx, "gh", listArgs...)
-	cmd.Env = env
-	out, err := runAndLogExec(cmd, opts, directive.ID)
+	now := opts.windowEnd(c.Clock)
+
+	authored, err := c.listOpenPRs(ctx, env, directive, opts, "--author", user)
 	if err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(listArgs, " "), err, strings.TrimSpace(string(exit.Stderr)))
-		}
-		return nil, fmt.Errorf("gh %s: %w", strings.Join(listArgs, " "), err)
+		return nil, err
 	}
-	var rows []ghSearchActivityRow
-	if err := json.Unmarshal(out, &rows); err != nil {
+	reviewRequested, err := c.listOpenPRs(ctx, env, directive, opts, "--review-requested", user)
+	if err != nil {
 		return nil, err
 	}
 
-	now := opts.windowEnd(c.Clock)
-	totalSteps := len(rows) + 1
+	totalSteps := len(authored) + 1
 	completed := 1
 	reportProgress(opts, DirectiveProgress{
 		DirectiveID: directive.ID,
 		Description: directive.Name,
 		Status:      "running",
-		Detail:      fmt.Sprintf("%d open PR(s)", len(rows)),
+		Detail:      fmt.Sprintf("%d authored, %d review-requested PR(s)", len(authored), len(reviewRequested)),
 		Completed:   completed,
 		Total:       totalSteps,
 	})
 
 	var items []StatusItem
-	for _, row := range rows {
-		checks := c.fetchPRChecks(ctx, env, row.URL, directive, opts)
+	for _, row := range authored {
+		checks, decision := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
 		completed++
 		reportProgress(opts, DirectiveProgress{
 			DirectiveID: directive.ID,
@@ -479,59 +484,120 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 			Completed:   completed,
 			Total:       totalSteps,
 		})
-
 		ready := !row.IsDraft && (checks == "passing" || checks == "none")
-		repo := strings.TrimSpace(row.Repository.NameWithOwner)
-		if repo == "" {
-			repo = gitHubOwnerRepoFromURL(row.URL)
-		}
-		items = append(items, StatusItem{
-			DirectiveID: directive.ID,
-			Repository:  repo,
-			Source:      directive.Collector,
-			Kind:        "pr_review_status",
-			Title:       row.Title,
-			Summary:     fmt.Sprintf("open pr draft=%t checks=%s", row.IsDraft, checks),
-			URL:         row.URL,
-			Severity:    "info",
-			ObservedAt:  now.UTC(),
-			Author:      user,
-			IsSelf:      true,
-			Fields: map[string]string{
-				"username": user,
-				"host":     host,
-				"repo":     repo,
-				"state":    "open",
-				"is_draft": strconv.FormatBool(row.IsDraft),
-				"checks":   checks,
-				"ready":    strconv.FormatBool(ready),
-			},
-		})
+		items = append(items, prReviewItem(directive, user, host, now, row, "authored", checks, decision, ready))
 	}
-	return items, nil
+	for _, row := range reviewRequested {
+		items = append(items, prReviewItem(directive, user, host, now, row, "review_requested", "", "", false))
+	}
+	return dedupePRReviewItems(items), nil
 }
 
-// fetchPRChecks resolves the aggregate checks status for a single PR via
-// `gh pr view --json statusCheckRollup`. Returns one of "passing",
-// "failing", "pending", "none", or "unknown" (when the call fails or the
-// payload can't be parsed). Failures are non-fatal: an unknown status
-// keeps the PR out of "ready for review" without aborting the whole run.
-func (c GitHubCollector) fetchPRChecks(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) string {
-	if strings.TrimSpace(prURL) == "" {
-		return "unknown"
-	}
-	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup"}
+// listOpenPRs runs `gh search prs <relationArgs> --state open` and returns
+// the parsed rows. relationArgs is a flag/value pair such as
+// {"--author", user} or {"--review-requested", user}.
+func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directive userdata.Directive, opts *CollectOpts, relationArgs ...string) ([]ghSearchActivityRow, error) {
+	args := append([]string{"search", "prs"}, relationArgs...)
+	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,repository")
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
-		return "unknown"
+		if exit, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
+		}
+		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+	}
+	var rows []ghSearchActivityRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// prReviewItem builds one pr_review_status StatusItem for an open PR in the
+// given relationship. checks/decision/ready are only meaningful for
+// authored PRs; review-requested rows pass zero values.
+func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, relation, checks, decision string, ready bool) StatusItem {
+	repo := strings.TrimSpace(row.Repository.NameWithOwner)
+	if repo == "" {
+		repo = gitHubOwnerRepoFromURL(row.URL)
+	}
+	fields := map[string]string{
+		"username": user,
+		"host":     host,
+		"repo":     repo,
+		"state":    "open",
+		"relation": relation,
+		"is_draft": strconv.FormatBool(row.IsDraft),
+	}
+	if relation == "authored" {
+		fields["checks"] = checks
+		fields["review_decision"] = decision
+		fields["ready"] = strconv.FormatBool(ready)
+	}
+	return StatusItem{
+		DirectiveID: directive.ID,
+		Repository:  repo,
+		Source:      directive.Collector,
+		Kind:        "pr_review_status",
+		Title:       row.Title,
+		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s", relation, row.IsDraft, checks, decision),
+		URL:         row.URL,
+		Severity:    "info",
+		ObservedAt:  now.UTC(),
+		Author:      user,
+		IsSelf:      true,
+		Fields:      fields,
+	}
+}
+
+// dedupePRReviewItems collapses PRs that surface in more than one
+// relationship (e.g. authored and review-requested) keyed by URL. The
+// authored row wins because it carries the richer checks/review_decision
+// fields the engine needs.
+func dedupePRReviewItems(items []StatusItem) []StatusItem {
+	seen := make(map[string]int, len(items))
+	out := make([]StatusItem, 0, len(items))
+	for _, it := range items {
+		key := it.URL
+		if key == "" {
+			key = it.Kind + "|" + it.Title
+		}
+		if idx, ok := seen[key]; ok {
+			if it.Fields["relation"] == "authored" && out[idx].Fields["relation"] != "authored" {
+				out[idx] = it
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, it)
+	}
+	return out
+}
+
+// fetchPRStatus resolves the aggregate checks status and review decision
+// for a single PR via `gh pr view --json statusCheckRollup,reviewDecision`.
+// checks is one of "passing", "failing", "pending", "none", or "unknown"
+// (when the call fails or the payload can't be parsed). Failures are
+// non-fatal: an unknown status keeps the PR out of "ready" without aborting
+// the whole run.
+func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision string) {
+	if strings.TrimSpace(prURL) == "" {
+		return "unknown", ""
+	}
+	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup,reviewDecision"}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Env = env
+	out, err := runAndLogExec(cmd, opts, directive.ID)
+	if err != nil {
+		return "unknown", ""
 	}
 	var view ghPRView
 	if err := json.Unmarshal(out, &view); err != nil {
-		return "unknown"
+		return "unknown", ""
 	}
-	return rollupChecksState(view.StatusCheckRollup)
+	return rollupChecksState(view.StatusCheckRollup), strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
 }
 
 // rollupChecksState reduces a statusCheckRollup array to a single label.

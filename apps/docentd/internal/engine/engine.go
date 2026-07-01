@@ -3,39 +3,62 @@ package engine
 import (
 	"context"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
 	"github.com/kurt/slakkr-ai/apps/docentd/internal/registry"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"github.com/kurt/slakkr-ai/libs/collectors"
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"github.com/kurt/slakkr-ai/libs/correlation"
 	"github.com/kurt/slakkr-ai/libs/model"
 )
 
 // Dashboard matches the legacy docent /sessions payload for the web UI.
 type Dashboard struct {
-	GeneratedAt  string         `json:"generatedAt"`
-	Backend      string         `json:"backend"`
-	SessionCount int            `json:"sessionCount"`
-	GroupCount   int            `json:"groupCount"`
+	GeneratedAt  string           `json:"generatedAt"`
+	Backend      string           `json:"backend"`
+	SessionCount int              `json:"sessionCount"`
+	GroupCount   int              `json:"groupCount"`
 	Groups       []DashboardGroup `json:"groups"`
 }
 
 type DashboardGroup struct {
-	Key           string            `json:"key"`
-	Ticket        string            `json:"ticket,omitempty"`
-	Summary       string            `json:"summary,omitempty"`
-	JiraStatus    string            `json:"jiraStatus,omitempty"`
-	JiraURL       string            `json:"jiraUrl,omitempty"`
-	Color         string            `json:"color,omitempty"`
-	FG            string            `json:"fg,omitempty"`
-	NeedsFollowup bool              `json:"needsFollowup"`
-	Sessions      []DashboardSession `json:"sessions"`
-	PRs           []DashboardPR      `json:"prs"`
+	Key            string             `json:"key"`
+	Ticket         string             `json:"ticket,omitempty"`
+	Summary        string             `json:"summary,omitempty"`
+	JiraStatus     string             `json:"jiraStatus,omitempty"`
+	JiraURL        string             `json:"jiraUrl,omitempty"`
+	Color          string             `json:"color,omitempty"`
+	FG             string             `json:"fg,omitempty"`
+	NeedsFollowup  bool               `json:"needsFollowup"`
+	Status         string             `json:"status,omitempty"`
+	StatusRank     int                `json:"statusRank"`
+	ActionRequired bool               `json:"actionRequired"`
+	Sessions       []DashboardSession `json:"sessions"`
+	PRs            []DashboardPR      `json:"prs"`
 }
+
+// Work-item status tiers, ordered by display priority (lower rank sorts
+// first). A work-item takes the lowest-rank status it qualifies for; one
+// with no qualifying status is hidden from the dashboard.
+const (
+	statusActive   = "active"
+	statusApproved = "approved"
+	statusStarted  = "started"
+	statusAwaiting = "awaiting-response"
+	statusAssigned = "assigned"
+
+	rankActive   = 1
+	rankApproved = 2
+	rankStarted  = 3
+	rankAwaiting = 4
+	rankAssigned = 5
+	rankHidden   = 99
+)
 
 type DashboardSession struct {
 	Kind          string `json:"kind"`
@@ -137,6 +160,16 @@ func (e *Engine) buildUnits() []*unit {
 		if !d.Enabled {
 			continue
 		}
+		// A jira directive with per-tier JQL fans out into one state unit
+		// per configured tier (started / assigned) instead of the default
+		// single involved-scope unit, so each tier's issues arrive tagged
+		// with the dashboard status they satisfy.
+		if tiered := expandJiraTierDirectives(d); len(tiered) > 0 {
+			for _, td := range tiered {
+				units = append(units, e.newUnit(td, collectors.ModeState, nil, start))
+			}
+			continue
+		}
 		stateCap, eventsCap := e.reg.Capabilities(d.Collector)
 		type spec struct {
 			mode      collectors.Mode
@@ -166,6 +199,42 @@ func (e *Engine) buildUnits() []*unit {
 		}
 	}
 	return units
+}
+
+// expandJiraTierDirectives returns one derived directive per configured
+// dashboard tier query on a jira directive (config.started_query,
+// config.assigned_query). Each derived directive carries a distinct ID (so
+// its state unit gets a unique unitKey), config.query set to the tier JQL,
+// and config.status_tier set to the tier label the jira collector stamps
+// onto emitted issues. A non-jira directive, or a jira directive with no
+// tier queries, returns nil so the caller falls back to default expansion.
+func expandJiraTierDirectives(d userdata.Directive) []userdata.Directive {
+	if d.Collector != "jira" {
+		return nil
+	}
+	tiers := []struct{ label, query string }{
+		{"started", strings.TrimSpace(d.Config["started_query"])},
+		{"assigned", strings.TrimSpace(d.Config["assigned_query"])},
+	}
+	var out []userdata.Directive
+	for _, t := range tiers {
+		if t.query == "" {
+			continue
+		}
+		cfg := make(map[string]string, len(d.Config)+2)
+		for k, v := range d.Config {
+			cfg[k] = v
+		}
+		cfg["query"] = t.query
+		cfg["status_tier"] = t.label
+		td := d
+		td.ID = d.ID + "#" + t.label
+		td.Config = cfg
+		td.State = nil
+		td.Events = nil
+		out = append(out, td)
+	}
+	return out
 }
 
 func (e *Engine) newUnit(d userdata.Directive, mode collectors.Mode, mc *userdata.ModeConfig, start time.Time) *unit {
@@ -489,6 +558,21 @@ func (e *Engine) entitiesFrom(signals []model.Signal) []model.Entity {
 	return entities
 }
 
+// groupFacts accumulates the entity-derived signals a work-item needs to be
+// classified into a status + action_required.
+type groupFacts struct {
+	hasLiveSession       bool
+	sessionNeedsFollowup bool
+	authoredApproved     bool // authored, non-draft, approved, checks passing/none
+	authoredDraft        bool // authored draft PR
+	authoredAwaiting     bool // authored, non-draft, not approved
+	authoredMyTurn       bool // authored, non-draft, changes-requested or failing checks
+	reviewRequested      bool // someone else's PR awaiting my review
+	jiraStarted          bool
+	jiraAssigned         bool
+	branchEvidence       bool // a local branch/commit/reflog/session ties work to the ticket
+}
+
 func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 	groups := make([]DashboardGroup, 0, len(workItems))
 	liveCount := 0
@@ -509,16 +593,28 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 			g.Color = model.ColorForName(wi.Key)
 			g.FG = model.ForegroundForHex(g.Color)
 		}
+		var facts groupFacts
 		for _, ent := range wi.Entities {
 			switch ent.Kind {
 			case "session":
 				live := ent.State["live"] == "true"
 				if live {
 					liveCount++
+					facts.hasLiveSession = true
+				}
+				// A ticket-anchored session means a local checkout exists
+				// for that ticket (branch evidence for "started"). A
+				// ticketless session is still shown when live via
+				// hasLiveSession, but doesn't imply a ticket branch.
+				if ent.Coordinates["ticket"] != "" {
+					facts.branchEvidence = true
 				}
 				status := ent.State["attention"]
 				if status == "" {
 					status = "idle"
+				}
+				if status == "needs-followup" {
+					facts.sessionNeedsFollowup = true
 				}
 				ds := DashboardSession{
 					Kind:          "session",
@@ -546,20 +642,60 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 				g.JiraURL = ent.URL
 				if ent.State != nil {
 					g.JiraStatus = ent.State["status"]
+					switch ent.State["status_tier"] {
+					case "started":
+						facts.jiraStarted = true
+					case "assigned":
+						facts.jiraAssigned = true
+					}
+				}
+			case "branch", "commit", "reflog":
+				// Not rendered as a row, but proof that a local branch
+				// exists for the ticket (drives the "started" status).
+				// Only counts when ticket-anchored, so orphan reflog/commit
+				// noise stays hidden rather than showing up as "started".
+				if ent.Coordinates["ticket"] != "" {
+					facts.branchEvidence = true
 				}
 			default:
 				if strings.Contains(ent.Kind, "pr") {
+					draft := ent.State["is_draft"] == "true"
 					g.PRs = append(g.PRs, DashboardPR{
-						Title: ent.Title,
-						URL:   ent.URL,
-						Repo:  ent.Coordinates["repo"],
-						State: ent.State["state"],
+						PRNumber: prNumberFromURL(ent.URL),
+						Title:    ent.Title,
+						URL:      ent.URL,
+						Repo:     ent.Coordinates["repo"],
+						State:    ent.State["state"],
+						Draft:    draft,
+						Ticket:   ent.Coordinates["ticket"],
 					})
+					// Only the state-mode review-status signal carries the
+					// relation/checks/review_decision fields the status model
+					// needs; events-mode activity PRs are shown as rows but
+					// don't drive classification.
+					if ent.Kind == "pr_review_status" {
+						classifyPR(&facts, ent)
+					}
 				}
 			}
 		}
+		g.Status, g.StatusRank, g.ActionRequired = classifyGroup(facts)
+		if g.StatusRank >= rankHidden {
+			continue
+		}
 		groups = append(groups, g)
 	}
+
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].StatusRank != groups[j].StatusRank {
+			return groups[i].StatusRank < groups[j].StatusRank
+		}
+		if groups[i].ActionRequired != groups[j].ActionRequired {
+			return groups[i].ActionRequired // action-required first
+		}
+		return groups[i].Key < groups[j].Key
+	})
+
 	return Dashboard{
 		GeneratedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 		Backend:      "go",
@@ -567,6 +703,71 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 		GroupCount:   len(groups),
 		Groups:       groups,
 	}
+}
+
+// classifyPR folds one PR entity's state into the group facts. Only authored
+// PRs (relation=authored) carry checks/review_decision; review_requested PRs
+// mean my review is still pending on someone else's PR.
+func classifyPR(facts *groupFacts, ent model.Entity) {
+	relation := ent.State["relation"]
+	if relation == "review_requested" {
+		facts.reviewRequested = true
+		return
+	}
+	// Treat anything else (authored, or legacy rows without a relation) as
+	// my own PR.
+	draft := ent.State["is_draft"] == "true"
+	if draft {
+		facts.authoredDraft = true
+		return
+	}
+	decision := ent.State["review_decision"]
+	checks := ent.State["checks"]
+	if decision == "APPROVED" && (checks == "passing" || checks == "none") {
+		facts.authoredApproved = true
+		return
+	}
+	facts.authoredAwaiting = true
+	if decision == "CHANGES_REQUESTED" || checks == "failing" {
+		facts.authoredMyTurn = true
+	}
+}
+
+// classifyGroup maps accumulated facts to (status, rank, action_required),
+// choosing the lowest-rank status the work-item qualifies for. Returns
+// rankHidden when nothing matches so the caller can drop the group.
+func classifyGroup(f groupFacts) (string, int, bool) {
+	switch {
+	case f.hasLiveSession:
+		return statusActive, rankActive, f.sessionNeedsFollowup
+	case f.authoredApproved:
+		return statusApproved, rankApproved, true // not merged yet
+	case f.jiraStarted || f.authoredDraft || f.branchEvidence:
+		return statusStarted, rankStarted, f.branchEvidence
+	case f.authoredAwaiting || f.reviewRequested:
+		return statusAwaiting, rankAwaiting, f.reviewRequested || f.authoredMyTurn
+	case f.jiraAssigned:
+		return statusAssigned, rankAssigned, false
+	default:
+		return "", rankHidden, false
+	}
+}
+
+// prNumberFromURL extracts the PR number from a .../pull/<n> URL, or 0.
+func prNumberFromURL(raw string) int {
+	i := strings.LastIndex(raw, "/pull/")
+	if i < 0 {
+		return 0
+	}
+	rest := raw[i+len("/pull/"):]
+	if slash := strings.IndexByte(rest, '/'); slash >= 0 {
+		rest = rest[:slash]
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(rest))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // SignalView is one raw signal annotated with the entity and work-item it

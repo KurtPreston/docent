@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
 
 func TestBuildGitHubSearchSpecsSelf(t *testing.T) {
@@ -175,6 +177,57 @@ func TestRollupChecksState(t *testing.T) {
 				t.Fatalf("rollupChecksState = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPrReviewItemFields(t *testing.T) {
+	now := time.Now().UTC()
+	var row ghSearchActivityRow
+	row.Title = "feat: thing"
+	row.URL = "https://github.com/o/r/pull/7"
+	row.IsDraft = true
+	row.Repository.NameWithOwner = "o/r"
+
+	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "authored", "passing", "APPROVED", true)
+	if authored.Kind != "pr_review_status" {
+		t.Fatalf("kind = %q", authored.Kind)
+	}
+	for k, want := range map[string]string{
+		"relation": "authored", "is_draft": "true", "checks": "passing",
+		"review_decision": "APPROVED", "ready": "true", "repo": "o/r",
+	} {
+		if authored.Fields[k] != want {
+			t.Errorf("authored field %q = %q, want %q", k, authored.Fields[k], want)
+		}
+	}
+
+	// review-requested rows omit the authored-only fields.
+	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "review_requested", "", "", false)
+	if rr.Fields["relation"] != "review_requested" {
+		t.Errorf("relation = %q", rr.Fields["relation"])
+	}
+	if _, ok := rr.Fields["review_decision"]; ok {
+		t.Errorf("review_requested row should not carry review_decision: %v", rr.Fields)
+	}
+}
+
+func TestDedupePRReviewItemsAuthoredWins(t *testing.T) {
+	now := time.Now().UTC()
+	items := []StatusItem{
+		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "review_requested"}, ObservedAt: now},
+		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "authored", "review_decision": "APPROVED"}, ObservedAt: now},
+		{URL: "https://github.com/o/r/pull/2", Fields: map[string]string{"relation": "authored"}, ObservedAt: now},
+	}
+	out := dedupePRReviewItems(items)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 deduped items, got %d", len(out))
+	}
+	byURL := map[string]StatusItem{}
+	for _, it := range out {
+		byURL[it.URL] = it
+	}
+	if byURL["https://github.com/o/r/pull/1"].Fields["relation"] != "authored" {
+		t.Errorf("authored should win the dedupe, got %v", byURL["https://github.com/o/r/pull/1"].Fields)
 	}
 }
 

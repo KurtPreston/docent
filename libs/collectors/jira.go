@@ -96,7 +96,15 @@ func (c JiraCollector) CollectEvents(ctx context.Context, directive userdata.Dir
 func (c JiraCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	scope := opts.EffectiveScope()
 	followedProjects := parseFollowedList(directive.Config["followed_projects"])
-	jql := buildJiraStateJQL(strings.TrimSpace(directive.Config["query"]), scope, followedProjects)
+	// A per-tier unit (status_tier set by the engine) runs its JQL verbatim
+	// so the user fully codifies phase logic; otherwise apply the scope
+	// clause as usual.
+	var jql string
+	if strings.TrimSpace(directive.Config["status_tier"]) != "" {
+		jql = buildJiraTierJQL(strings.TrimSpace(directive.Config["query"]))
+	} else {
+		jql = buildJiraStateJQL(strings.TrimSpace(directive.Config["query"]), scope, followedProjects)
+	}
 	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql)
 	if err != nil {
 		return nil, err
@@ -207,6 +215,20 @@ func buildJiraItem(directive userdata.Directive, base string, iss jiraIssue, kin
 	if strings.EqualFold(iss.Fields.Status.Name, "blocked") || strings.Contains(strings.ToLower(iss.Fields.Status.Name), "block") {
 		sev = "warning"
 	}
+	fields := map[string]string{
+		"key":      iss.Key,
+		"status":   iss.Fields.Status.Name,
+		"priority": priority,
+		"updated":  iss.Fields.Updated,
+		"assignee": iss.Fields.Assignee.Name,
+		"reporter": iss.Fields.Reporter.Name,
+	}
+	// A per-tier unit stamps which dashboard status (started / assigned)
+	// its JQL is meant to satisfy so the engine can classify without
+	// re-parsing project-specific status names.
+	if tier := strings.TrimSpace(directive.Config["status_tier"]); tier != "" {
+		fields["status_tier"] = tier
+	}
 	return StatusItem{
 		DirectiveID: directive.ID,
 		Source:      "jira",
@@ -217,14 +239,7 @@ func buildJiraItem(directive userdata.Directive, base string, iss jiraIssue, kin
 		Severity:    sev,
 		ObservedAt:  obs.UTC(),
 		IsSelf:      isSelf,
-		Fields: map[string]string{
-			"key":      iss.Key,
-			"status":   iss.Fields.Status.Name,
-			"priority": priority,
-			"updated":  iss.Fields.Updated,
-			"assignee": iss.Fields.Assignee.Name,
-			"reporter": iss.Fields.Reporter.Name,
-		},
+		Fields:      fields,
 	}
 }
 
@@ -378,6 +393,21 @@ func buildJiraStateJQL(userQuery string, scope Scope, followedProjects []string)
 		return scopeClause + " ORDER BY updated DESC"
 	}
 	return fmt.Sprintf("(%s) AND %s ORDER BY updated DESC", base, scopeClause)
+}
+
+// buildJiraTierJQL uses the per-tier query verbatim (the user codifies the
+// full phase logic, including actor clauses), appending a default ordering
+// when the query doesn't specify one. An empty query yields "" so the
+// search returns nothing rather than every issue.
+func buildJiraTierJQL(userQuery string) string {
+	q := strings.TrimSpace(userQuery)
+	if q == "" {
+		return ""
+	}
+	if strings.Contains(strings.ToUpper(q), "ORDER BY") {
+		return q
+	}
+	return q + ` ORDER BY updated DESC`
 }
 
 func buildJiraScopeClause(scope Scope, followedProjects []string) string {

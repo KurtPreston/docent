@@ -2,6 +2,27 @@ package collectors
 
 import "testing"
 
+func TestLocalGitTicket(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		repoTicket string
+		want       string
+	}{
+		{name: "subject has ticket", text: "Fix SALSA-7 leak", repoTicket: "SALSA-1", want: "SALSA-7"},
+		{name: "falls back to repo ticket", text: "misc cleanup", repoTicket: "SALSA-1", want: "SALSA-1"},
+		{name: "neither", text: "misc cleanup", repoTicket: "", want: ""},
+		{name: "reflog subject", text: "checkout: moving from main to salsa-42-x", repoTicket: "", want: "SALSA-42"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := localGitTicket(tt.text, tt.repoTicket); got != tt.want {
+				t.Errorf("localGitTicket(%q, %q) = %q, want %q", tt.text, tt.repoTicket, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLocalGitSelfMatcher(t *testing.T) {
 	matcher := localGitSelfMatcher{
 		repoEmail:   "kurt@repo.example",

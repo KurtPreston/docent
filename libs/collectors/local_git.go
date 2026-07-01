@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/kurt/slakkr-ai/libs/correlation"
 )
 
 type LocalGitCollector struct {
@@ -75,6 +76,36 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		repoLabel := localGitRepositoryKey(ctx, abs, opts, directive.ID)
 		matcher := newLocalGitSelfMatcher(ctx, abs, globalEmail, currentUser, opts, directive.ID)
 
+		// A ticket derived from the checked-out branch (or the worktree
+		// directory name for salsa-style worktrees) anchors commits and
+		// reflog rows to the right work-item even when their own text
+		// doesn't name the ticket, and drives the "started" status via a
+		// branch-evidence entity below.
+		branch := localGitCurrentBranch(ctx, abs, opts, directive.ID)
+		repoTicket := correlation.ScanTicketKey(branch, correlation.Config{})
+		if repoTicket == "" {
+			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), correlation.Config{})
+		}
+		if repoTicket != "" && branch != "" {
+			out = append(out, StatusItem{
+				DirectiveID: directive.ID,
+				Repository:  repoLabel,
+				Source:      "local-git",
+				Kind:        "branch",
+				Title:       branch,
+				Summary:     fmt.Sprintf("local branch %s -> %s", branch, repoTicket),
+				Severity:    "info",
+				ObservedAt:  now.UTC(),
+				StableID:    "branch:" + repoLabel + ":" + branch,
+				IsSelf:      true,
+				Fields: map[string]string{
+					"path":   abs,
+					"branch": branch,
+					"ticket": repoTicket,
+				},
+			})
+		}
+
 		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
 		if err != nil {
 			return nil, err
@@ -108,7 +139,11 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			if !keep {
 				continue
 			}
-			out = append(out, buildLocalGitCommitItem(directive.ID, repoLabel, abs, ci, dirs))
+			item := buildLocalGitCommitItem(directive.ID, repoLabel, abs, ci, dirs)
+			if t := localGitTicket(ci.subject, repoTicket); t != "" {
+				item.Fields["ticket"] = t
+			}
+			out = append(out, item)
 			commitTimes[ci.hash] = ci.observed
 		}
 
@@ -153,6 +188,19 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			if len(dirs) > 1 {
 				title = fmt.Sprintf("(%s) %s %s", filepath.Base(abs), gd, gs)
 			}
+			fields := map[string]string{
+				"path":       abs,
+				"hash":       hash,
+				"short_hash": short,
+				"gd":         gd,
+				"gs":         gs,
+			}
+			// Reflog subjects like "checkout: moving from main to salsa-123"
+			// carry the branch (and thus ticket); fall back to the repo's
+			// current-branch ticket otherwise.
+			if t := localGitTicket(gs, repoTicket); t != "" {
+				fields["ticket"] = t
+			}
 			out = append(out, StatusItem{
 				DirectiveID: directive.ID,
 				Repository:  repoLabel,
@@ -163,13 +211,7 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				Severity:    "info",
 				ObservedAt:  obs.UTC(),
 				IsSelf:      true,
-				Fields: map[string]string{
-					"path":       abs,
-					"hash":       hash,
-					"short_hash": short,
-					"gd":         gd,
-					"gs":         gs,
-				},
+				Fields:      fields,
 			})
 		}
 	}
@@ -288,6 +330,31 @@ func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitComm
 			"subject":      ci.subject,
 		},
 	}
+}
+
+// localGitCurrentBranch returns the checked-out branch name for a repo (or
+// worktree), or "" when detached or on error. Cheap enough to call once per
+// repo per collection.
+func localGitCurrentBranch(ctx context.Context, abs string, opts *CollectOpts, directiveID string) string {
+	out, err := gitOutput(ctx, abs, opts, directiveID, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	b := strings.TrimSpace(out)
+	if b == "HEAD" { // detached HEAD
+		return ""
+	}
+	return b
+}
+
+// localGitTicket prefers a ticket scanned from the commit/reflog text and
+// falls back to the repo's branch-derived ticket, so rows whose own text
+// omits the key still correlate to the branch they were made on.
+func localGitTicket(text, repoTicket string) string {
+	if t := correlation.ScanTicketKey(text, correlation.Config{}); t != "" {
+		return t
+	}
+	return repoTicket
 }
 
 // localGitRepositoryKey prefers remote.origin URL (owner/repo or nested path) so local-git

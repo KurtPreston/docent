@@ -19,20 +19,65 @@ type Config struct {
 const DefaultTicketPattern = `^([a-z]+-\d+)`
 
 // ParseTicketKey extracts a ticket key from a name/title, or "" when none.
+// It anchors the configured pattern (default `^([a-z]+-\d+)`) to the start
+// of the string, which is the right behavior for session/branch leaf names
+// that begin with the ticket.
 func ParseTicketKey(name string, cfg Config) string {
-	pattern := cfg.TicketPattern
-	if pattern == "" {
-		pattern = DefaultTicketPattern
-	}
-	re, err := regexp.Compile("(?i)" + pattern)
-	if err != nil {
-		re = regexp.MustCompile("(?i)" + DefaultTicketPattern)
-	}
+	re := ticketRegexp(cfg, false)
 	m := re.FindStringSubmatch(strings.TrimSpace(name))
 	if len(m) < 2 {
 		return ""
 	}
 	return strings.ToUpper(m[1])
+}
+
+// ScanTicketKey extracts a ticket key from anywhere within a string, using
+// the configured capture group but word-boundaried instead of anchored to
+// the start. It exists for free-form text like commit subjects and reflog
+// messages ("Fix SALSA-123", "checkout: moving from main to salsa-123-x")
+// where the key does not lead the string. Because it scans anywhere it can
+// false-match generic patterns, so callers should treat it as a fallback.
+func ScanTicketKey(name string, cfg Config) string {
+	re := ticketRegexp(cfg, true)
+	m := re.FindStringSubmatch(strings.TrimSpace(name))
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.ToUpper(m[1])
+}
+
+// ticketRegexp compiles the configured ticket pattern (case-insensitive).
+// When scan is false the pattern is used as-is (the default is start-
+// anchored); when scan is true a leading "^" is replaced by a word boundary
+// so the key can be matched anywhere in the string.
+func ticketRegexp(cfg Config, scan bool) *regexp.Regexp {
+	pattern := cfg.TicketPattern
+	if pattern == "" {
+		pattern = DefaultTicketPattern
+	}
+	if scan {
+		pattern = `\b` + strings.TrimPrefix(pattern, "^")
+	}
+	re, err := regexp.Compile("(?i)" + pattern)
+	if err != nil {
+		fallback := DefaultTicketPattern
+		if scan {
+			fallback = `\b` + strings.TrimPrefix(fallback, "^")
+		}
+		re = regexp.MustCompile("(?i)" + fallback)
+	}
+	return re
+}
+
+// commitLikeKind reports whether a signal kind is free-form git text where a
+// ticket key, if present, is likely embedded rather than leading. These get
+// the ScanTicketKey fallback during entity mapping.
+func commitLikeKind(kind string) bool {
+	switch kind {
+	case "commit", "reflog", "github_commit", "repo_commit":
+		return true
+	}
+	return false
 }
 
 // GroupKey returns the work-item anchor key for an entity.
@@ -96,10 +141,10 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 				}
 			}
 			wi = &model.WorkItem{
-				Key:        key,
-				Title:      title,
-				Attention:  "idle",
-				Entities:   []model.Entity{},
+				Key:       key,
+				Title:     title,
+				Attention: "idle",
+				Entities:  []model.Entity{},
 			}
 			groups[key] = wi
 			order = append(order, key)
@@ -165,6 +210,16 @@ func SignalToEntity(s model.Signal, cfg Config) model.Entity {
 	ticket := ParseTicketKey(s.Title, cfg)
 	if ticket == "" {
 		ticket = ParseTicketKey(s.Summary, cfg)
+	}
+	// Commit/reflog subjects rarely lead with the ticket key, so fall back
+	// to scanning anywhere in the text for git-ish signals. An explicit
+	// ticket field (set by e.g. local-git from a branch name) still wins,
+	// since Fields are copied into Coordinates below.
+	if ticket == "" && commitLikeKind(s.Kind) {
+		ticket = ScanTicketKey(s.Title, cfg)
+		if ticket == "" {
+			ticket = ScanTicketKey(s.Summary, cfg)
+		}
 	}
 	if ticket != "" {
 		coords["ticket"] = ticket

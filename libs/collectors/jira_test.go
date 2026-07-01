@@ -4,7 +4,45 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kurt/slakkr-ai/libs/config/userdata"
 )
+
+func TestBuildJiraTierJQL(t *testing.T) {
+	if got := buildJiraTierJQL(""); got != "" {
+		t.Errorf("empty query should yield empty JQL, got %q", got)
+	}
+	got := buildJiraTierJQL(`assignee = currentUser() AND status = "In Development"`)
+	if !strings.HasSuffix(got, "ORDER BY updated DESC") {
+		t.Errorf("expected default ordering appended, got %q", got)
+	}
+	if strings.Contains(got, "watcher = currentUser()") {
+		t.Errorf("tier JQL must be verbatim (no scope wrapping), got %q", got)
+	}
+	// An explicit ORDER BY is preserved as-is.
+	custom := `status = "Done" ORDER BY created ASC`
+	if got := buildJiraTierJQL(custom); got != custom {
+		t.Errorf("explicit ORDER BY should be preserved, got %q", got)
+	}
+}
+
+func TestBuildJiraItemStampsStatusTier(t *testing.T) {
+	d := userdata.Directive{ID: "jira#started", Collector: "jira", Config: map[string]string{"status_tier": "started"}}
+	var iss jiraIssue
+	iss.Key = "SALSA-5"
+	iss.Fields.Summary = "do the thing"
+	iss.Fields.Status.Name = "In Development"
+	item := buildJiraItem(d, "https://jira.example", iss, "issue", time.Now(), true)
+	if item.Fields["status_tier"] != "started" {
+		t.Errorf("status_tier = %q, want started", item.Fields["status_tier"])
+	}
+	// Without a status_tier config the field is absent.
+	d2 := userdata.Directive{ID: "jira", Collector: "jira"}
+	item2 := buildJiraItem(d2, "https://jira.example", iss, "issue", time.Now(), true)
+	if _, ok := item2.Fields["status_tier"]; ok {
+		t.Errorf("status_tier should be absent without config, got %v", item2.Fields)
+	}
+}
 
 func TestBuildJiraActivityJQL(t *testing.T) {
 	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)

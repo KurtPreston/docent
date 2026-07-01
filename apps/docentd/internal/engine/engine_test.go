@@ -177,6 +177,179 @@ func TestSignalEntityWorkItemLinks(t *testing.T) {
 	}
 }
 
+func TestClassifyGroup(t *testing.T) {
+	cases := []struct {
+		name       string
+		facts      groupFacts
+		wantStatus string
+		wantRank   int
+		wantAction bool
+	}{
+		{"live session needs followup", groupFacts{hasLiveSession: true, sessionNeedsFollowup: true, branchEvidence: true}, statusActive, rankActive, true},
+		{"live session no followup", groupFacts{hasLiveSession: true}, statusActive, rankActive, false},
+		{"approved beats started", groupFacts{authoredApproved: true, branchEvidence: true}, statusApproved, rankApproved, true},
+		{"jira started no branch", groupFacts{jiraStarted: true}, statusStarted, rankStarted, false},
+		{"draft pr is started", groupFacts{authoredDraft: true}, statusStarted, rankStarted, false},
+		{"branch evidence is started with action", groupFacts{branchEvidence: true}, statusStarted, rankStarted, true},
+		{"authored awaiting waits on others", groupFacts{authoredAwaiting: true}, statusAwaiting, rankAwaiting, false},
+		{"authored my turn", groupFacts{authoredAwaiting: true, authoredMyTurn: true}, statusAwaiting, rankAwaiting, true},
+		{"review requested needs action", groupFacts{reviewRequested: true}, statusAwaiting, rankAwaiting, true},
+		{"assigned no action", groupFacts{jiraAssigned: true}, statusAssigned, rankAssigned, false},
+		{"nothing hidden", groupFacts{}, "", rankHidden, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r, a := classifyGroup(tc.facts)
+			if s != tc.wantStatus || r != tc.wantRank || a != tc.wantAction {
+				t.Errorf("classifyGroup = (%q,%d,%v), want (%q,%d,%v)", s, r, a, tc.wantStatus, tc.wantRank, tc.wantAction)
+			}
+		})
+	}
+}
+
+func TestClassifyPR(t *testing.T) {
+	mk := func(state map[string]string) model.Entity {
+		return model.Entity{Kind: "pr_review_status", State: state}
+	}
+	var f groupFacts
+	classifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"}))
+	if !f.authoredApproved {
+		t.Error("approved+passing authored PR should set authoredApproved")
+	}
+	f = groupFacts{}
+	classifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "true"}))
+	if !f.authoredDraft || f.authoredApproved {
+		t.Errorf("draft PR facts wrong: %+v", f)
+	}
+	f = groupFacts{}
+	classifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "CHANGES_REQUESTED", "checks": "passing"}))
+	if !f.authoredAwaiting || !f.authoredMyTurn {
+		t.Errorf("changes-requested should be awaiting+my-turn: %+v", f)
+	}
+	f = groupFacts{}
+	classifyPR(&f, mk(map[string]string{"relation": "review_requested"}))
+	if !f.reviewRequested || f.authoredAwaiting {
+		t.Errorf("review_requested facts wrong: %+v", f)
+	}
+}
+
+func TestPrNumberFromURL(t *testing.T) {
+	tests := map[string]int{
+		"https://github.com/o/r/pull/123":      123,
+		"https://git.example/o/r/pull/7/files": 7,
+		"https://github.com/o/r/issues/5":      0,
+		"":                                     0,
+	}
+	for url, want := range tests {
+		if got := prNumberFromURL(url); got != want {
+			t.Errorf("prNumberFromURL(%q) = %d, want %d", url, got, want)
+		}
+	}
+}
+
+func TestExpandJiraTierDirectives(t *testing.T) {
+	d := userdata.Directive{
+		ID:        "jira",
+		Collector: "jira",
+		Config: map[string]string{
+			"base_url":       "https://jira.example",
+			"started_query":  `status = "In Development"`,
+			"assigned_query": `status in ("To Do")`,
+		},
+	}
+	got := expandJiraTierDirectives(d)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 tier directives, got %d", len(got))
+	}
+	byTier := map[string]userdata.Directive{}
+	for _, td := range got {
+		byTier[td.Config["status_tier"]] = td
+	}
+	started, ok := byTier["started"]
+	if !ok {
+		t.Fatal("missing started tier directive")
+	}
+	if started.ID != "jira#started" {
+		t.Errorf("started ID = %q, want jira#started", started.ID)
+	}
+	if started.Config["query"] != `status = "In Development"` {
+		t.Errorf("started query = %q", started.Config["query"])
+	}
+	// Base config must be preserved (base_url) and the original untouched.
+	if started.Config["base_url"] != "https://jira.example" {
+		t.Errorf("base_url not carried over: %v", started.Config)
+	}
+	if _, ok := d.Config["query"]; ok {
+		t.Error("expansion mutated the source directive config")
+	}
+	// Non-jira and jira-without-tier-queries return nil.
+	if expandJiraTierDirectives(userdata.Directive{Collector: "github"}) != nil {
+		t.Error("non-jira should return nil")
+	}
+	if expandJiraTierDirectives(userdata.Directive{Collector: "jira", Config: map[string]string{"base_url": "x"}}) != nil {
+		t.Error("jira without tier queries should return nil")
+	}
+}
+
+func TestBuildDashboardOrderingAndVisibility(t *testing.T) {
+	e := newTestEngine(t)
+	wi := func(key string, ents ...model.Entity) model.WorkItem {
+		return model.WorkItem{Key: key, Title: key, Entities: ents}
+	}
+	sess := func(ticket string, live bool, attention string) model.Entity {
+		return model.Entity{Kind: "session", Title: ticket, Coordinates: map[string]string{"ticket": ticket}, State: map[string]string{"live": boolStr(live), "attention": attention}}
+	}
+	pr := func(state map[string]string) model.Entity {
+		return model.Entity{Kind: "pr_review_status", URL: "https://github.com/o/r/pull/1", State: state, Coordinates: map[string]string{}}
+	}
+	jira := func(tier, status string) model.Entity {
+		return model.Entity{Kind: "issue", State: map[string]string{"status_tier": tier, "status": status}}
+	}
+	reflog := func() model.Entity {
+		return model.Entity{Kind: "reflog", Coordinates: map[string]string{}, State: map[string]string{}}
+	}
+
+	items := []model.WorkItem{
+		wi("SALSA-5", jira("assigned", "To Do")),
+		wi("NOISE", reflog()),
+		wi("SALSA-4", pr(map[string]string{"relation": "review_requested", "is_draft": "false"})),
+		wi("SALSA-3", jira("started", "In Development")),
+		wi("SALSA-2", pr(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"})),
+		wi("SALSA-1", sess("SALSA-1", true, "needs-followup")),
+	}
+	dash := e.buildDashboard(items)
+
+	wantOrder := []string{"SALSA-1", "SALSA-2", "SALSA-3", "SALSA-4", "SALSA-5"}
+	if dash.GroupCount != len(wantOrder) {
+		t.Fatalf("group count = %d, want %d (NOISE should be hidden): %+v", dash.GroupCount, len(wantOrder), dash.Groups)
+	}
+	for i, key := range wantOrder {
+		if dash.Groups[i].Key != key {
+			t.Errorf("order[%d] = %q, want %q", i, dash.Groups[i].Key, key)
+		}
+	}
+	byKey := map[string]DashboardGroup{}
+	for _, g := range dash.Groups {
+		byKey[g.Key] = g
+	}
+	if byKey["SALSA-1"].Status != statusActive || !byKey["SALSA-1"].ActionRequired {
+		t.Errorf("SALSA-1 = %+v, want active + action", byKey["SALSA-1"])
+	}
+	if byKey["SALSA-3"].Status != statusStarted || byKey["SALSA-3"].ActionRequired {
+		t.Errorf("SALSA-3 = %+v, want started + no action", byKey["SALSA-3"])
+	}
+	if byKey["SALSA-5"].Status != statusAssigned {
+		t.Errorf("SALSA-5 status = %q, want assigned", byKey["SALSA-5"].Status)
+	}
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
 func TestCollectorsViewReflectsUnits(t *testing.T) {
 	e := newTestEngine(t)
 	d := userdata.Directive{ID: "fake", Collector: "fake", Enabled: true}

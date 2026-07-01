@@ -14,6 +14,14 @@ const WM_URL = (() => {
   return "http://127.0.0.1:39788";
 })();
 
+const STATUS_LABELS = {
+  "active": "active",
+  "approved": "approved",
+  "started": "started",
+  "awaiting-response": "awaiting",
+  "assigned": "assigned",
+};
+
 let timer = null;
 let lastOk = null;
 
@@ -132,7 +140,16 @@ function renderGroup(g) {
 
   head.appendChild(el("span", "summary", g.summary || ""));
   if (g.jiraStatus) head.appendChild(el("span", "pill status", g.jiraStatus));
-  if (g.needsFollowup) head.appendChild(el("span", "followup-dot"));
+  if (g.status) {
+    head.appendChild(el("span", "pill st-" + g.status, STATUS_LABELS[g.status] || g.status));
+  }
+  if (g.actionRequired) {
+    const dot = el("span", "action-dot");
+    dot.title = "Action required by you";
+    head.appendChild(dot);
+  } else if (g.needsFollowup) {
+    head.appendChild(el("span", "followup-dot"));
+  }
   card.appendChild(head);
 
   const rows = el("div", "rows");
@@ -153,12 +170,12 @@ function render(data) {
 
   const liveCount = groups.reduce(
     (n, g) => n + (g.sessions || []).filter((s) => s.live).length, 0);
-  const followCount = groups.filter((g) => g.needsFollowup).length;
+  const actionCount = groups.filter((g) => g.actionRequired).length;
 
   statsEl.innerHTML = "";
   statsEl.appendChild(makeStat(liveCount, "live"));
   statsEl.appendChild(makeStat(groups.length, "groups"));
-  if (followCount) statsEl.appendChild(makeStat(followCount, "need follow-up"));
+  if (actionCount) statsEl.appendChild(makeStat(actionCount, "need action"));
   statsEl.appendChild(makeStat(timeAgo(data.generatedAt) || "now", ""));
 }
 
