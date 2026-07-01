@@ -18,6 +18,13 @@ adapted for the monorepo split:
   `/focus` (`-WsmUrl`, default `http://127.0.0.1:39788`) — the window manager that
   owns the windows on this machine.
 
+When the remote docentd binds `127.0.0.1` on the dev box, run
+`scripts/install-docent-windows.ps1 -RemoteUrl http://<host>:39787 -SshHost <host>`
+and the installer sets up **docent-tunnel** (a local SSH forward) and points
+`-SessionsUrl` at `http://127.0.0.1:39787` — the local end of the forward. That
+forward is owned by docent-tunnel (its own Scheduled Task), so it is live at
+logon independent of any Cursor Remote-SSH session.
+
 ```powershell
 # defaults: sessions from 127.0.0.1:39787, focus via 127.0.0.1:39788
 pwsh -File docent-launcher.ps1
