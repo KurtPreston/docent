@@ -7,10 +7,10 @@ const autoEl = document.getElementById("auto");
 const refreshEl = document.getElementById("refresh");
 const toastEl = document.getElementById("toast");
 
-const WM_URL = (() => {
-  const meta = document.querySelector('meta[name="docent-wm-url"]');
+const WSM_URL = (() => {
+  const meta = document.querySelector('meta[name="wsm-url"]');
   if (meta && meta.content) return meta.content.replace(/\/$/, "");
-  if (window.DOCENT_WM_URL) return String(window.DOCENT_WM_URL).replace(/\/$/, "");
+  if (window.WSM_URL) return String(window.WSM_URL).replace(/\/$/, "");
   return "http://127.0.0.1:39788";
 })();
 
@@ -53,7 +53,7 @@ function timeAgo(iso) {
 
 async function focusSession(name, host) {
   try {
-    const r = await fetch(WM_URL + "/focus", {
+    const r = await fetch(WSM_URL + "/focus", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, host: host || null }),

@@ -321,7 +321,7 @@ which may point at a **remote** `docentd`.
 ### docentd config (`~/.config/docent/docentd.yaml`)
 
 The dashboard/daemon reads `docentd.yaml` (separate from the reporter's
-`config.yaml`): `port` (default 39787), `refreshSec`, `docentWmUrl`
+`config.yaml`): `port` (default 39787), `refreshSec`, `wsmUrl`
 (default `http://127.0.0.1:39788`, the local wsm daemon), and optional `token`/`bindHost` (see
 [docentd dashboard (binding + auth)](#docentd-dashboard-binding--auth) above). See
 [`config/docent/docentd.yaml.example`](config/docent/docentd.yaml.example).

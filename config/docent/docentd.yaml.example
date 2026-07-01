@@ -1,6 +1,6 @@
 port: 39787
 refreshSec: 30
-docentWmUrl: http://127.0.0.1:39788
+wsmUrl: http://127.0.0.1:39788
 
 # Shared secret (optional). Set this (or the DOCENT_TOKEN env var, which wins) to
 # require an "Authorization: Bearer <token>" header on every data endpoint

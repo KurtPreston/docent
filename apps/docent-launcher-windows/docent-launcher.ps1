@@ -21,7 +21,7 @@ on this machine).
 Base URL of docentd (serves /sessions). Default http://127.0.0.1:39787. Point
 this at your remote docentd when docentd runs elsewhere.
 
-.PARAMETER WmUrl
+.PARAMETER WsmUrl
 Base URL of the local wsm window manager (serves /focus). Default
 http://127.0.0.1:39788.
 
@@ -37,12 +37,12 @@ Fetch + flatten /sessions and print the entries, then exit (no window).
 
 .EXAMPLE
 pwsh -File docent-launcher.ps1
-pwsh -File docent-launcher.ps1 -SessionsUrl http://desktop:39787 -WmUrl http://127.0.0.1:39788
+pwsh -File docent-launcher.ps1 -SessionsUrl http://desktop:39787 -WsmUrl http://127.0.0.1:39788
 #>
 [CmdletBinding()]
 param(
     [string]$SessionsUrl = $(if ($env:DOCENT_SESSIONS_URL) { $env:DOCENT_SESSIONS_URL } elseif ($env:DOCENT_URL) { $env:DOCENT_URL } else { 'http://127.0.0.1:39787' }),
-    [string]$WmUrl = $(if ($env:DOCENT_WM_URL) { $env:DOCENT_WM_URL } else { 'http://127.0.0.1:39788' }),
+    [string]$WsmUrl = $(if ($env:WSM_URL) { $env:WSM_URL } else { 'http://127.0.0.1:39788' }),
     [string]$Token = $env:DOCENT_TOKEN,
     [string]$Hotkey = 'Ctrl+Alt+Space',
     [switch]$SelfTest
@@ -52,7 +52,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:SessionsUrl = $SessionsUrl.TrimEnd('/')
-$script:WmUrl = $WmUrl.TrimEnd('/')
+$script:WsmUrl = $WsmUrl.TrimEnd('/')
 $script:Token = $Token
 
 # --- data: flatten /sessions into pickable entries -------------------------
@@ -149,7 +149,7 @@ function Invoke-LauncherEntry {
         try {
             $headers = @{ 'Content-Type' = 'application/json' }
             $body = @{ name = $Entry.Name; host = $Entry.Host } | ConvertTo-Json
-            Invoke-RestMethod -Uri "$script:WmUrl/focus" -Method Post -Headers $headers `
+            Invoke-RestMethod -Uri "$script:WsmUrl/focus" -Method Post -Headers $headers `
                 -Body $body -TimeoutSec 5 | Out-Null
         }
         catch { }
@@ -161,7 +161,7 @@ function Invoke-LauncherEntry {
 
 if ($SelfTest) {
     $e = @(Get-LauncherEntries)
-    Write-Host "launcher self-test: $($e.Count) entries from $script:SessionsUrl/sessions (focus -> $script:WmUrl/focus)"
+    Write-Host "launcher self-test: $($e.Count) entries from $script:SessionsUrl/sessions (focus -> $script:WsmUrl/focus)"
     $e | Select-Object -First 12 | ForEach-Object { "  [$($_.Type)] $($_.Label)  ($($_.Sub))" }
     $f = @($e | Where-Object { Test-FuzzyMatch -Query 'slk' -Target $_.Search })
     Write-Host "fuzzy 'slk' matches: $($f.Count)"
@@ -397,7 +397,7 @@ if (-not [DocentHotKey]::RegisterHotKey($hwnd, $hotkeyId, $hk.Mods, $hk.Vk)) {
     Write-Warning "Could not register hotkey '$Hotkey' (already in use?). The launcher will still run; press the hotkey owner or restart."
 }
 
-Write-Host "docent launcher running. Hotkey: $Hotkey  (sessions: $script:SessionsUrl, focus: $script:WmUrl)"
+Write-Host "docent launcher running. Hotkey: $Hotkey  (sessions: $script:SessionsUrl, focus: $script:WsmUrl)"
 Write-Host "Press the hotkey to summon; Esc to dismiss. Close this window to quit."
 
 $app = New-Object System.Windows.Application
