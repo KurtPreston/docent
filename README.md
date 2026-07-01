@@ -305,6 +305,29 @@ The [`grove`](https://github.com/KurtPreston/grove) sender POSTs the
 dev box to the workstation over reverse SSH. wsm needs no SSH of its own —
 the remote path arrives in the payload.
 
+### Reaching a remote docentd (docent-tunnel)
+
+When `docentd` runs on the dev box bound to `127.0.0.1`, the workstation
+launcher/dashboard reach it through **`docent-tunnel`** (`apps/docent-tunnel`):
+a small helper that holds an SSH **local**-forward from `127.0.0.1:39787` on the
+workstation to the dev box's `docentd` loopback port. Because it runs as its own
+background service (Scheduled Task / launchd `KeepAlive`), the forward is live
+whenever you are logged in — it does **not** depend on a Cursor Remote-SSH
+session being connected.
+
+```
+ workstation                                   dev box
+ ─────────────────────────                     ────────────────────────────
+ launcher / dashboard ──► 127.0.0.1:39787 ──┐
+                                             │  docent-tunnel (local forward)
+                                             └─► 127.0.0.1:39787  docentd
+```
+
+The per-OS installers wire this up in remote mode when you pass `-SshHost` /
+`--ssh-host` (or answer the tunnel prompt); it points the launcher at the local
+end of the forward. This mirrors the reverse tunnel wsm owns for its own port,
+in the opposite direction — the two projects share the pattern but not code.
+
 ### Launchers
 
 Spotlight-style pickers bound to a global hotkey; type to fuzzy-filter your
@@ -342,12 +365,15 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - **macOS** — [`scripts/install-docent-macos.sh`](scripts/install-docent-macos.sh):
   installs `docentd` (optionally, locally via `launchd`), the Hammerspoon launcher
   by default, and Cursor hooks when Cursor.app is installed (`--no-hooks` /
-  `--no-hammerspoon` to skip). Install the window manager from wsm separately.
+  `--no-hammerspoon` to skip). For a remote, loopback-only `docentd`, pass
+  `--ssh-host <host>` (or answer the prompt) to also install `docent-tunnel` as a
+  `launchd` `KeepAlive` agent. Install the window manager from wsm separately.
 - **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
   installs `docent-launcher-windows` as a hidden, auto-restarting Scheduled Task
   (at-logon + a 1-minute watchdog), and optionally `docentd` locally. Prompts
-  whether `docentd` runs locally or on a remote host. Install the window manager
-  from wsm separately.
+  whether `docentd` runs locally or on a remote host; for a remote, loopback-only
+  `docentd`, `-SshHost <host>` also installs `docent-tunnel` as its own watchdog
+  task. Install the window manager from wsm separately.
 
 ## Layout
 
@@ -356,6 +382,7 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - `apps/docent-setup/` — config wizard + `check`
 - `apps/docentd/` — daemon + dashboard
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
+- `apps/docent-tunnel/` — workstation SSH local-forward helper for a remote, loopback-only docentd
 - the local window manager lives in the separate [wsm](https://github.com/KurtPreston/wsm) repo
 - `hooks/` — Cursor hook (`docent-notify.sh`) + snippet that report sessions to `docentd`
 - `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers

@@ -25,6 +25,9 @@ DRY_RUN=0
 DOCENTD_MODE=""  # local | remote (resolved after arg parse)
 DOCENTD_URL="${DOCENTD_URL:-}"
 DOCENTD_TOKEN="${DOCENTD_TOKEN:-${DOCENT_TOKEN:-}}"
+USE_TUNNEL=auto  # auto | 1 | 0 — reach a remote docentd via a local SSH forward (docent-tunnel)
+SSH_HOST="${DOCENT_TUNNEL_HOST:-}"
+SSH_IDENTITY="${DOCENT_TUNNEL_IDENTITY:-}"
 
 usage() {
   cat <<'EOF'
@@ -47,14 +50,21 @@ Options:
   --no-launchd      Skip launchd plist install (binaries only)
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
+  --ssh-host HOST   Reach a remote docentd through a local SSH forward
+                    (docent-tunnel) to HOST, instead of hitting it directly
+  --ssh-identity P  SSH private key for the forward (else ssh-agent)
+  --tunnel          Force the SSH forward (prompt for the host if unset)
+  --no-tunnel       Never set up the SSH forward (hit the remote URL directly)
   --dry-run         Print actions without changing the system
   -h, --help        Show this help
 
 Environment:
-  DOCENT_BIN_DIR     Same as --bin-dir
-  DOCENT_CONFIG_DIR  Config root (default: ~/.config/docent)
-  DOCENTD_URL        Remote docentd base URL (skips local docentd install)
-  DOCENTD_TOKEN      Bearer token for remote docentd / hooks
+  DOCENT_BIN_DIR       Same as --bin-dir
+  DOCENT_CONFIG_DIR    Config root (default: ~/.config/docent)
+  DOCENTD_URL          Remote docentd base URL (skips local docentd install)
+  DOCENTD_TOKEN        Bearer token for remote docentd / hooks
+  DOCENT_TUNNEL_HOST   Same as --ssh-host (implies --tunnel)
+  DOCENT_TUNNEL_IDENTITY  Same as --ssh-identity
 EOF
 }
 
@@ -75,6 +85,10 @@ while [ $# -gt 0 ]; do
     --no-launchd) INSTALL_LAUNCHD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
+    --ssh-host) shift; SSH_HOST="${1:?--ssh-host requires a host}" ;;
+    --ssh-identity) shift; SSH_IDENTITY="${1:?--ssh-identity requires a path}" ;;
+    --tunnel) USE_TUNNEL=1 ;;
+    --no-tunnel) USE_TUNNEL=0 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -147,12 +161,59 @@ prompt_remote_endpoint() {
   fi
 }
 
+# url_host extracts the bare hostname from a base URL (http://desktop:39787 -> desktop).
+url_host() {
+  local u="$1"
+  u="${u#*://}"   # strip scheme
+  u="${u%%/*}"    # strip path
+  u="${u%%:*}"    # strip port
+  printf '%s' "$u"
+}
+
+# resolve_tunnel decides whether the launcher/dashboard reach docentd through a
+# local SSH forward (docent-tunnel) rather than hitting the remote URL directly.
+# It sets USE_TUNNEL to 1/0 and, when 1, fills SSH_HOST.
+resolve_tunnel() {
+  if [ "$USE_TUNNEL" = 0 ]; then
+    return 0
+  fi
+  if [ -n "$SSH_HOST" ] && [ "$USE_TUNNEL" = auto ]; then
+    USE_TUNNEL=1
+  fi
+  if [ "$USE_TUNNEL" = auto ]; then
+    if [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
+      USE_TUNNEL=0 # do not assume a tunnel non-interactively
+      return 0
+    fi
+    printf "Reach docentd through an SSH tunnel (docent-tunnel)? Recommended if docentd binds 127.0.0.1 on the dev box. [Y/n]: "
+    read -r ans
+    case "${ans:-y}" in
+      n|N|no|No) USE_TUNNEL=0; return 0 ;;
+      *) USE_TUNNEL=1 ;;
+    esac
+  fi
+  if [ -z "$SSH_HOST" ]; then
+    local default_host; default_host="$(url_host "$DOCENTD_URL")"
+    if [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
+      SSH_HOST="$default_host"
+    else
+      printf "SSH host for the dev box [%s]: " "$default_host"
+      read -r SSH_HOST
+      SSH_HOST="${SSH_HOST:-$default_host}"
+    fi
+  fi
+}
+
 write_remote_config() {
   local env_file="$CONFIG_DIR/.env"
+  local sessions_url="$DOCENTD_URL"
+  if [ "$USE_TUNNEL" = 1 ]; then
+    sessions_url="http://127.0.0.1:$DOCENT_PORT"
+  fi
   run mkdir -p "$CONFIG_DIR"
   if [ "$DRY_RUN" -eq 1 ]; then
-    run printf '%s\n' "write DOCENT_URL/DOCENT_TOKEN to $env_file"
-    run printf '%s\n' "write $CONFIG_DIR/launcher.lua"
+    run printf '%s\n' "write DOCENT_URL=$sessions_url / DOCENT_TOKEN to $env_file"
+    run printf '%s\n' "write $CONFIG_DIR/launcher.lua (url=$sessions_url)"
     return 0
   fi
   touch "$env_file"
@@ -164,14 +225,14 @@ write_remote_config() {
       printf '%s=%s\n' "$key" "$val" >>"$file"
     fi
   }
-  upsert_env DOCENT_URL "$DOCENTD_URL" "$env_file"
+  upsert_env DOCENT_URL "$sessions_url" "$env_file"
   if [ -n "$DOCENTD_TOKEN" ]; then
     upsert_env DOCENT_TOKEN "$DOCENTD_TOKEN" "$env_file"
   fi
   chmod 600 "$env_file"
   cat >"$CONFIG_DIR/launcher.lua" <<EOF
 return {
-  url = "$DOCENTD_URL",
+  url = "$sessions_url",
   token = "$DOCENTD_TOKEN",
   wsmPort = $WSM_PORT,
 }
@@ -201,11 +262,16 @@ run_docent_setup_if_needed() {
 resolve_docentd_location
 if [ "$DOCENTD_MODE" = remote ]; then
   prompt_remote_endpoint
+  resolve_tunnel
   write_remote_config
+else
+  USE_TUNNEL=0 # a local docentd is already on this machine's loopback
 fi
 
 DOCENTD_BIN="$BIN_DIR/docentd"
+DOCENT_TUNNEL_BIN="$BIN_DIR/docent-tunnel"
 PLIST_DOCENTD="$LAUNCH_AGENTS/com.docent.docentd.plist"
+PLIST_TUNNEL="$LAUNCH_AGENTS/com.docent.docent-tunnel.plist"
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
   if [ "$DOCENTD_MODE" = local ]; then
@@ -214,6 +280,11 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     run go build -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
   else
     log "remote docentd — nothing to build locally"
+  fi
+  if [ "$USE_TUNNEL" = 1 ]; then
+    run mkdir -p "$BIN_DIR"
+    log "building docent-tunnel"
+    run go build -o "$DOCENT_TUNNEL_BIN" "$ROOT/apps/docent-tunnel"
   fi
 else
   log "skipping build (--no-build)"
@@ -259,6 +330,15 @@ if [ "$DOCENTD_MODE" = local ]; then
   run_docent_setup_if_needed
 fi
 
+uid="$(id -u)"
+reload_agent() {
+  local label="$1" plist="$2"
+  if launchctl print "gui/$uid/$label" &>/dev/null; then
+    run launchctl bootout "gui/$uid" "$plist" 2>/dev/null || run launchctl unload "$plist" 2>/dev/null || true
+  fi
+  run launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || run launchctl load "$plist"
+}
+
 if [ "$INSTALL_LAUNCHD" -eq 1 ] && [ "$DOCENTD_MODE" = local ]; then
   log "writing launchd plist"
   run mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR"
@@ -294,17 +374,47 @@ EOF
     run printf '%s\n' "write $PLIST_DOCENTD"
   fi
 
-  uid="$(id -u)"
-  reload_agent() {
-    local label="$1" plist="$2"
-    if launchctl print "gui/$uid/$label" &>/dev/null; then
-      run launchctl bootout "gui/$uid" "$plist" 2>/dev/null || run launchctl unload "$plist" 2>/dev/null || true
-    fi
-    run launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || run launchctl load "$plist"
-  }
-
   log "loading launch agent"
   reload_agent com.docent.docentd "$PLIST_DOCENTD"
+fi
+
+if [ "$INSTALL_LAUNCHD" -eq 1 ] && [ "$USE_TUNNEL" = 1 ]; then
+  log "writing docent-tunnel launchd plist"
+  run mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR"
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    {
+      printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
+      printf '%s\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+      printf '%s\n' '<plist version="1.0">'
+      printf '%s\n' '<dict>'
+      printf '%s\n' '  <key>Label</key><string>com.docent.docent-tunnel</string>'
+      printf '%s\n' '  <key>ProgramArguments</key>'
+      printf '%s\n' '  <array>'
+      printf '    <string>%s</string>\n' "$DOCENT_TUNNEL_BIN"
+      printf '    <string>-host</string><string>%s</string>\n' "$SSH_HOST"
+      printf '    <string>-local</string><string>127.0.0.1:%s</string>\n' "$DOCENT_PORT"
+      printf '    <string>-remote</string><string>127.0.0.1:%s</string>\n' "$DOCENT_PORT"
+      [ -n "$SSH_IDENTITY" ] && printf '    <string>-identity</string><string>%s</string>\n' "$SSH_IDENTITY"
+      printf '%s\n' '  </array>'
+      printf '  <key>WorkingDirectory</key><string>%s</string>\n' "$HOME"
+      printf '%s\n' '  <key>EnvironmentVariables</key>'
+      printf '%s\n' '  <dict>'
+      printf '    <key>PATH</key><string>%s</string>\n' "$DOCENT_SERVICE_PATH"
+      printf '%s\n' '  </dict>'
+      printf '%s\n' '  <key>RunAtLoad</key><true/>'
+      printf '%s\n' '  <key>KeepAlive</key><true/>'
+      printf '  <key>StandardOutPath</key><string>%s/docent-tunnel.log</string>\n' "$LOG_DIR"
+      printf '  <key>StandardErrorPath</key><string>%s/docent-tunnel.log</string>\n' "$LOG_DIR"
+      printf '%s\n' '</dict>'
+      printf '%s\n' '</plist>'
+    } >"$PLIST_TUNNEL"
+  else
+    run printf '%s\n' "write $PLIST_TUNNEL (host=$SSH_HOST, 127.0.0.1:$DOCENT_PORT -> remote 127.0.0.1:$DOCENT_PORT)"
+  fi
+
+  log "loading docent-tunnel launch agent"
+  reload_agent com.docent.docent-tunnel "$PLIST_TUNNEL"
 fi
 
 install_hooks() {
@@ -412,6 +522,16 @@ if [ "$DRY_RUN" -eq 0 ]; then
     curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null && echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok" || echo "  docentd     FAIL (see $LOG_DIR/docentd.log)" >&2
   fi
 
+  if [ "$USE_TUNNEL" = 1 ]; then
+    log "health check via docent-tunnel"
+    sleep 1
+    if curl -sf --max-time 5 "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null 2>&1; then
+      echo "  docentd     http://127.0.0.1:$DOCENT_PORT/ (via docent-tunnel -> $SSH_HOST)  ok"
+    else
+      echo "  docentd     not reachable through docent-tunnel yet (see $LOG_DIR/docent-tunnel.log)" >&2
+    fi
+  fi
+
   if curl -sf --max-time 5 "http://127.0.0.1:$WSM_PORT/health" >/dev/null 2>&1; then
     echo "  wsm         http://127.0.0.1:$WSM_PORT/  ok"
   else
@@ -441,7 +561,29 @@ Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
 Accessibility permission).
 EOF
 else
-  cat <<EOF
+  if [ "$USE_TUNNEL" = 1 ]; then
+    cat <<EOF
+
+Installed (remote docentd, via docent-tunnel):
+  docentd           $DOCENTD_URL  (remote — reached through the local forward)
+  docent-tunnel     $DOCENT_TUNNEL_BIN  (127.0.0.1:$DOCENT_PORT -> $SSH_HOST:127.0.0.1:$DOCENT_PORT)
+  launcher/dash     http://127.0.0.1:$DOCENT_PORT/
+  config            $CONFIG_DIR/
+    .env            DOCENT_URL, DOCENT_TOKEN
+    launcher.lua    Hammerspoon overrides
+
+LaunchAgents:
+  $PLIST_TUNNEL
+  logs: $LOG_DIR/docent-tunnel.log
+
+The forward is owned by docent-tunnel (launchd KeepAlive), so it is live
+whenever you are logged in — independent of any Cursor Remote-SSH session.
+
+Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
+(it serves the window manager on http://127.0.0.1:$WSM_PORT/).
+EOF
+  else
+    cat <<EOF
 
 Installed (remote docentd):
   docentd           $DOCENTD_URL  (remote — not installed locally)
@@ -452,4 +594,5 @@ Installed (remote docentd):
 Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
 (it serves the window manager on http://127.0.0.1:$WSM_PORT/).
 EOF
+  fi
 fi

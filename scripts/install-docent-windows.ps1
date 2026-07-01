@@ -32,6 +32,20 @@ Use a remote docentd at this base URL (skips the prompt + local build).
 .PARAMETER Token
 Bearer token for the remote docentd (optional).
 
+.PARAMETER SshHost
+Reach a remote docentd through a local SSH forward (docent-tunnel) to this
+host, instead of hitting the remote URL directly. Implies -Tunnel.
+
+.PARAMETER SshIdentity
+SSH private key for the docent-tunnel forward (otherwise ssh-agent is used).
+
+.PARAMETER Tunnel
+Force the SSH forward for a remote docentd (prompts for the host if -SshHost
+is unset). The default when interactive is to ask.
+
+.PARAMETER NoTunnel
+Never set up the SSH forward; point the launcher directly at the remote URL.
+
 .PARAMETER NoTasks
 Skip Scheduled Task registration (build/config only).
 
@@ -70,6 +84,10 @@ pwsh -File scripts/install-docent-windows.ps1 -RemoteUrl http://desktop:39787
 param(
     [string]$RemoteUrl,
     [string]$Token,
+    [string]$SshHost,
+    [string]$SshIdentity,
+    [switch]$Tunnel,
+    [switch]$NoTunnel,
     [switch]$NoTasks,
     [switch]$NoBuild,
     [switch]$NoModules,
@@ -93,8 +111,11 @@ $DocentdBin = Join-Path $BinDir 'docentd.exe'
 # Environment fallbacks (parity with the macOS installer env vars).
 if (-not $RemoteUrl -and $env:DOCENTD_URL) { $RemoteUrl = $env:DOCENTD_URL }
 if (-not $Token) { $Token = if ($env:DOCENTD_TOKEN) { $env:DOCENTD_TOKEN } elseif ($env:DOCENT_TOKEN) { $env:DOCENT_TOKEN } else { '' } }
+if (-not $SshHost -and $env:DOCENT_TUNNEL_HOST) { $SshHost = $env:DOCENT_TUNNEL_HOST }
+if (-not $SshIdentity -and $env:DOCENT_TUNNEL_IDENTITY) { $SshIdentity = $env:DOCENT_TUNNEL_IDENTITY }
 if ($env:DOCENT_BIN_DIR) { $BinDir = $env:DOCENT_BIN_DIR; $DocentdBin = Join-Path $BinDir 'docentd.exe' }
 if ($env:DOCENT_CONFIG_DIR) { $ConfigDir = $env:DOCENT_CONFIG_DIR; $ConfigPath = Join-Path $ConfigDir 'docentd.yaml' }
+$DocentTunnelBin = Join-Path $BinDir 'docent-tunnel.exe'
 
 function Log { param([string]$Message) Write-Host "==> $Message" }
 function Step {
@@ -125,6 +146,7 @@ function Test-GoOk {
 # --- resolve docentd location ------------------------------------------------
 $Mode = $null
 $Sessions = $null
+$UseTunnel = $false
 
 if ($RemoteUrl) {
     $Mode = 'remote'
@@ -148,26 +170,53 @@ if ($Mode -eq 'remote') {
         if (-not $RemoteUrl) { throw "remote docentd URL is required" }
         if (-not $Token) { $Token = Read-Host "Bearer token for $RemoteUrl (blank if none)" }
     }
-    Log "verifying remote docentd at $RemoteUrl/health"
-    if (-not $DryRun) {
-        $headers = @{}
-        if ($Token) { $headers['Authorization'] = "Bearer $Token" }
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri "$RemoteUrl/health" -Headers $headers -TimeoutSec 8 | Out-Null
-            Write-Host "  docentd     $RemoteUrl  ok"
+
+    # Decide whether the launcher/dashboard reach docentd through a local SSH
+    # forward (docent-tunnel) rather than hitting the remote URL directly.
+    if ($NoTunnel) { $UseTunnel = $false }
+    elseif ($SshHost -or $Tunnel) { $UseTunnel = $true }
+    elseif ($DryRun) { $UseTunnel = $false }
+    else {
+        $ans = Read-Host "Reach docentd through an SSH tunnel (docent-tunnel)? Recommended if docentd binds 127.0.0.1 on the dev box. [Y/n]"
+        $UseTunnel = ($ans -notmatch '^(n|no)$')
+    }
+    if ($UseTunnel -and -not $SshHost) {
+        $defaultHost = ''
+        if ($RemoteUrl -match '^[a-zA-Z]+://([^:/]+)') { $defaultHost = $Matches[1] }
+        if ($DryRun) { $SshHost = $defaultHost }
+        else {
+            $inp = Read-Host "SSH host for the dev box [$defaultHost]"
+            $SshHost = if ($inp) { $inp } else { $defaultHost }
         }
-        catch {
-            Write-Host ""
-            Write-Error @"
+        if (-not $SshHost) { throw "an SSH host is required for docent-tunnel (pass -SshHost, or -NoTunnel to skip)" }
+    }
+
+    if ($UseTunnel) {
+        $Sessions = "http://127.0.0.1:$Port"
+        Log "reaching remote docentd $RemoteUrl through docent-tunnel -> $SshHost (local 127.0.0.1:$Port)"
+    }
+    else {
+        Log "verifying remote docentd at $RemoteUrl/health"
+        if (-not $DryRun) {
+            $headers = @{}
+            if ($Token) { $headers['Authorization'] = "Bearer $Token" }
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri "$RemoteUrl/health" -Headers $headers -TimeoutSec 8 | Out-Null
+                Write-Host "  docentd     $RemoteUrl  ok"
+            }
+            catch {
+                Write-Host ""
+                Write-Error @"
 could not reach $RemoteUrl/health.
   - Is docentd running on the remote host?
-  - If it binds 127.0.0.1 only, add a tunnel (e.g. ssh -L $Port`:127.0.0.1:$Port desktop)
-    and use -RemoteUrl http://127.0.0.1:$Port.
+  - If it binds 127.0.0.1 only, re-run with -SshHost <host> to set up docent-tunnel,
+    or add a tunnel yourself (e.g. ssh -L $Port`:127.0.0.1:$Port desktop).
 "@
-            exit 1
+                exit 1
+            }
         }
+        $Sessions = $RemoteUrl
     }
-    $Sessions = $RemoteUrl
 }
 else {
     $Sessions = "http://127.0.0.1:$Port"
@@ -188,6 +237,23 @@ if ($Mode -eq 'local' -and -not $NoBuild) {
 }
 elseif ($Mode -eq 'local') {
     Log "skipping docentd build (-NoBuild)"
+}
+
+# --- build docent-tunnel (remote + tunnel) -----------------------------------
+if ($UseTunnel -and -not $NoBuild) {
+    if (-not (Test-GoOk)) {
+        Write-Error "need Go >= 1.22 on PATH to build docent-tunnel for the SSH forward (install Go, or pass -NoTunnel to hit the remote URL directly)."
+        exit 1
+    }
+    Log "building docent-tunnel -> $DocentTunnelBin"
+    Step "go build -o $DocentTunnelBin ./apps/docent-tunnel" {
+        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+        & go build -o $DocentTunnelBin (Join-Path $Root 'apps\docent-tunnel')
+        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    }
+}
+elseif ($UseTunnel) {
+    Log "skipping docent-tunnel build (-NoBuild)"
 }
 
 # --- config bootstrap --------------------------------------------------------
@@ -320,7 +386,7 @@ function Stop-DocentProgram {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     }
     $procs = @(
-        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='docentd.exe' OR Name='wscript.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
+        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='docentd.exe' OR Name='docent-tunnel.exe' OR Name='wscript.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($Match)) -and $_.ProcessId -ne $PID }
     )
     foreach ($p in $procs) {
@@ -350,7 +416,9 @@ if ($NoTasks) {
     Log "skipping Scheduled Task registration (-NoTasks)"
 }
 else {
-    $extra = if ($Mode -eq 'local') { ', docentd' } else { '' }
+    $extra = ''
+    if ($Mode -eq 'local') { $extra += ', docentd' }
+    if ($UseTunnel) { $extra += ', docent-tunnel' }
     Log "registering Scheduled Tasks (docent-launcher$extra) -- stopping any running instances first so fresh code loads"
     $tmp = $env:TEMP
 
@@ -362,6 +430,16 @@ else {
     Write-HiddenVbs -Path $lnVbs -Exe $PwshExe -ArgLine $lnArgs `
         -LogFile (Join-Path $tmp 'docent-launcher.log')
     Register-DocentTask -Name 'docent-launcher' -Vbs $lnVbs -Match 'docent-launcher'
+
+    # docent-tunnel (remote + tunnel): a local SSH forward to the dev box's docentd
+    if ($UseTunnel) {
+        $tunVbs = Join-Path $ConfigDir 'docent-tunnel-hidden.vbs'
+        $tunArgs = ('-host "{0}" -local "127.0.0.1:{1}" -remote "127.0.0.1:{1}"' -f $SshHost, $Port)
+        if ($SshIdentity) { $tunArgs += (' -identity "{0}"' -f $SshIdentity) }
+        Write-HiddenVbs -Path $tunVbs -Exe $DocentTunnelBin -ArgLine $tunArgs `
+            -LogFile (Join-Path $tmp 'docent-tunnel.log')
+        Register-DocentTask -Name 'docent-tunnel' -Vbs $tunVbs -Match 'docent-tunnel'
+    }
 
     # docentd (local only)
     if ($Mode -eq 'local') {
@@ -386,6 +464,10 @@ if (-not $DryRun -and -not $NoTasks) {
         if (Test-Health "http://127.0.0.1:$Port/health") { Write-Host "  docentd       http://127.0.0.1:$Port/  ok" }
         else { Write-Warning "docentd FAIL - see $env:TEMP\docentd.log" }
     }
+    elseif ($UseTunnel) {
+        if (Test-Health "http://127.0.0.1:$Port/health") { Write-Host "  docentd       http://127.0.0.1:$Port/ (via docent-tunnel -> $SshHost)  ok" }
+        else { Write-Warning "docentd not reachable through docent-tunnel yet - see $env:TEMP\docent-tunnel.log" }
+    }
     else {
         Write-Host "  docentd       remote  $RemoteUrl"
     }
@@ -403,17 +485,24 @@ if ($Mode -eq 'local') {
     Write-Host "  docentd                 $DocentdBin   (127.0.0.1:$Port)"
     Write-Host "  dashboard               http://127.0.0.1:$Port/"
 }
+elseif ($UseTunnel) {
+    Write-Host "  docent-tunnel           $DocentTunnelBin  (127.0.0.1:$Port -> $SshHost`:127.0.0.1:$Port)"
+    Write-Host "  docentd                 $RemoteUrl  (remote - reached via docent-tunnel)"
+    Write-Host "  dashboard               http://127.0.0.1:$Port/"
+}
 else {
     Write-Host "  docentd                 $RemoteUrl  (remote - not installed here)"
     Write-Host "  dashboard               $RemoteUrl/"
 }
 
 if (-not $NoTasks) {
-    $extra = if ($Mode -eq 'local') { ', docentd' } else { '' }
+    $extra = ''
+    if ($Mode -eq 'local') { $extra += ', docentd' }
+    if ($UseTunnel) { $extra += ', docent-tunnel' }
     Write-Host ""
     Write-Host "Scheduled Tasks (hidden, at-logon + 1-min watchdog):"
     Write-Host "  docent-launcher$extra"
-    Write-Host "  logs: $env:TEMP\docent-launcher.log$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })"
+    Write-Host "  logs: $env:TEMP\docent-launcher.log$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })$(if ($UseTunnel) { ", $env:TEMP\docent-tunnel.log" })"
     Write-Host ""
     Write-Host "Manage:"
     Write-Host "  Get-ScheduledTask docent-launcher | Get-ScheduledTaskInfo"
