@@ -33,18 +33,14 @@ Use a remote docentd at this base URL (skips the prompt + local build).
 Bearer token for the remote docentd (optional).
 
 .PARAMETER SshHost
-Reach a remote docentd through a local SSH forward (docent-tunnel) to this
-host, instead of hitting the remote URL directly. Implies -Tunnel.
+SSH host for the docent-tunnel forward to a remote docentd (default: the host
+parsed from -RemoteUrl). Remote mode uses the forward unless -NoTunnel.
 
 .PARAMETER SshIdentity
 SSH private key for the docent-tunnel forward (otherwise ssh-agent is used).
 
-.PARAMETER Tunnel
-Force the SSH forward for a remote docentd (prompts for the host if -SshHost
-is unset). The default when interactive is to ask.
-
 .PARAMETER NoTunnel
-Never set up the SSH forward; point the launcher directly at the remote URL.
+Don't set up the SSH forward; point the launcher directly at the remote URL.
 
 .PARAMETER NoTasks
 Skip Scheduled Task registration (build/config only).
@@ -86,7 +82,6 @@ param(
     [string]$Token,
     [string]$SshHost,
     [string]$SshIdentity,
-    [switch]$Tunnel,
     [switch]$NoTunnel,
     [switch]$NoTasks,
     [switch]$NoBuild,
@@ -171,15 +166,9 @@ if ($Mode -eq 'remote') {
         if (-not $Token) { $Token = Read-Host "Bearer token for $RemoteUrl (blank if none)" }
     }
 
-    # Decide whether the launcher/dashboard reach docentd through a local SSH
-    # forward (docent-tunnel) rather than hitting the remote URL directly.
-    if ($NoTunnel) { $UseTunnel = $false }
-    elseif ($SshHost -or $Tunnel) { $UseTunnel = $true }
-    elseif ($DryRun) { $UseTunnel = $false }
-    else {
-        $ans = Read-Host "Reach docentd through an SSH tunnel (docent-tunnel)? Recommended if docentd binds 127.0.0.1 on the dev box. [Y/n]"
-        $UseTunnel = ($ans -notmatch '^(n|no)$')
-    }
+    # Remote mode reaches docentd through a local SSH forward (docent-tunnel) by
+    # default; -NoTunnel opts out and points the launcher at the remote URL.
+    $UseTunnel = -not $NoTunnel
     if ($UseTunnel -and -not $SshHost) {
         $defaultHost = ''
         if ($RemoteUrl -match '^[a-zA-Z]+://([^:/]+)') { $defaultHost = $Matches[1] }

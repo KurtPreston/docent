@@ -25,7 +25,7 @@ DRY_RUN=0
 DOCENTD_MODE=""  # local | remote (resolved after arg parse)
 DOCENTD_URL="${DOCENTD_URL:-}"
 DOCENTD_TOKEN="${DOCENTD_TOKEN:-${DOCENT_TOKEN:-}}"
-USE_TUNNEL=auto  # auto | 1 | 0 — reach a remote docentd via a local SSH forward (docent-tunnel)
+USE_TUNNEL=auto  # auto (default: forward a remote docentd via docent-tunnel) | 0 (--no-tunnel)
 SSH_HOST="${DOCENT_TUNNEL_HOST:-}"
 SSH_IDENTITY="${DOCENT_TUNNEL_IDENTITY:-}"
 
@@ -50,11 +50,10 @@ Options:
   --no-launchd      Skip launchd plist install (binaries only)
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
-  --ssh-host HOST   Reach a remote docentd through a local SSH forward
-                    (docent-tunnel) to HOST, instead of hitting it directly
+  --ssh-host HOST   SSH host for the docent-tunnel forward to a remote docentd
+                    (default: the host in the remote URL)
   --ssh-identity P  SSH private key for the forward (else ssh-agent)
-  --tunnel          Force the SSH forward (prompt for the host if unset)
-  --no-tunnel       Never set up the SSH forward (hit the remote URL directly)
+  --no-tunnel       Don't set up the SSH forward; hit the remote URL directly
   --dry-run         Print actions without changing the system
   -h, --help        Show this help
 
@@ -87,7 +86,6 @@ while [ $# -gt 0 ]; do
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
     --ssh-host) shift; SSH_HOST="${1:?--ssh-host requires a host}" ;;
     --ssh-identity) shift; SSH_IDENTITY="${1:?--ssh-identity requires a path}" ;;
-    --tunnel) USE_TUNNEL=1 ;;
     --no-tunnel) USE_TUNNEL=0 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -170,28 +168,15 @@ url_host() {
   printf '%s' "$u"
 }
 
-# resolve_tunnel decides whether the launcher/dashboard reach docentd through a
-# local SSH forward (docent-tunnel) rather than hitting the remote URL directly.
-# It sets USE_TUNNEL to 1/0 and, when 1, fills SSH_HOST.
+# resolve_tunnel sets up the launcher/dashboard to reach a remote docentd through
+# a local SSH forward (docent-tunnel). This is the default in remote mode; pass
+# --no-tunnel to hit the remote URL directly instead. It sets USE_TUNNEL to 1/0
+# and, when 1, fills SSH_HOST (defaulting to the host in the remote URL).
 resolve_tunnel() {
   if [ "$USE_TUNNEL" = 0 ]; then
     return 0
   fi
-  if [ -n "$SSH_HOST" ] && [ "$USE_TUNNEL" = auto ]; then
-    USE_TUNNEL=1
-  fi
-  if [ "$USE_TUNNEL" = auto ]; then
-    if [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
-      USE_TUNNEL=0 # do not assume a tunnel non-interactively
-      return 0
-    fi
-    printf "Reach docentd through an SSH tunnel (docent-tunnel)? Recommended if docentd binds 127.0.0.1 on the dev box. [Y/n]: "
-    read -r ans
-    case "${ans:-y}" in
-      n|N|no|No) USE_TUNNEL=0; return 0 ;;
-      *) USE_TUNNEL=1 ;;
-    esac
-  fi
+  USE_TUNNEL=1
   if [ -z "$SSH_HOST" ]; then
     local default_host; default_host="$(url_host "$DOCENTD_URL")"
     if [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
