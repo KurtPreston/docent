@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 func TestValidateRuleBasedHasNoDeps(t *testing.T) {

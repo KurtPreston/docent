@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // Issue describes a problem with the configured AI provider that would prevent
@@ -111,7 +111,7 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 }
 
 // cursorAuthStatus mirrors the JSON shape of `cursor-agent status --format json`.
-// Only the fields slakkr cares about are decoded; extras are ignored.
+// Only the fields docent cares about are decoded; extras are ignored.
 type cursorAuthStatus struct {
 	IsAuthenticated bool   `json:"isAuthenticated"`
 	Status          string `json:"status"`

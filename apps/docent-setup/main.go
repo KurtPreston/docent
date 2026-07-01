@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kurt/slakkr-ai/apps/docent-setup/internal/setup"
-	"github.com/kurt/slakkr-ai/libs/config/docentconfig"
+	"github.com/KurtPreston/docent/apps/docent-setup/internal/setup"
+	"github.com/KurtPreston/docent/libs/config/docentconfig"
 )
 
 func main() {

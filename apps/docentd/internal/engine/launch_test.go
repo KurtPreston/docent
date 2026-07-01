@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/registry"
-	"github.com/kurt/slakkr-ai/libs/model"
+	"github.com/KurtPreston/docent/apps/docentd/internal/config"
+	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 func TestLaunchWorkItem_unknownKey(t *testing.T) {

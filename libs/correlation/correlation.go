@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/model"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 // Config controls anchor resolution and grouping.

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/engine"
-	"github.com/kurt/slakkr-ai/libs/collectors"
+	"github.com/KurtPreston/docent/apps/docentd/internal/config"
+	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
+	"github.com/KurtPreston/docent/libs/collectors"
 )
 
 func runDoctor(args []string) {

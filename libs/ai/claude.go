@@ -17,7 +17,7 @@ import (
 // Each invocation runs from a freshly created temp directory and uses
 // claude's non-interactive `--print` mode with the file-mutating and shell
 // tools disabled, so the agent cannot edit files or run commands. The temp
-// directory is removed after the call returns. slakkr only ever asks the
+// directory is removed after the call returns. docent only ever asks the
 // model to convert the structured activity below into Markdown, so the
 // agent should never need to touch the filesystem or execute anything.
 type ClaudeCLIProvider struct {
@@ -82,7 +82,7 @@ func (p ClaudeCLIProvider) RunMode(ctx context.Context, in RunInput) (string, er
 }
 
 func (p ClaudeCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer) (string, error) {
-	dir, err := os.MkdirTemp("", "slakkr-claude-")
+	dir, err := os.MkdirTemp("", "docent-claude-")
 	if err != nil {
 		return "", fmt.Errorf("claude: create temp workspace: %w", err)
 	}

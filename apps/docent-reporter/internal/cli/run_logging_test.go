@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/ai"
-	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/ai"
+	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // fakeCollector emits a single status item and records both an HTTP
@@ -89,7 +89,7 @@ func TestRunWritesRunLogDirectory(t *testing.T) {
 		t.Fatalf("read run.log: %v", err)
 	}
 	for _, want := range []string{
-		"# slakkr run 2026-05-18T12:00:00Z",
+		"# docent run 2026-05-18T12:00:00Z",
 		"id:           daily-plan",
 		"## Directives",
 		"fake-one",

@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/kurt/slakkr-ai/apps/docent-wm-macos/macos"
-	"github.com/kurt/slakkr-ai/libs/wmclient"
+	"github.com/KurtPreston/docent/apps/docent-wm-macos/macos"
+	"github.com/KurtPreston/docent/libs/wmclient"
 )
 
 func main() {

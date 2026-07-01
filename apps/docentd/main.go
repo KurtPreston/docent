@@ -9,10 +9,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/engine"
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/registry"
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/server"
+	"github.com/KurtPreston/docent/apps/docentd/internal/config"
+	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
+	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/apps/docentd/internal/server"
 )
 
 func main() {

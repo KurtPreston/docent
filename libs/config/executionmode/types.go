@@ -1,5 +1,5 @@
 // Package executionmode defines the declarative ExecutionMode interface that
-// drives a slakkr run. An ExecutionMode bundles up the four properties that
+// drives a docent run. An ExecutionMode bundles up the four properties that
 // vary between built-in flows (daily-plan / recent-activity / custom-prompt)
 // and any user-declared flows: a lookback window, an activity formatter, an
 // LLM prompt, and a collection Scope. Any property left unset is filled in
@@ -50,7 +50,7 @@ const (
 	ScopeAll      Scope = "all"
 )
 
-// ExecutionMode is one declaratively-described slakkr run shape. All fields
+// ExecutionMode is one declaratively-described docent run shape. All fields
 // are optional except ID; anything omitted is filled in at runtime by
 // Resolve.
 type ExecutionMode struct {

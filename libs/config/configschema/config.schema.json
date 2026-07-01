@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://slakkr.local/config.schema.json",
-  "title": "slakkr-ai userdata config",
+  "$id": "https://docent.local/config.schema.json",
+  "title": "docent userdata config",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -108,9 +108,9 @@
               "type": "string",
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
-              "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Activity formatter",
+              "x-docent-default": "repo-chronological",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "required": ["provider"],
@@ -126,23 +126,23 @@
               "type": "string",
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
-              "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Activity formatter",
+              "x-docent-default": "repo-chronological",
+              "x-docent-setup-skip-prompt": true
             },
             "ollama": {
               "type": "object",
               "properties": {
                 "base_url": {
                   "type": "string",
-                  "x-slakkr-prompt": "Ollama server URL",
-                  "x-slakkr-default": "http://127.0.0.1:11434",
-                  "x-slakkr-validator": "url"
+                  "x-docent-prompt": "Ollama server URL",
+                  "x-docent-default": "http://127.0.0.1:11434",
+                  "x-docent-validator": "url"
                 },
                 "model": {
                   "type": "string",
-                  "x-slakkr-prompt": "Ollama model name",
-                  "x-slakkr-default": "llama3"
+                  "x-docent-prompt": "Ollama model name",
+                  "x-docent-default": "llama3"
                 }
               },
               "additionalProperties": false
@@ -161,25 +161,25 @@
               "type": "string",
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
-              "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Activity formatter",
+              "x-docent-default": "repo-chronological",
+              "x-docent-setup-skip-prompt": true
             },
             "cursor": {
               "type": "object",
               "properties": {
                 "command": {
                   "type": "string",
-                  "x-slakkr-prompt": "cursor-agent command",
-                  "x-slakkr-default": "cursor-agent",
-                  "x-slakkr-setup-skip-prompt": true
+                  "x-docent-prompt": "cursor-agent command",
+                  "x-docent-default": "cursor-agent",
+                  "x-docent-setup-skip-prompt": true
                 },
                 "args": {
                   "type": "array",
                   "items": {
                     "type": "string"
                   },
-                  "x-slakkr-setup-skip-prompt": true
+                  "x-docent-setup-skip-prompt": true
                 }
               },
               "additionalProperties": false
@@ -198,26 +198,26 @@
               "type": "string",
               "enum": ["repo-chronological", "json-signal-list"],
               "default": "repo-chronological",
-              "x-slakkr-prompt": "Activity formatter",
-              "x-slakkr-default": "repo-chronological",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Activity formatter",
+              "x-docent-default": "repo-chronological",
+              "x-docent-setup-skip-prompt": true
             },
             "claude": {
               "type": "object",
               "properties": {
                 "command": {
                   "type": "string",
-                  "x-slakkr-prompt": "claude command",
-                  "x-slakkr-default": "claude",
-                  "x-slakkr-setup-skip-prompt": true
+                  "x-docent-prompt": "claude command",
+                  "x-docent-default": "claude",
+                  "x-docent-setup-skip-prompt": true
                 },
                 "args": {
                   "type": "array",
                   "items": {
                     "type": "string"
                   },
-                  "x-slakkr-prompt": "Extra claude args (optional, comma-separated)",
-                  "x-slakkr-setup-skip-prompt": true
+                  "x-docent-prompt": "Extra claude args (optional, comma-separated)",
+                  "x-docent-setup-skip-prompt": true
                 }
               },
               "additionalProperties": false
@@ -235,12 +235,12 @@
         "id": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$",
-          "x-slakkr-setup-skip-prompt": true
+          "x-docent-setup-skip-prompt": true
         },
         "name": {
           "type": "string",
           "minLength": 1,
-          "x-slakkr-setup-skip-prompt": true
+          "x-docent-setup-skip-prompt": true
         },
         "collector": {
           "type": "string"
@@ -363,21 +363,21 @@
         "collector": {
           "type": "string",
           "const": "local-git",
-          "x-slakkr-default-id": "local-git",
-          "x-slakkr-display-name": "Local git repos"
+          "x-docent-default-id": "local-git",
+          "x-docent-display-name": "Local git repos"
         },
         "code_home": {
           "type": "string",
-          "x-slakkr-prompt": "Directory containing git repos (immediate children scanned)",
-          "x-slakkr-validator": "dir-exists"
+          "x-docent-prompt": "Directory containing git repos (immediate children scanned)",
+          "x-docent-validator": "dir-exists"
         },
         "paths": {
           "type": "array",
           "items": {
             "type": "string",
-            "x-slakkr-validator": "dir-exists"
+            "x-docent-validator": "dir-exists"
           },
-          "x-slakkr-prompt": "Explicit repo paths (optional if code_home is set)"
+          "x-docent-prompt": "Explicit repo paths (optional if code_home is set)"
         }
       },
       "required": ["collector"],
@@ -412,16 +412,16 @@
         "collector": {
           "type": "string",
           "const": "github",
-          "x-slakkr-default-id": "github",
-          "x-slakkr-display-name": "GitHub activity"
+          "x-docent-default-id": "github",
+          "x-docent-display-name": "GitHub activity"
         },
         "target": {
           "type": "object",
           "properties": {
             "username": {
               "type": "string",
-              "x-slakkr-prompt": "GitHub username (leave empty for authenticated user)",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "GitHub username (leave empty for authenticated user)",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -433,13 +433,13 @@
           "properties": {
             "base_url": {
               "type": "string",
-              "x-slakkr-prompt": "GitHub host URL (default https://github.com)",
-              "x-slakkr-validator": "url"
+              "x-docent-prompt": "GitHub host URL (default https://github.com)",
+              "x-docent-validator": "url"
             },
             "followed_repos": {
               "type": "string",
-              "x-slakkr-prompt": "Comma-separated owner/repo list to include when scope=all",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Comma-separated owner/repo list to include when scope=all",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -451,9 +451,9 @@
           "properties": {
             "token": {
               "type": "string",
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_GITHUB_TOKEN",
-              "x-slakkr-prompt": "Env var for GitHub token (optional; gh auth also works)"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_GITHUB_TOKEN",
+              "x-docent-prompt": "Env var for GitHub token (optional; gh auth also works)"
             }
           },
           "additionalProperties": {
@@ -469,16 +469,16 @@
         "collector": {
           "type": "string",
           "const": "github-enterprise",
-          "x-slakkr-default-id": "github-enterprise",
-          "x-slakkr-display-name": "GitHub Enterprise activity"
+          "x-docent-default-id": "github-enterprise",
+          "x-docent-display-name": "GitHub Enterprise activity"
         },
         "target": {
           "type": "object",
           "properties": {
             "username": {
               "type": "string",
-              "x-slakkr-prompt": "GitHub Enterprise username (leave empty for authenticated user)",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "GitHub Enterprise username (leave empty for authenticated user)",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -491,13 +491,13 @@
             "base_url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-prompt": "GitHub Enterprise base URL",
-              "x-slakkr-validator": "url"
+              "x-docent-prompt": "GitHub Enterprise base URL",
+              "x-docent-validator": "url"
             },
             "followed_repos": {
               "type": "string",
-              "x-slakkr-prompt": "Comma-separated owner/repo list to include when scope=all",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Comma-separated owner/repo list to include when scope=all",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "required": ["base_url"],
@@ -510,9 +510,9 @@
           "properties": {
             "token": {
               "type": "string",
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_GITHUB_TOKEN",
-              "x-slakkr-prompt": "Env var for GitHub token (optional; gh auth also works)"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_GITHUB_TOKEN",
+              "x-docent-prompt": "Env var for GitHub token (optional; gh auth also works)"
             }
           },
           "additionalProperties": {
@@ -528,16 +528,16 @@
         "collector": {
           "type": "string",
           "const": "gitea",
-          "x-slakkr-default-id": "gitea",
-          "x-slakkr-display-name": "Gitea"
+          "x-docent-default-id": "gitea",
+          "x-docent-display-name": "Gitea"
         },
         "target": {
           "type": "object",
           "properties": {
             "owner": {
               "type": "string",
-              "x-slakkr-prompt": "User or organization (leave empty for authenticated user)",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "User or organization (leave empty for authenticated user)",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -550,13 +550,13 @@
             "base_url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-prompt": "Gitea base URL",
-              "x-slakkr-validator": "url"
+              "x-docent-prompt": "Gitea base URL",
+              "x-docent-validator": "url"
             },
             "followed_repos": {
               "type": "string",
-              "x-slakkr-prompt": "Comma-separated owner/repo (or bare owner) list to include when scope=all",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Comma-separated owner/repo (or bare owner) list to include when scope=all",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "required": ["base_url"],
@@ -570,9 +570,9 @@
             "token": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_GITEA_TOKEN",
-              "x-slakkr-prompt": "Env var name for Gitea API token"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_GITEA_TOKEN",
+              "x-docent-prompt": "Env var name for Gitea API token"
             }
           },
           "required": ["token"],
@@ -589,8 +589,8 @@
         "collector": {
           "type": "string",
           "const": "jira",
-          "x-slakkr-default-id": "jira",
-          "x-slakkr-display-name": "Jira"
+          "x-docent-default-id": "jira",
+          "x-docent-display-name": "Jira"
         },
         "config": {
           "type": "object",
@@ -598,17 +598,17 @@
             "base_url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-prompt": "Jira site base URL",
-              "x-slakkr-validator": "url"
+              "x-docent-prompt": "Jira site base URL",
+              "x-docent-validator": "url"
             },
             "query": {
               "type": "string",
-              "x-slakkr-prompt": "Optional JQL filter (default: issues you assign/report/watch)"
+              "x-docent-prompt": "Optional JQL filter (default: issues you assign/report/watch)"
             },
             "followed_projects": {
               "type": "string",
-              "x-slakkr-prompt": "Comma-separated Jira project keys to include when scope=all",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Comma-separated Jira project keys to include when scope=all",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "required": ["base_url"],
@@ -622,9 +622,9 @@
             "pat": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_JIRA_PAT",
-              "x-slakkr-prompt": "Env var for Jira Personal Access Token"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_JIRA_PAT",
+              "x-docent-prompt": "Env var for Jira Personal Access Token"
             }
           },
           "required": ["pat"],
@@ -641,8 +641,8 @@
         "collector": {
           "type": "string",
           "const": "google-calendar",
-          "x-slakkr-default-id": "google-calendar",
-          "x-slakkr-display-name": "Google Calendar (iCal)"
+          "x-docent-default-id": "google-calendar",
+          "x-docent-display-name": "Google Calendar (iCal)"
         },
         "config": {
           "type": "object",
@@ -650,12 +650,12 @@
             "ical_url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-prompt": "Secret iCal URL (only if not using env)"
+              "x-docent-prompt": "Secret iCal URL (only if not using env)"
             },
             "url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-prompt": "Alternate: calendar URL key url"
+              "x-docent-prompt": "Alternate: calendar URL key url"
             }
           },
           "additionalProperties": {
@@ -668,16 +668,16 @@
             "ical_url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_GOOGLE_CALENDAR_ICAL_URL",
-              "x-slakkr-prompt": "Env var holding secret iCal URL"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_GOOGLE_CALENDAR_ICAL_URL",
+              "x-docent-prompt": "Env var holding secret iCal URL"
             },
             "url": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_GOOGLE_CALENDAR_URL",
-              "x-slakkr-prompt": "Env var holding calendar URL (alias)"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_GOOGLE_CALENDAR_URL",
+              "x-docent-prompt": "Env var holding calendar URL (alias)"
             }
           },
           "additionalProperties": {
@@ -728,9 +728,9 @@
                 "ical_url": {
                   "type": "string",
                   "minLength": 1,
-                  "x-slakkr-secret": true,
-                  "x-slakkr-default": "SLAKKR_GOOGLE_CALENDAR_ICAL_URL",
-                  "x-slakkr-prompt": "Env var holding secret iCal URL"
+                  "x-docent-secret": true,
+                  "x-docent-default": "DOCENT_GOOGLE_CALENDAR_ICAL_URL",
+                  "x-docent-prompt": "Env var holding secret iCal URL"
                 }
               },
               "additionalProperties": {
@@ -749,9 +749,9 @@
                 "url": {
                   "type": "string",
                   "minLength": 1,
-                  "x-slakkr-secret": true,
-                  "x-slakkr-default": "SLAKKR_GOOGLE_CALENDAR_URL",
-                  "x-slakkr-prompt": "Env var holding calendar URL (alias)"
+                  "x-docent-secret": true,
+                  "x-docent-default": "DOCENT_GOOGLE_CALENDAR_URL",
+                  "x-docent-prompt": "Env var holding calendar URL (alias)"
                 }
               },
               "additionalProperties": {
@@ -769,32 +769,32 @@
         "collector": {
           "type": "string",
           "const": "slack",
-          "x-slakkr-default-id": "slack",
-          "x-slakkr-display-name": "Slack"
+          "x-docent-default-id": "slack",
+          "x-docent-display-name": "Slack"
         },
         "config": {
           "type": "object",
           "properties": {
             "followed_channels": {
               "type": "string",
-              "x-slakkr-prompt": "Comma-separated channel names (#team) or IDs to include when scope=all",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Comma-separated channel names (#team) or IDs to include when scope=all",
+              "x-docent-setup-skip-prompt": true
             },
             "user_id": {
               "type": "string",
-              "x-slakkr-prompt": "Override Slack user ID (leave empty to resolve via auth.test)",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "Override Slack user ID (leave empty to resolve via auth.test)",
+              "x-docent-setup-skip-prompt": true
             },
             "history_concurrency": {
               "type": "string",
               "pattern": "^[0-9]+$",
-              "x-slakkr-prompt": "How many DM/MPIM history requests to run in parallel (default 4, max 16)",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "How many DM/MPIM history requests to run in parallel (default 4, max 16)",
+              "x-docent-setup-skip-prompt": true
             },
             "dm_discovery": {
               "type": "string",
-              "x-slakkr-prompt": "DM discovery: 'auto' (default) finds active DMs via search; 'off' polls every DM",
-              "x-slakkr-setup-skip-prompt": true
+              "x-docent-prompt": "DM discovery: 'auto' (default) finds active DMs via search; 'off' polls every DM",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
@@ -807,9 +807,9 @@
             "token": {
               "type": "string",
               "minLength": 1,
-              "x-slakkr-secret": true,
-              "x-slakkr-default": "SLAKKR_SLACK_TOKEN",
-              "x-slakkr-prompt": "Env var for Slack user OAuth token (xoxp-...)"
+              "x-docent-secret": true,
+              "x-docent-default": "DOCENT_SLACK_TOKEN",
+              "x-docent-prompt": "Env var for Slack user OAuth token (xoxp-...)"
             }
           },
           "required": ["token"],
@@ -826,7 +826,7 @@
         "collector": {
           "type": "string",
           "const": "webhook",
-          "x-slakkr-display-name": "Webhook inbox"
+          "x-docent-display-name": "Webhook inbox"
         }
       },
       "required": ["collector"]
@@ -837,18 +837,18 @@
         "collector": {
           "type": "string",
           "const": "docent-wm",
-          "x-slakkr-display-name": "Local docent-wm"
+          "x-docent-display-name": "Local docent-wm"
         },
         "config": {
           "type": "object",
           "properties": {
             "base_url": {
               "type": "string",
-              "x-slakkr-prompt": "docent-wm HTTP base URL (e.g. http://127.0.0.1:39788)"
+              "x-docent-prompt": "docent-wm HTTP base URL (e.g. http://127.0.0.1:39788)"
             },
             "machine": {
               "type": "string",
-              "x-slakkr-prompt": "Machine label reported with live windows"
+              "x-docent-prompt": "Machine label reported with live windows"
             }
           },
           "additionalProperties": {

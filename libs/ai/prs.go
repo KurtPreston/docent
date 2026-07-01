@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/kurt/slakkr-ai/libs/collectors"
+	"github.com/KurtPreston/docent/libs/collectors"
 )
 
 // prsModeID is the built-in execution-mode id that this renderer serves.

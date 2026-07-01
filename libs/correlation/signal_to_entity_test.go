@@ -3,7 +3,7 @@ package correlation
 import (
 	"testing"
 
-	"github.com/kurt/slakkr-ai/libs/model"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 func TestSignalToEntityLinksTicket(t *testing.T) {

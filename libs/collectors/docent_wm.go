@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
-	"github.com/kurt/slakkr-ai/libs/wmclient"
+	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/wmclient"
 )
 
 // DocentWMCollector polls a docent-wm REST service for live Cursor windows.

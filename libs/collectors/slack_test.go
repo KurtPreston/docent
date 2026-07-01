@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // slackTestRequest captures one inbound API call so tests can assert what
@@ -76,7 +76,7 @@ func newSlackDirective() userdata.Directive {
 		Enabled:   true,
 		Config:    map[string]string{},
 		CredentialRefs: map[string]string{
-			"token": "SLAKKR_SLACK_TEST_TOKEN",
+			"token": "DOCENT_SLACK_TEST_TOKEN",
 		},
 	}
 }
@@ -191,7 +191,7 @@ func TestSlackValidateDirectiveMissingToken(t *testing.T) {
 }
 
 func TestSlackValidateDirectiveEmptyEnv(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "")
 	c := SlackCollector{Clock: time.Now}
 	issues := c.ValidateDirective(context.Background(), newSlackDirective(), &ValidateOpts{})
 	if len(issues) != 1 || !strings.Contains(issues[0].Message, "is empty") {
@@ -200,7 +200,7 @@ func TestSlackValidateDirectiveEmptyEnv(t *testing.T) {
 }
 
 func TestSlackValidateDirectiveInvalidAuth(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-bad")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-bad")
 	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
 		return http.StatusOK, map[string]any{"ok": false, "error": "invalid_auth"}
 	})
@@ -212,7 +212,7 @@ func TestSlackValidateDirectiveInvalidAuth(t *testing.T) {
 }
 
 func TestSlackValidateDirectiveBotTokenWarn(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxb-bot")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxb-bot")
 	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
 		return http.StatusOK, slackOK(map[string]any{
 			"url":     "https://acme.slack.com/",
@@ -231,7 +231,7 @@ func TestSlackValidateDirectiveBotTokenWarn(t *testing.T) {
 }
 
 func TestSlackValidateDirectiveOK(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
 		return http.StatusOK, authTestPayload("U_SELF")
 	})
@@ -242,7 +242,7 @@ func TestSlackValidateDirectiveOK(t *testing.T) {
 }
 
 func TestSlackCollectScopeSelf(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -333,7 +333,7 @@ func TestSlackCollectScopeSelf(t *testing.T) {
 }
 
 func TestSlackCollectScopeInvolvedAddsThreadAndContext(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -440,7 +440,7 @@ func TestSlackCollectScopeInvolvedAddsThreadAndContext(t *testing.T) {
 }
 
 func TestSlackCollectScopeAllAddsFollowedChannels(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -509,7 +509,7 @@ func TestSlackCollectScopeAllAddsFollowedChannels(t *testing.T) {
 }
 
 func TestSlackCollectDeduplicatesAcrossSources(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -602,7 +602,7 @@ func TestSlackRegistryRegisters(t *testing.T) {
 // optimization: DMs with deactivated peers and archived MPIMs should not
 // produce any conversations.history calls.
 func TestSlackCollectSkipsDeletedAndArchivedDMs(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -673,7 +673,7 @@ func TestSlackCollectSkipsDeletedAndArchivedDMs(t *testing.T) {
 // a transient 429 is followed by a success and the caller never sees the
 // failure.
 func TestSlackCallAPIRetriesOn429(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -751,7 +751,7 @@ func TestSlackCallAPIGivesUpAfterMaxRetries(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip: backoff schedule sleeps ~15s of real time")
 	}
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -805,7 +805,7 @@ func TestSlackCallAPIGivesUpAfterMaxRetries(t *testing.T) {
 // (no requests are dropped or duplicated) and the worker-count bound
 // (in-flight requests never exceed history_concurrency).
 func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -887,7 +887,7 @@ func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
 // conversations.list reports but conversations.history can't read
 // (e.g. channel_not_found) must not abort the whole run.
 func TestSlackCollectTolerablePerChannelHistoryErrors(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -958,7 +958,7 @@ func TestSlackCollectTolerablePerChannelHistoryErrors(t *testing.T) {
 // non-tolerable Slack error codes still surface up — we don't want the
 // retry path to silently swallow auth failures or missing scopes.
 func TestSlackCollectIntolerableSlackErrorStillFails(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -1045,7 +1045,7 @@ func TestSlackHistoryConcurrencyParsing(t *testing.T) {
 // the same userdata dir and asserts the second run reuses the cached
 // author identity from disk instead of re-issuing users.info.
 func TestSlackCollectCachesUserIdentities(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	const userID = "U_SELF"
 	now1 := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 
@@ -1116,7 +1116,7 @@ func TestSlackCollectCachesUserIdentities(t *testing.T) {
 // discovery path: only IMs returned by the to:<@me> search are polled,
 // MPIMs are always polled, and idle IMs are skipped.
 func TestSlackCollectDMDiscoveryPrunesInactiveIMs(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -1203,7 +1203,7 @@ func TestSlackCollectDMDiscoveryPrunesInactiveIMs(t *testing.T) {
 // discovery search fails (e.g. free-tier not_allowed_token_type), the
 // collector falls back to polling every DM rather than dropping any.
 func TestSlackCollectDMDiscoveryFallsBackOnSearchError(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -1253,7 +1253,7 @@ func TestSlackCollectDMDiscoveryFallsBackOnSearchError(t *testing.T) {
 // TestSlackCollectDMDiscoveryPaginates verifies the discovery search walks
 // every page of to:<@me> results before deciding which IMs to poll.
 func TestSlackCollectDMDiscoveryPaginates(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"
@@ -1355,7 +1355,7 @@ func TestSlackRetryAfterParsing(t *testing.T) {
 // makes Collect return the messages it had already gathered with a nil
 // error, rather than discarding them behind a context-cancelled error.
 func TestSlackCollectAbortReturnsPartial(t *testing.T) {
-	t.Setenv("SLAKKR_SLACK_TEST_TOKEN", "xoxp-good")
+	t.Setenv("DOCENT_SLACK_TEST_TOKEN", "xoxp-good")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-7 * 24 * time.Hour)
 	const userID = "U_SELF"

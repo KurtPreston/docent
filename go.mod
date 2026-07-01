@@ -1,4 +1,4 @@
-module github.com/kurt/slakkr-ai
+module github.com/KurtPreston/docent
 
 go 1.22
 

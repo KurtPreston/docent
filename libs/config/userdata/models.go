@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/executionmode"
+	"github.com/KurtPreston/docent/libs/config/executionmode"
 )
 
 const DefaultDir = "userdata"

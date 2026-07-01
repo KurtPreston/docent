@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/ai"
-	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/libs/config/executionmode"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/ai"
+	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/executionmode"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // directiveStatusTracker captures the latest known progress event per
@@ -74,7 +74,7 @@ func writeRunLogHeader(w io.Writer, now time.Time, resolved executionmode.Resolv
 	if w == nil {
 		return
 	}
-	fmt.Fprintf(w, "# slakkr run %s\n\n", now.UTC().Format(time.RFC3339))
+	fmt.Fprintf(w, "# docent run %s\n\n", now.UTC().Format(time.RFC3339))
 	fmt.Fprintln(w, "## Mode")
 	fmt.Fprintf(w, "  id:           %s\n", resolved.ModeID)
 	fmt.Fprintf(w, "  name:         %s\n", resolved.ModeName)
