@@ -108,12 +108,9 @@ local function show()
               id = "openDashboard",
               label = "Open ↗",
               tooltip = "Open the dashboard in your system browser",
-              selectable = true,
+              fn = function() openDashboard() end,
             },
           })
-        :setCallback(function(_, itemId)
-            if itemId == "openDashboard" then openDashboard() end
-          end)
       chooser:attachedToolbar(toolbar)
     end
     chooser:choices(choices)
