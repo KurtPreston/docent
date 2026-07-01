@@ -45,7 +45,7 @@ func TestRegistryCapabilities(t *testing.T) {
 		wantState   bool
 		wantEvents  bool
 	}{
-		{"docent-wm", true, false},
+		{"wsm", true, false},
 		{"slack", false, true},
 		{"local-git", false, true},
 		{"google-calendar", false, true},

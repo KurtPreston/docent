@@ -492,7 +492,7 @@ func SignalToEntity(s model.Signal, cfg Config) model.Entity {
 	if !s.ObservedAt.IsZero() {
 		ent.State["observedAt"] = s.ObservedAt.UTC().Format(time.RFC3339Nano)
 	}
-	if s.Kind == "session" || s.Source == "docent-wm" {
+	if s.Kind == "session" || s.Source == "wsm" {
 		ent.Kind = "session"
 		if s.Fields != nil {
 			if wid := s.Fields["window_id"]; wid != "" {

@@ -1061,7 +1061,7 @@ func EnsureDirectives(d []userdata.Directive) []userdata.Directive {
 		if dir.Collector == "webhook" {
 			hasWebhook = true
 		}
-		if dir.Collector == "docent-wm" {
+		if dir.Collector == "wsm" {
 			hasWM = true
 		}
 	}
@@ -1075,7 +1075,7 @@ func EnsureDirectives(d []userdata.Directive) []userdata.Directive {
 	}
 	if !hasWM {
 		out = append(out, userdata.Directive{
-			ID: "local-wm", Name: "Local docent-wm", Collector: "docent-wm", Enabled: true,
+			ID: "local-wm", Name: "Local wsm", Collector: "wsm", Enabled: true,
 			Config: map[string]string{"base_url": "http://127.0.0.1:39788", "machine": "local"},
 			// Live windows are real-time and cheap: collect on load and on
 			// every request.
