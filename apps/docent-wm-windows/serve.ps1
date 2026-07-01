@@ -6,10 +6,10 @@
 #   POST /focus  {name|id, host?}      -> { ok, action, name } | 404
 #   POST /open   {host, path, name, uri?} -> { ok, action, name }
 #
-# Real window control is provided by the ported PowerShell helpers in
-# ../../docent-port (Logging/Native/Desktop/Window). When those are missing the
-# service still answers /health and returns an empty /windows list so docentd
-# degrades gracefully. VirtualDesktop is optional: focus/open fall back to plain
+# Real window control is provided by the PowerShell helpers in lib/
+# (Logging/Native/Desktop/Window). When those are missing the service still
+# answers /health and returns an empty /windows list so docentd degrades
+# gracefully. VirtualDesktop is optional: focus/open fall back to plain
 # foregrounding when it is not installed.
 #
 # Port from -Port or env DOCENT_WM_PORT (default 39788).
@@ -25,18 +25,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $prefix = "http://127.0.0.1:$Port/"
 
-# --- load the ported window-control helpers --------------------------------
-$docentPort = Join-Path $PSScriptRoot '../../docent-port'
+# --- load window-control helpers -------------------------------------------
+$libDir = Join-Path $PSScriptRoot 'lib'
 $script:HaveWindowHelpers = $false
 foreach ($f in @('Logging.ps1', 'Native.ps1', 'Desktop.ps1', 'Window.ps1')) {
-    $p = Join-Path $docentPort $f
+    $p = Join-Path $libDir $f
     if (Test-Path -LiteralPath $p) { . $p }
 }
 if (Get-Command Get-DocentCursorWindows -ErrorAction SilentlyContinue) {
     $script:HaveWindowHelpers = $true
 }
 else {
-    Write-Warning "docent-port window helpers not found under $docentPort; /windows will be empty and /focus,/open are no-ops."
+    Write-Warning "window helpers not found under $libDir; /windows will be empty and /focus,/open are no-ops."
 }
 
 # Config object the Window.ps1 helpers expect.

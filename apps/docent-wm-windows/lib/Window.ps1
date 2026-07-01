@@ -2,12 +2,8 @@ Set-StrictMode -Version Latest
 
 # Windows window manager: enumerate live Cursor windows, launch a remote Cursor
 # window and reliably find its HWND, plus focus/match helpers keyed on the
-# worktree folder name.
-#
-# Ported from docent-powershell/src/Private/Window.ps1 (+ ConvertFrom-DocentCursorTitle
-# from Feeds.ps1) so docent-wm-windows can serve /windows, /focus, and /open
-# without the full legacy module. Depends on Native.ps1 + Desktop.ps1 +
-# Logging.ps1 being dot-sourced first.
+# worktree folder name. Depends on Native.ps1 + Desktop.ps1 + Logging.ps1 being
+# dot-sourced first.
 
 # Locate Cursor.exe: explicit config wins, then the standard per-user install.
 function Resolve-DocentCursorExe {

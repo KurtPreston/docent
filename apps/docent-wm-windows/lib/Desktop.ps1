@@ -5,11 +5,10 @@ Set-StrictMode -Version Latest
 # NAME, not index, so they survive reshuffles when desktops are added/removed.
 # Windows backend only.
 #
-# Ported from docent-powershell/src/Private/Desktop.ps1. Unlike the legacy
-# module, docent-wm treats virtual-desktop support as OPTIONAL: every wrapper
-# tolerates a missing module so /windows + /focus still work (foreground only)
-# on a box without VirtualDesktop installed. Desktop placement/switching is a
-# best-effort enhancement layered on top.
+# Virtual-desktop support is OPTIONAL: every wrapper tolerates a missing module
+# so /windows + /focus still work (foreground only) on a box without
+# VirtualDesktop installed. Desktop placement/switching is a best-effort
+# enhancement layered on top.
 
 function Test-DocentVirtualDesktopAvailable {
     if (Get-Module -Name VirtualDesktop) { return $true }

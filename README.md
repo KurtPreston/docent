@@ -295,11 +295,11 @@ at. Same contract on both platforms (default port **39788**):
 - **`docent-wm-macos`** (`apps/docent-wm-macos/`) — Go service; window control via
   the `cursor` CLI + `osascript`. Window-only (never creates/switches Spaces).
 - **`docent-wm-windows`** (`apps/docent-wm-windows/serve.ps1`) — PowerShell service
-  backed by the ported Win32 helpers in `docent-port/` (`Logging`/`Native`/`Desktop`/`Window`).
+  backed by Win32 helpers in `apps/docent-wm-windows/lib/` (`Logging`/`Native`/`Desktop`/`Window`).
   Uses the optional `VirtualDesktop` module to place a window on a desktop named
   after the workspace, falling back to plain foregrounding when it isn't installed.
-  If the `docent-port` helpers are missing it still answers `/health` and returns an
-  empty `/windows` list so `docentd` degrades gracefully.
+  If the helpers are missing it still answers `/health` and returns an empty
+  `/windows` list so `docentd` degrades gracefully.
 
 ### Cursor hooks → docentd
 
@@ -364,7 +364,6 @@ Per-OS installers build the relevant binaries, write config into
 - `apps/docentd/` — daemon + dashboard
 - `apps/docent-wm-macos/`, `apps/docent-wm-windows/` — local window-manager REST services
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
-- `docent-port/` — ported Win32/PowerShell window-control helpers used by `docent-wm-windows`
 - `hooks/` — Cursor hook (`docent-notify.sh`) + snippet that report sessions to `docentd`
 - `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers
 - `~/.config/docent/` — `config.yaml`, `docentd.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)

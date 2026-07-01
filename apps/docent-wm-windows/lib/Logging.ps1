@@ -1,9 +1,7 @@
-# Minimal stderr logging shim for the ported Windows window-control helpers.
-# Mirrors the docent-powershell logger API (Write-DocentDebug/Info/Warn/Error)
-# but is self-contained so docent-wm-windows can dot-source the helpers without
-# pulling in the whole legacy module. Level is controlled by DOCENT_LOG_LEVEL
-# (debug|info|warn|error); everything goes to stderr so stdout/HTTP bodies stay
-# clean.
+# Minimal stderr logging shim for the Windows window-control helpers.
+# Mirrors the docent-powershell logger API (Write-DocentDebug/Info/Warn/Error).
+# Level is controlled by DOCENT_LOG_LEVEL (debug|info|warn|error); everything
+# goes to stderr so stdout/HTTP bodies stay clean.
 
 $script:DocentLogLevels = @{ debug = 0; info = 1; warn = 2; error = 3 }
 

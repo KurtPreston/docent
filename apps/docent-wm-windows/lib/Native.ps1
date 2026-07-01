@@ -4,9 +4,6 @@ Set-StrictMode -Version Latest
 # need full window enumeration (not just Process.MainWindowHandle) because
 # Electron apps like Cursor host multiple windows under a single process, and
 # the freshly-opened remote window may not be the "main" one.
-#
-# Ported from docent-powershell/src/Private/Native.ps1 so docent-wm-windows can
-# enumerate/focus/close Cursor windows without the full legacy module.
 
 function Initialize-DocentNative {
     if (([System.Management.Automation.PSTypeName]'Docent.NativeMethods').Type) { return }
