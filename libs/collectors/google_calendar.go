@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 type GoogleCalendarCollector struct {
@@ -178,7 +178,7 @@ func calendarIcalHTTPError(res *http.Response) error {
 	}
 	switch res.StatusCode {
 	case http.StatusForbidden:
-		return fmt.Errorf("iCal feed returned 403 Forbidden. Google is rejecting this URL: the secret link may be invalid, reset, or revoked. Re-copy \"Secret address in iCal format\" from the calendar's settings (Integrate calendar) into userdata/.env (or the matching SLAKKR_*_ICAL_URL in your environment)")
+		return fmt.Errorf("iCal feed returned 403 Forbidden. Google is rejecting this URL: the secret link may be invalid, reset, or revoked. Re-copy \"Secret address in iCal format\" from the calendar's settings (Integrate calendar) into userdata/.env (or the matching DOCENT_*_ICAL_URL in your environment)")
 	case http.StatusNotFound:
 		return fmt.Errorf("iCal feed returned 404 Not Found: the URL may be wrong or the calendar export was removed")
 	case http.StatusUnauthorized:

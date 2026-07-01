@@ -1,5 +1,5 @@
 // Package runlog owns the per-run log directory that captures every
-// outbound activity slakkr performs. A single Run anchors:
+// outbound activity docent performs. A single Run anchors:
 //
 //   - a top-level run.log capturing the resolved mode/options and a
 //     post-collection summary,

@@ -3,7 +3,7 @@ package ai
 import (
 	"strings"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // SelectProvider returns the AI implementation described by userdata config.

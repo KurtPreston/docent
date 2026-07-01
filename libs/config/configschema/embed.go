@@ -6,4 +6,4 @@ import _ "embed"
 var SchemaBytes []byte
 
 // SchemaURL matches $id in config.schema.json (used by the JSON Schema compiler).
-const SchemaURL = "https://slakkr.local/config.schema.json"
+const SchemaURL = "https://docent.local/config.schema.json"

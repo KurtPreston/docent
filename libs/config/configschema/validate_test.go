@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kurt/slakkr-ai/libs/config/configschema"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/configschema"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,7 +39,7 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 					t.Fatalf("activity_formatter enums: %+v", tf.Enum)
 				}
 				if !tf.SkipSetupPrompt {
-					t.Fatal("expected activity_formatter x-slakkr-setup-skip-prompt")
+					t.Fatal("expected activity_formatter x-docent-setup-skip-prompt")
 				}
 			}
 		}
@@ -55,7 +55,7 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 		for _, f := range br.Fields {
 			if br.Collector == "github" && f.Section == configschema.SectionTarget && f.Key == "username" {
 				if !f.SkipSetupPrompt {
-					t.Fatal("expected github target.username x-slakkr-setup-skip-prompt")
+					t.Fatal("expected github target.username x-docent-setup-skip-prompt")
 				}
 				ghUserSkips++
 			}
@@ -299,7 +299,7 @@ directives:
     target:
       username: someone-else
     credential_refs:
-      token: SLAKKR_GITHUB_TOKEN`,
+      token: DOCENT_GITHUB_TOKEN`,
 		},
 		{
 			name: "github-enterprise",
@@ -327,7 +327,7 @@ directives:
     config:
       base_url: https://gitea.example
     credential_refs:
-      token: SLAKKR_GITEA_TOKEN`,
+      token: DOCENT_GITEA_TOKEN`,
 		},
 		{
 			name: "gitea-explicit-owner",
@@ -344,7 +344,7 @@ directives:
     config:
       base_url: https://gitea.example
     credential_refs:
-      token: SLAKKR_GITEA_TOKEN`,
+      token: DOCENT_GITEA_TOKEN`,
 		},
 		{
 			name: "jira-pat",
@@ -360,7 +360,7 @@ directives:
       base_url: https://your-domain.atlassian.net
       query: project = FOO
     credential_refs:
-      pat: SLAKKR_JIRA_PAT`,
+      pat: DOCENT_JIRA_PAT`,
 		},
 		{
 			name: "google-calendar-env",
@@ -373,7 +373,7 @@ directives:
     collector: google-calendar
     enabled: true
     credential_refs:
-      ical_url: SLAKKR_GOOGLE_CALENDAR_ICAL_URL`,
+      ical_url: DOCENT_GOOGLE_CALENDAR_ICAL_URL`,
 		},
 	}
 

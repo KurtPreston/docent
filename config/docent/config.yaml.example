@@ -22,4 +22,4 @@ directives:
   #   target:
   #     username: me
   #   credential_refs:
-  #     token: SLAKKR_GITHUB_TOKEN
+  #     token: DOCENT_GITHUB_TOKEN

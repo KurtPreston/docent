@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 type GiteaCollector struct {
@@ -574,7 +574,7 @@ func (c GiteaCollector) ValidateDirective(ctx context.Context, directive userdat
 		return []ValidationIssue{{
 			Field:       "credential_refs.token",
 			Message:     "Gitea token credential is not configured",
-			Remediation: "add credential_refs.token (e.g. SLAKKR_GITEA_TOKEN) and put the value in userdata/.env",
+			Remediation: "add credential_refs.token (e.g. DOCENT_GITEA_TOKEN) and put the value in userdata/.env",
 		}}
 	}
 	userdataDir := ""

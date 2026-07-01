@@ -3,7 +3,7 @@
 The `slack` collector pulls Slack messages relevant to the configured user
 (DMs, mentions, your own posts, and — at higher scopes — surrounding
 threads/channels). It authenticates with a **Slack User OAuth token**
-(`xoxp-...`); a Bot token (`xoxb-...`) will not work and `slakkr --check`
+(`xoxp-...`); a Bot token (`xoxb-...`) will not work and `docent-setup check`
 rejects it explicitly because bot tokens cannot read your DMs or run
 `from:@me` searches.
 
@@ -32,7 +32,7 @@ the formatter (`#team-foo`, `dm:alice`, `mpim:alice,bob`).
 ### 1. Create a Slack app
 
 1. Go to <https://api.slack.com/apps> and click **Create New App** → **From scratch**.
-2. Name it something like `slakkr-personal` and pick the workspace you want activity from. (You need one app per workspace; add a second `slack` directive if you collect from multiple workspaces.)
+2. Name it something like `docent-personal` and pick the workspace you want activity from. (You need one app per workspace; add a second `slack` directive if you collect from multiple workspaces.)
 
 ### 2. Add user-token scopes
 
@@ -49,7 +49,7 @@ Token Scopes"), add all of these:
 
 The `slackTokenScopesRemediation` constant in
 [`internal/collectors/slack.go`](../internal/collectors/slack.go) is the
-source of truth for this list — `slakkr --check` will print it back at
+source of truth for this list — `docent-setup check` will print it back at
 you if a scope is missing.
 
 ### 3. Install the app to the workspace
@@ -59,20 +59,20 @@ Approve the OAuth consent screen. After install, the page shows two tokens;
 copy the one labeled **User OAuth Token** (it starts with `xoxp-...`). The
 `xoxb-...` Bot User token will *not* work.
 
-### 4. Wire it into slakkr
+### 4. Wire it into docent
 
 Drop the token into `userdata/.env` (the file `userdata.ResolveEnv` reads from):
 
 ```sh
-SLAKKR_SLACK_TOKEN=xoxp-XXXXXXXXXXXX-XXXXXXXXXXXX-...
+DOCENT_SLACK_TOKEN=xoxp-XXXXXXXXXXXX-XXXXXXXXXXXX-...
 ```
 
 The default directive in `userdata/config.yaml` already references this env
-var via `credential_refs.token: SLAKKR_SLACK_TOKEN`. Flip its
+var via `credential_refs.token: DOCENT_SLACK_TOKEN`. Flip its
 `enabled: false` to `true`, then verify with:
 
 ```sh
-slakkr --check
+docent-setup check
 ```
 
 A clean run means `auth.test` succeeded with a user token and all your
@@ -106,7 +106,7 @@ scopes resolved.
     # back to the full fan-out automatically.
     dm_discovery: "auto"
   credential_refs:
-    token: SLAKKR_SLACK_TOKEN
+    token: DOCENT_SLACK_TOKEN
 ```
 
 ## Caching
@@ -228,5 +228,5 @@ collector — same as the other forge/ticket collectors documented in
   page), then reinstall and replace the value in `userdata/.env`.
 - **Multiple workspaces.** One Slack token = one workspace. Add a
   second directive with a different `id` (e.g. `slack-other`) and a
-  different env var (e.g. `SLAKKR_SLACK_OTHER_TOKEN`) to collect from
+  different env var (e.g. `DOCENT_SLACK_OTHER_TOKEN`) to collect from
   more than one workspace in the same run.

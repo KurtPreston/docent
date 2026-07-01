@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
-	"github.com/kurt/slakkr-ai/libs/correlation"
+	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/correlation"
 )
 
 type LocalGitCollector struct {

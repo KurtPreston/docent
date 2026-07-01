@@ -4,10 +4,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kurt/slakkr-ai/libs/config/configschema"
-	"github.com/kurt/slakkr-ai/libs/config/docentconfig"
-	"github.com/kurt/slakkr-ai/libs/config/executionmode"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/configschema"
+	"github.com/KurtPreston/docent/libs/config/docentconfig"
+	"github.com/KurtPreston/docent/libs/config/executionmode"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,7 +21,7 @@ type DaemonConfig struct {
 	ConfigDir      string `yaml:"configDir"`              // ~/.config/docent — config.yaml + .env
 	BindHost       string `yaml:"bindHost"`               // listen interface; default 0.0.0.0 when token set, else 127.0.0.1
 	UserdataDir    string `yaml:"userdataDir,omitempty"`  // deprecated alias for configDir
-	SlakkrConfig   string `yaml:"slakkrConfig,omitempty"` // optional extra config from slakkr userdata
+	ExtraConfig    string `yaml:"extraConfig,omitempty"`  // optional extra config file merged in
 	DocentWMURL    string `yaml:"docentWmUrl"`            // local wm URL injected into dashboard
 	OnClickScript  string `yaml:"onClickScript"`          // hook run when a work-item is launched from the dashboard
 	SSHHost        string `yaml:"sshHost"`                // optional ssh alias for remote editor open (DOCENT_HOST)
@@ -123,17 +123,17 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 	if len(cfg.ExecutionModes) == 0 {
 		cfg.ExecutionModes = file.ExecutionModes
 	}
-	if cfg.SlakkrConfig != "" {
-		slakkr, err := loadConfigFile(cfg.SlakkrConfig)
+	if cfg.ExtraConfig != "" {
+		extra, err := loadConfigFile(cfg.ExtraConfig)
 		if err != nil {
 			return err
 		}
-		cfg.Directives = append(cfg.Directives, slakkr.Directives...)
+		cfg.Directives = append(cfg.Directives, extra.Directives...)
 		if cfg.AI.Provider == "" {
-			cfg.AI = slakkr.AI
+			cfg.AI = extra.AI
 		}
 		if len(cfg.ExecutionModes) == 0 {
-			cfg.ExecutionModes = slakkr.ExecutionModes
+			cfg.ExecutionModes = extra.ExecutionModes
 		}
 	}
 	return nil

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/collectors"
+	"github.com/KurtPreston/docent/libs/collectors"
 )
 
 func TestRepoChronologicalFormatter(t *testing.T) {

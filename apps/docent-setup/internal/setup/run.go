@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/kurt/slakkr-ai/libs/config/configschema"
-	"github.com/kurt/slakkr-ai/libs/config/docentconfig"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/configschema"
+	"github.com/KurtPreston/docent/libs/config/docentconfig"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )

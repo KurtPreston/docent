@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // Deps bundles dependencies for running collectors (CLI and tests).

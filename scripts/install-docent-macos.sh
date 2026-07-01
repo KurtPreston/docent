@@ -203,8 +203,8 @@ fi
 
 DOCENTD_BIN="$BIN_DIR/docentd"
 WM_BIN="$BIN_DIR/docent-wm-macos"
-PLIST_DOCENTD="$LAUNCH_AGENTS/com.slakkr.docentd.plist"
-PLIST_WM="$LAUNCH_AGENTS/com.slakkr.docent-wm-macos.plist"
+PLIST_DOCENTD="$LAUNCH_AGENTS/com.docent.docentd.plist"
+PLIST_WM="$LAUNCH_AGENTS/com.docent.docent-wm-macos.plist"
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
   run mkdir -p "$BIN_DIR"
@@ -270,7 +270,7 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.slakkr.docentd</string>
+  <key>Label</key><string>com.docent.docentd</string>
   <key>ProgramArguments</key>
   <array>
     <string>$DOCENTD_BIN</string>
@@ -298,7 +298,7 @@ EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.slakkr.docent-wm-macos</string>
+  <key>Label</key><string>com.docent.docent-wm-macos</string>
   <key>ProgramArguments</key>
   <array>
     <string>$WM_BIN</string>
@@ -337,11 +337,11 @@ EOF
 
   log "loading launch agents"
   if [ "$DOCENTD_MODE" = local ]; then
-    reload_agent com.slakkr.docentd "$PLIST_DOCENTD"
+    reload_agent com.docent.docentd "$PLIST_DOCENTD"
   else
-    unload_agent com.slakkr.docentd "$PLIST_DOCENTD"
+    unload_agent com.docent.docentd "$PLIST_DOCENTD"
   fi
-  reload_agent com.slakkr.docent-wm-macos "$PLIST_WM"
+  reload_agent com.docent.docent-wm-macos "$PLIST_WM"
 fi
 
 install_hooks() {

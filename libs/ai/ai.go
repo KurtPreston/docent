@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/collectors"
+	"github.com/KurtPreston/docent/libs/collectors"
 )
 
 // Provider turns a single resolved execution-mode run into a Markdown document.

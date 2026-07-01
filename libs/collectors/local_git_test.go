@@ -104,12 +104,12 @@ func TestParseGitRemoteToRepositoryKey(t *testing.T) {
 		want string
 	}{
 		{"", ""},
-		{"https://github.com/kurt/slakkr-ai.git", "kurt/slakkr-ai"},
-		{"https://github.com/kurt/slakkr-ai", "kurt/slakkr-ai"},
-		{"http://gitea.example/kurt/slakkr-ai.git", "kurt/slakkr-ai"},
-		{"git@github.com:kurt/slakkr-ai.git", "kurt/slakkr-ai"},
-		{"git@github.com:kurt/slakkr-ai", "kurt/slakkr-ai"},
-		{"ssh://git@github.com/kurt/slakkr-ai.git", "kurt/slakkr-ai"},
+		{"https://github.com/kurt/docent.git", "kurt/docent"},
+		{"https://github.com/kurt/docent", "kurt/docent"},
+		{"http://gitea.example/kurt/docent.git", "kurt/docent"},
+		{"git@github.com:kurt/docent.git", "kurt/docent"},
+		{"git@github.com:kurt/docent", "kurt/docent"},
+		{"ssh://git@github.com/kurt/docent.git", "kurt/docent"},
 		{"https://github.com/org/sub/repo.git", "org/sub/repo"},
 		{"git@host:onlyone", ""},
 		{"not-a-url", ""},

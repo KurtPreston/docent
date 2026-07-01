@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
-	"github.com/kurt/slakkr-ai/libs/model"
+	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 // StatusItem is the historical name for model.Signal.

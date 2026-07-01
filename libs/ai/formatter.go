@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/collectors"
+	"github.com/KurtPreston/docent/libs/collectors"
 )
 
 const (

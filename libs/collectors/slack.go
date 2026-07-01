@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // SlackCollector pulls Slack messages relevant to the configured user.
@@ -330,7 +330,7 @@ func (p *slackProgress) emitLocked() {
 func (c SlackCollector) CollectEvents(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
 	if tokenKey == "" {
-		return nil, fmt.Errorf("slack credential missing (set credential_refs.token to a SLAKKR_SLACK_TOKEN-style env var)")
+		return nil, fmt.Errorf("slack credential missing (set credential_refs.token to a DOCENT_SLACK_TOKEN-style env var)")
 	}
 	userdataDir := ""
 	if opts != nil {

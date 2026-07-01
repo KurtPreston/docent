@@ -3,7 +3,7 @@ package userdata
 import (
 	"testing"
 
-	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/KurtPreston/docent/libs/config/configschema"
 	"gopkg.in/yaml.v3"
 )
 

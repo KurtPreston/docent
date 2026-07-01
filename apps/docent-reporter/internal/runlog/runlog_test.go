@@ -215,8 +215,8 @@ func TestRedactArg(t *testing.T) {
 	cases := map[string]string{
 		"GITHUB_TOKEN=abc":     "GITHUB_TOKEN=REDACTED",
 		"PATH=/usr/bin":        "PATH=/usr/bin",
-		"SLAKKR_API_KEY=zzz":   "SLAKKR_API_KEY=REDACTED",
-		"SLAKKR_SECRET=ssh":    "SLAKKR_SECRET=REDACTED",
+		"DOCENT_API_KEY=zzz":   "DOCENT_API_KEY=REDACTED",
+		"DOCENT_SECRET=ssh":    "DOCENT_SECRET=REDACTED",
 		"PASSWORD=hunter2":     "PASSWORD=REDACTED",
 		"AUTHORIZATION=Bearer": "AUTHORIZATION=REDACTED",
 		"foo":                  "foo",

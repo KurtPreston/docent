@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // GitHubCollector returns activity (PRs, issues, comments, commits) authored

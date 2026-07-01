@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/config"
-	"github.com/kurt/slakkr-ai/apps/docentd/internal/registry"
-	"github.com/kurt/slakkr-ai/libs/collectors"
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
-	"github.com/kurt/slakkr-ai/libs/model"
+	"github.com/KurtPreston/docent/apps/docentd/internal/config"
+	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 func newTestEngine(t *testing.T) *Engine {

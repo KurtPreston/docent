@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// WizardModel parses x-slakkr-* annotations from the embedded schema.
+// WizardModel parses x-docent-* annotations from the embedded schema.
 func WizardModel() (Model, error) {
 	var root map[string]any
 	if err := json.Unmarshal(SchemaBytes, &root); err != nil {
@@ -117,16 +117,16 @@ func extractAITopLevelEnumFields(branch *AIProviderBranch, bm map[string]any) {
 		if len(opts) == 0 {
 			continue
 		}
-		def := strings.TrimSpace(strAnnotation(vm, "x-slakkr-default", ""))
+		def := strings.TrimSpace(strAnnotation(vm, "x-docent-default", ""))
 		if def == "" {
 			def = opts[0]
 		}
 		branch.TopLevelFields = append(branch.TopLevelFields, AIField{
 			Key:             key,
-			Prompt:          strAnnotation(vm, "x-slakkr-prompt", key),
+			Prompt:          strAnnotation(vm, "x-docent-prompt", key),
 			Default:         def,
 			Enum:            opts,
-			SkipSetupPrompt: boolAnnotation(vm, "x-slakkr-setup-skip-prompt"),
+			SkipSetupPrompt: boolAnnotation(vm, "x-docent-setup-skip-prompt"),
 		})
 	}
 }
@@ -141,10 +141,10 @@ func parseDirectiveIdentitySetup(defs map[string]any) (skipID, skipName bool) {
 		return false, false
 	}
 	if idm, ok := props["id"].(map[string]any); ok {
-		skipID = boolAnnotation(idm, "x-slakkr-setup-skip-prompt")
+		skipID = boolAnnotation(idm, "x-docent-setup-skip-prompt")
 	}
 	if nm, ok := props["name"].(map[string]any); ok {
-		skipName = boolAnnotation(nm, "x-slakkr-setup-skip-prompt")
+		skipName = boolAnnotation(nm, "x-docent-setup-skip-prompt")
 	}
 	return skipID, skipName
 }
@@ -169,18 +169,18 @@ func extractAIFields(objSchema map[string]any) []AIField {
 			if key == "args" {
 				fields = append(fields, AIField{
 					Key:       key,
-					Prompt:    strAnnotation(vm, "x-slakkr-prompt", "Extra cursor-agent args (optional, comma-separated)"),
+					Prompt:    strAnnotation(vm, "x-docent-prompt", "Extra cursor-agent args (optional, comma-separated)"),
 					IsArgs:    true,
-					Validator: strAnnotation(vm, "x-slakkr-validator", ""),
+					Validator: strAnnotation(vm, "x-docent-validator", ""),
 				})
 			}
 			continue
 		}
 		fields = append(fields, AIField{
 			Key:       key,
-			Prompt:    strAnnotation(vm, "x-slakkr-prompt", key),
-			Default:   strAnnotation(vm, "x-slakkr-default", ""),
-			Validator: strAnnotation(vm, "x-slakkr-validator", ""),
+			Prompt:    strAnnotation(vm, "x-docent-prompt", key),
+			Default:   strAnnotation(vm, "x-docent-default", ""),
+			Validator: strAnnotation(vm, "x-docent-validator", ""),
 		})
 	}
 	return fields
@@ -243,24 +243,24 @@ func parseCollectorBranch(def map[string]any) (CollectorBranch, error) {
 	}
 	cb := CollectorBranch{
 		Collector:   collector,
-		DefaultID:   strAnnotation(collProp, "x-slakkr-default-id", collector),
-		DisplayName: strAnnotation(collProp, "x-slakkr-display-name", collector),
+		DefaultID:   strAnnotation(collProp, "x-docent-default-id", collector),
+		DisplayName: strAnnotation(collProp, "x-docent-display-name", collector),
 	}
 
 	if ch, ok := props["code_home"].(map[string]any); ok {
 		cb.Fields = append(cb.Fields, Field{
 			Section:   SectionTop,
 			Key:       "code_home",
-			Prompt:    strAnnotation(ch, "x-slakkr-prompt", "code_home"),
-			Default:   strAnnotation(ch, "x-slakkr-default", ""),
-			Validator: strAnnotation(ch, "x-slakkr-validator", ""),
+			Prompt:    strAnnotation(ch, "x-docent-prompt", "code_home"),
+			Default:   strAnnotation(ch, "x-docent-default", ""),
+			Validator: strAnnotation(ch, "x-docent-validator", ""),
 		})
 	}
 	if paths, ok := props["paths"].(map[string]any); ok {
 		cb.Fields = append(cb.Fields, Field{
 			Section:   SectionPaths,
 			Key:       "",
-			Prompt:    strAnnotation(paths, "x-slakkr-prompt", "paths"),
+			Prompt:    strAnnotation(paths, "x-docent-prompt", "paths"),
 			IsPaths:   true,
 			Validator: "dir-exists",
 		})
@@ -322,18 +322,18 @@ func extractLeafFields(objSchema map[string]any, section FieldSection) []Field {
 			continue
 		}
 		secret := false
-		if b, ok := vm["x-slakkr-secret"].(bool); ok {
+		if b, ok := vm["x-docent-secret"].(bool); ok {
 			secret = b
 		}
 		fields = append(fields, Field{
 			Section:         section,
 			Key:             key,
-			Prompt:          strAnnotation(vm, "x-slakkr-prompt", key),
-			Default:         strAnnotation(vm, "x-slakkr-default", ""),
+			Prompt:          strAnnotation(vm, "x-docent-prompt", key),
+			Default:         strAnnotation(vm, "x-docent-default", ""),
 			Secret:          secret,
-			Validator:       strAnnotation(vm, "x-slakkr-validator", ""),
+			Validator:       strAnnotation(vm, "x-docent-validator", ""),
 			Required:        reqSet[key],
-			SkipSetupPrompt: boolAnnotation(vm, "x-slakkr-setup-skip-prompt"),
+			SkipSetupPrompt: boolAnnotation(vm, "x-docent-setup-skip-prompt"),
 		})
 	}
 	return fields

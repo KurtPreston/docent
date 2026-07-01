@@ -44,7 +44,7 @@ type ResolveOpts struct {
 	ConfigActivityFormatter string
 }
 
-// ResolvedRun is the fully-resolved description of a single slakkr run.
+// ResolvedRun is the fully-resolved description of a single docent run.
 // Every field is concrete (no more "ask the user" remaining).
 type ResolvedRun struct {
 	ModeID       string

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 func TestRegistryUnknownCollector(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kurt/slakkr-ai/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 // giteaTestRequest captures one inbound request the collector made so the
@@ -76,7 +76,7 @@ func newGiteaDirective(baseURL string, configExtras map[string]string) userdata.
 		Target:    map[string]string{"owner": "alice"},
 		Config:    cfg,
 		CredentialRefs: map[string]string{
-			"token": "SLAKKR_GITEA_TEST_TOKEN",
+			"token": "DOCENT_GITEA_TEST_TOKEN",
 		},
 	}
 }
@@ -129,7 +129,7 @@ func fmtInt(i int) string {
 }
 
 func TestGiteaCollectScopeSelfQueriesAuthoredOnly(t *testing.T) {
-	t.Setenv("SLAKKR_GITEA_TEST_TOKEN", "fake-token")
+	t.Setenv("DOCENT_GITEA_TEST_TOKEN", "fake-token")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	srv, state := newGiteaServer(t, func(req giteaTestRequest) (int, interface{}) {
 		switch {
@@ -195,7 +195,7 @@ func TestGiteaCollectScopeSelfQueriesAuthoredOnly(t *testing.T) {
 }
 
 func TestGiteaCollectScopeInvolvedAddsAssignedAndMentioned(t *testing.T) {
-	t.Setenv("SLAKKR_GITEA_TEST_TOKEN", "fake-token")
+	t.Setenv("DOCENT_GITEA_TEST_TOKEN", "fake-token")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	srv, state := newGiteaServer(t, func(req giteaTestRequest) (int, interface{}) {
 		switch {
@@ -232,7 +232,7 @@ func TestGiteaCollectScopeInvolvedAddsAssignedAndMentioned(t *testing.T) {
 }
 
 func TestGiteaCollectScopeAllAddsFollowedRepos(t *testing.T) {
-	t.Setenv("SLAKKR_GITEA_TEST_TOKEN", "fake-token")
+	t.Setenv("DOCENT_GITEA_TEST_TOKEN", "fake-token")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	srv, state := newGiteaServer(t, func(req giteaTestRequest) (int, interface{}) {
 		switch {
@@ -299,7 +299,7 @@ func TestGiteaCollectScopeAllAddsFollowedRepos(t *testing.T) {
 }
 
 func TestGiteaCollectDedupesAcrossUserQueries(t *testing.T) {
-	t.Setenv("SLAKKR_GITEA_TEST_TOKEN", "fake-token")
+	t.Setenv("DOCENT_GITEA_TEST_TOKEN", "fake-token")
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	row := authoredIssueRow(7, "Recurring item", "alice/demo", "2026-05-13T12:00:00Z", "alice", false)
 	srv, _ := newGiteaServer(t, func(req giteaTestRequest) (int, interface{}) {

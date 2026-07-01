@@ -16,7 +16,7 @@ import (
 // Each invocation runs from a freshly created temp directory and uses
 // cursor-agent's read-only `ask` mode, so the agent cannot edit files or
 // run shell commands. The temp directory is removed after the call
-// returns. slakkr only ever asks the model to convert the structured
+// returns. docent only ever asks the model to convert the structured
 // activity below into Markdown, so the agent should never need to touch
 // the filesystem or execute anything.
 type CursorCLIProvider struct {
@@ -83,7 +83,7 @@ func (p CursorCLIProvider) RunMode(ctx context.Context, in RunInput) (string, er
 }
 
 func (p CursorCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer) (string, error) {
-	dir, err := os.MkdirTemp("", "slakkr-cursor-")
+	dir, err := os.MkdirTemp("", "docent-cursor-")
 	if err != nil {
 		return "", fmt.Errorf("cursor-agent: create temp workspace: %w", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/KurtPreston/docent/libs/config/configschema"
 )
 
 func TestValidateYAML_modeBlocksAccepted(t *testing.T) {
@@ -19,7 +19,7 @@ directives:
     config:
       base_url: https://jira.example
     credential_refs:
-      pat: SLAKKR_JIRA_PAT
+      pat: DOCENT_JIRA_PAT
     state:
       query: "assignee = currentUser() AND status = 'In Development'"
       poll: { interval: 5m, on_request: true }
@@ -44,7 +44,7 @@ directives:
     config:
       base_url: https://jira.example
     credential_refs:
-      pat: SLAKKR_JIRA_PAT
+      pat: DOCENT_JIRA_PAT
     state:
       poll: { interval: 5m, bogus: true }
 `)
