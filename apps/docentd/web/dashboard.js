@@ -112,6 +112,30 @@ function renderPrRow(pr) {
   return row;
 }
 
+function renderTicketLinks(tickets, jiraUrl, primaryTicket) {
+  const wrap = el("span", "ticket-links");
+  const list = tickets && tickets.length ? tickets : [];
+  if (list.length === 0 && primaryTicket) {
+    const t = jiraUrl ? el("a", "ticket link", primaryTicket) : el("span", "ticket", primaryTicket);
+    if (jiraUrl) { t.href = jiraUrl; t.target = "_blank"; t.rel = "noopener"; }
+    wrap.appendChild(t);
+    return wrap;
+  }
+  if (list.length === 0) {
+    wrap.appendChild(el("span", "ticket untracked", "no ticket"));
+    return wrap;
+  }
+  list.forEach((tk, i) => {
+    if (i > 0) wrap.appendChild(document.createTextNode(" "));
+    const label = tk.key || tk.title || "ticket";
+    const t = tk.url ? el("a", "ticket link", label) : el("span", "ticket", label);
+    if (tk.url) { t.href = tk.url; t.target = "_blank"; t.rel = "noopener"; }
+    if (tk.status) t.title = tk.status;
+    wrap.appendChild(t);
+  });
+  return wrap;
+}
+
 function renderGroup(g) {
   const card = el("div", "group" + (g.needsFollowup ? " followup" : ""));
   if (g.color) card.style.setProperty("--g-color", g.color);
@@ -119,14 +143,17 @@ function renderGroup(g) {
   const head = el("div", "group-head clickable");
   head.title = "Open work-item details";
   head.addEventListener("click", (e) => {
-    // Let the Jira link handle its own click without navigating away.
     if (e.target.closest("a.ticket")) return;
     window.location.href = "/workitem?key=" + encodeURIComponent(g.key || g.ticket || "");
   });
   const sw = el("span", "swatch");
   head.appendChild(sw);
 
-  if (g.ticket) {
+  if (g.branch) {
+    head.appendChild(el("span", "branch", g.branch));
+    if (g.repo) head.appendChild(el("span", "chip", g.repo));
+    head.appendChild(renderTicketLinks(g.tickets, g.jiraUrl, g.ticket));
+  } else if (g.ticket) {
     const t = g.jiraUrl ? el("a", "ticket link", g.ticket) : el("span", "ticket", g.ticket);
     if (g.jiraUrl) {
       t.href = g.jiraUrl;
@@ -138,8 +165,10 @@ function renderGroup(g) {
     head.appendChild(el("span", "ticket untracked", "untracked"));
   }
 
-  head.appendChild(el("span", "summary", g.summary || ""));
+  if (!g.branch && g.summary) head.appendChild(el("span", "summary", g.summary || ""));
+  if (g.openPath) head.appendChild(el("span", "chip path", g.openPath));
   if (g.jiraStatus) head.appendChild(el("span", "pill status", g.jiraStatus));
+  if (g.lastActivity) head.appendChild(el("span", "meta", timeAgo(g.lastActivity)));
   if (g.status) {
     head.appendChild(el("span", "pill st-" + g.status, STATUS_LABELS[g.status] || g.status));
   }

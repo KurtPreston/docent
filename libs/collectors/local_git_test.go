@@ -61,6 +61,43 @@ func TestLocalGitSelfMatcherEmpty(t *testing.T) {
 	}
 }
 
+func TestNormalizeGitRef(t *testing.T) {
+	tests := []struct {
+		ref  string
+		want string
+	}{
+		{"refs/heads/salsa-123-fix", "salsa-123-fix"},
+		{"refs/heads/main", "main"},
+		{"refs/remotes/origin/main", ""},
+		{"refs/tags/v1.0", ""},
+		{"HEAD", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := normalizeGitRef(tt.ref); got != tt.want {
+			t.Errorf("normalizeGitRef(%q) = %q, want %q", tt.ref, got, tt.want)
+		}
+	}
+}
+
+func TestLocalGitReflogBranch(t *testing.T) {
+	tests := []struct {
+		gd, gs string
+		want   string
+	}{
+		{"salsa-123@{2}", "commit: foo", "salsa-123"},
+		{"main@{0}", "commit: bar", "main"},
+		{"HEAD@{1}", "checkout: moving from main to salsa-42-x", "salsa-42-x"},
+		{"HEAD@{0}", "commit: initial", ""},
+		{"", "", ""},
+	}
+	for _, tt := range tests {
+		if got := localGitReflogBranch(tt.gd, tt.gs); got != tt.want {
+			t.Errorf("localGitReflogBranch(%q, %q) = %q, want %q", tt.gd, tt.gs, got, tt.want)
+		}
+	}
+}
+
 func TestParseGitRemoteToRepositoryKey(t *testing.T) {
 	tests := []struct {
 		raw  string

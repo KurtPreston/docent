@@ -129,6 +129,108 @@ func TestSignalToEntity_commitFallback(t *testing.T) {
 	}
 }
 
+func TestGroupKey_branchAnchor(t *testing.T) {
+	cfg := Config{}
+	ent := model.Entity{
+		ID:   "commit:1",
+		Kind: "commit",
+		Title: "fix bug",
+		Coordinates: map[string]string{
+			"repo":   "org/repo",
+			"branch": "salsa-123-fix",
+			"ticket": "SALSA-123",
+		},
+	}
+	if got := GroupKey(ent, cfg); got != "wb:org/repo@salsa-123-fix" {
+		t.Errorf("GroupKey = %q, want wb:org/repo@salsa-123-fix", got)
+	}
+}
+
+func TestBuildWorkItems_branchAnchoredWithTicketAttachment(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "jira:SALSA-1", Kind: "issue", Title: "SALSA-1 Fix widget NPE", URL: "https://jira/SALSA-1", Coordinates: map[string]string{"ticket": "SALSA-1", "key": "SALSA-1"}, State: map[string]string{"status": "In Progress"}},
+		{ID: "commit:1", Kind: "commit", Title: "fix", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-1-fix", "ticket": "SALSA-1"}, State: map[string]string{"observedAt": "2026-06-01T12:00:00Z"}},
+		{ID: "pr:1", Kind: "pr_review_status", Title: "salsa-1 fix", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "salsa-1-fix", "ticket": "SALSA-1"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("got %d work items, want 1 (branch unit with attached ticket)", len(items))
+	}
+	wi := items[0]
+	if wi.Key != "wb:org/repo@salsa-1-fix" {
+		t.Errorf("key = %q", wi.Key)
+	}
+	if wi.Branch != "salsa-1-fix" || wi.Repo != "org/repo" {
+		t.Errorf("repo/branch = %q/%q", wi.Repo, wi.Branch)
+	}
+	if len(wi.Entities) != 3 {
+		t.Errorf("entities = %d, want 3", len(wi.Entities))
+	}
+	if len(wi.Tickets) != 1 || wi.Tickets[0].Key != "SALSA-1" {
+		t.Errorf("tickets = %+v", wi.Tickets)
+	}
+}
+
+func TestBuildWorkItems_reviewRequestedPRBranchUnit(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "pr:rr", Kind: "pr_review_status", Title: "their feature", Coordinates: map[string]string{
+			"repo": "org/repo", "head_branch": "feature-x", "relation": "review_requested",
+		}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("got %d items", len(items))
+	}
+	if items[0].Key != "wb:org/repo@feature-x" {
+		t.Errorf("key = %q", items[0].Key)
+	}
+}
+
+func TestBuildWorkItems_orphanTicketStaysStandalone(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "jira:SALSA-9", Kind: "issue", Title: "SALSA-9 Unstarted task", Coordinates: map[string]string{"ticket": "SALSA-9"}, State: map[string]string{"status": "Assigned"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 || items[0].Key != "SALSA-9" {
+		t.Fatalf("orphan ticket should stay standalone: %+v", items)
+	}
+}
+
+func TestBuildWorkItems_multipleBranchesShareTicket(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "jira:SALSA-1", Kind: "issue", Title: "SALSA-1 Shared", Coordinates: map[string]string{"ticket": "SALSA-1"}},
+		{ID: "c1", Kind: "commit", Title: "a", Coordinates: map[string]string{"repo": "org/r", "branch": "salsa-1-a", "ticket": "SALSA-1"}},
+		{ID: "c2", Kind: "commit", Title: "b", Coordinates: map[string]string{"repo": "org/r", "branch": "salsa-1-b", "ticket": "SALSA-1"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2 branch units", len(items))
+	}
+	for _, wi := range items {
+		if len(wi.Tickets) != 1 || wi.Tickets[0].Key != "SALSA-1" {
+			t.Errorf("%s tickets = %+v", wi.Key, wi.Tickets)
+		}
+	}
+}
+
+func TestBuildWorkItems_branchWithNoTickets(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "c1", Kind: "commit", Title: "misc", Coordinates: map[string]string{"repo": "org/r", "branch": "misc-cleanup"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 || items[0].Key != "wb:org/r@misc-cleanup" {
+		t.Fatalf("unexpected: %+v", items)
+	}
+	if len(items[0].Tickets) != 0 {
+		t.Errorf("expected 0 tickets, got %+v", items[0].Tickets)
+	}
+}
+
 func TestSignalsToEntities_session(t *testing.T) {
 	cfg := Config{}
 	signals := []model.Signal{

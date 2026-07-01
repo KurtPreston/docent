@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kurt/slakkr-ai/libs/model"
 )
@@ -80,8 +81,41 @@ func commitLikeKind(kind string) bool {
 	return false
 }
 
+// branchKey returns the work-item key for a repo/branch unit.
+func branchKey(repo, branch string) string {
+	return "wb:" + repo + "@" + branch
+}
+
+// branchAnchor reports whether an entity can anchor a repo/branch work unit.
+func branchAnchor(ent model.Entity) (repo, branch string, ok bool) {
+	if ent.Coordinates == nil {
+		return "", "", false
+	}
+	repo = strings.TrimSpace(ent.Coordinates["repo"])
+	switch ent.Kind {
+	case "branch", "commit", "reflog":
+		branch = strings.TrimSpace(ent.Coordinates["branch"])
+		if repo != "" && branch != "" {
+			return repo, branch, true
+		}
+	default:
+		if strings.Contains(ent.Kind, "pr") {
+			// Group by base repo + head branch name. Fork PRs may use a
+			// cross-fork head; we accept the common same-repo case.
+			branch = strings.TrimSpace(ent.Coordinates["head_branch"])
+			if repo != "" && branch != "" {
+				return repo, branch, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // GroupKey returns the work-item anchor key for an entity.
 func GroupKey(ent model.Entity, cfg Config) string {
+	if repo, branch, ok := branchAnchor(ent); ok {
+		return branchKey(repo, branch)
+	}
 	if t := ticketFromEntity(ent, cfg); t != "" {
 		return t
 	}
@@ -124,7 +158,8 @@ func fallbackGroupKey(ent model.Entity) string {
 	return "item:" + ent.Kind
 }
 
-// BuildWorkItems merges entities into work-items by anchor key.
+// BuildWorkItems merges entities into work-items by anchor key, then attaches
+// orphan JIRA ticket entities to repo/branch units that reference them.
 func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 	groups := map[string]*model.WorkItem{}
 	order := []string{}
@@ -133,13 +168,7 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 		key := GroupKey(ent, cfg)
 		wi, ok := groups[key]
 		if !ok {
-			title := ent.Title
-			if t := ticketFromEntity(ent, cfg); t != "" {
-				title = t
-				if ent.Title != "" && !strings.EqualFold(ent.Title, t) {
-					// keep ticket as key; summary may be filled later from jira entity
-				}
-			}
+			title := workItemTitle(ent, key, cfg)
 			wi = &model.WorkItem{
 				Key:       key,
 				Title:     title,
@@ -151,7 +180,7 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 		}
 		wi.Entities = append(wi.Entities, ent)
 		// Promote jira ticket summary as work-item title when available.
-		if ent.Kind == "ticket" && ent.Title != "" {
+		if isJiraEntity(ent) && ent.Title != "" && !strings.HasPrefix(wi.Key, "wb:") {
 			if t := ticketFromEntity(ent, cfg); t != "" {
 				wi.Key = t
 				wi.Title = ent.Title
@@ -165,12 +194,15 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 		}
 	}
 
+	attachTicketsToBranchUnits(groups, &order, cfg)
+
 	out := make([]model.WorkItem, 0, len(order))
 	for _, key := range order {
 		wi := groups[key]
 		if wi == nil {
 			continue
 		}
+		enrichBranchWorkItem(wi, cfg)
 		out = append(out, *wi)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -178,9 +210,217 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 		if needsFollowup(out[i].Attention) != needsFollowup(out[j].Attention) {
 			return needsFollowup(out[i].Attention)
 		}
+		// recency within attention tier
+		if out[i].LastActivity != out[j].LastActivity {
+			return out[i].LastActivity > out[j].LastActivity
+		}
 		return out[i].Key < out[j].Key
 	})
 	return out
+}
+
+func workItemTitle(ent model.Entity, key string, cfg Config) string {
+	if strings.HasPrefix(key, "wb:") {
+		if _, branch, ok := branchAnchor(ent); ok {
+			return branch
+		}
+		if repo, branch := parseBranchKey(key); branch != "" {
+			_ = repo
+			return branch
+		}
+	}
+	if t := ticketFromEntity(ent, cfg); t != "" {
+		return t
+	}
+	return ent.Title
+}
+
+func parseBranchKey(key string) (repo, branch string) {
+	if !strings.HasPrefix(key, "wb:") {
+		return "", ""
+	}
+	rest := strings.TrimPrefix(key, "wb:")
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return "", ""
+	}
+	return rest[:at], rest[at+1:]
+}
+
+func isJiraEntity(ent model.Entity) bool {
+	switch ent.Kind {
+	case "ticket", "issue", "issue_activity":
+		return true
+	}
+	return false
+}
+
+// attachTicketsToBranchUnits moves JIRA entities from standalone ticket-keyed
+// work items onto repo/branch units that reference the same ticket key.
+func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]string, cfg Config) {
+	// ticket key -> jira entities collected from ticket-keyed work items
+	ticketEntities := map[string][]model.Entity{}
+	var ticketKeys []string
+
+	for key, wi := range groups {
+		if strings.HasPrefix(key, "wb:") {
+			continue
+		}
+		t := strings.ToUpper(key)
+		if t == "" || !looksLikeTicketKey(t, cfg) {
+			continue
+		}
+		var jira []model.Entity
+		for _, ent := range wi.Entities {
+			if isJiraEntity(ent) {
+				jira = append(jira, ent)
+			}
+		}
+		if len(jira) == 0 {
+			continue
+		}
+		ticketEntities[t] = append(ticketEntities[t], jira...)
+		ticketKeys = append(ticketKeys, t)
+	}
+
+	if len(ticketEntities) == 0 {
+		return
+	}
+
+	referenced := map[string]bool{}
+	for _, wi := range groups {
+		if !strings.HasPrefix(wi.Key, "wb:") {
+			continue
+		}
+		keys := referencedTicketKeys(wi.Entities, cfg)
+		for _, t := range keys {
+			referenced[t] = true
+		}
+	}
+
+	// Attach jira entities to branch units that reference each ticket.
+	for t := range referenced {
+		jira, ok := ticketEntities[t]
+		if !ok {
+			continue
+		}
+		for _, wi := range groups {
+			if !strings.HasPrefix(wi.Key, "wb:") {
+				continue
+			}
+			keys := referencedTicketKeys(wi.Entities, cfg)
+			if !containsString(keys, t) {
+				continue
+			}
+			for _, ent := range jira {
+				if !entityPresent(wi.Entities, ent.ID) {
+					wi.Entities = append(wi.Entities, ent)
+				}
+			}
+		}
+	}
+
+	// Drop standalone ticket work items that were attached to branch units.
+	for _, t := range ticketKeys {
+		if !referenced[t] {
+			continue
+		}
+		if groups[t] == nil {
+			continue
+		}
+		delete(groups, t)
+		filterOrder(order, t)
+	}
+}
+
+func looksLikeTicketKey(key string, cfg Config) bool {
+	re := ticketRegexp(cfg, false)
+	return re.MatchString(strings.ToLower(key))
+}
+
+func referencedTicketKeys(entities []model.Entity, cfg Config) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, ent := range entities {
+		if t := ticketFromEntity(ent, cfg); t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func entityPresent(entities []model.Entity, id string) bool {
+	for _, ent := range entities {
+		if ent.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func filterOrder(order *[]string, drop string) {
+	filtered := (*order)[:0]
+	for _, k := range *order {
+		if k != drop {
+			filtered = append(filtered, k)
+		}
+	}
+	*order = filtered
+}
+
+func enrichBranchWorkItem(wi *model.WorkItem, cfg Config) {
+	if strings.HasPrefix(wi.Key, "wb:") {
+		wi.Repo, wi.Branch = parseBranchKey(wi.Key)
+		if wi.Branch != "" && (wi.Title == "" || wi.Title == wi.Key) {
+			wi.Title = wi.Branch
+		}
+	}
+
+	var lastActivity time.Time
+	ticketSeen := map[string]bool{}
+
+	for _, ent := range wi.Entities {
+		if ent.Kind == "branch" {
+			if p := ent.Coordinates["path"]; p != "" {
+				wi.OpenPath = p
+			}
+		}
+		if wi.OpenPath == "" {
+			if p := ent.Coordinates["path"]; p != "" && (ent.Kind == "commit" || ent.Kind == "reflog" || ent.Kind == "branch") {
+				wi.OpenPath = p
+			}
+		}
+		if ts := ent.State["observedAt"]; ts != "" {
+			if t, err := time.Parse(time.RFC3339Nano, ts); err == nil && t.After(lastActivity) {
+				lastActivity = t
+			}
+		}
+		if t := ticketFromEntity(ent, cfg); t != "" && !ticketSeen[t] {
+			ticketSeen[t] = true
+			ref := model.TicketRef{Key: t}
+			if isJiraEntity(ent) {
+				ref.Title = ent.Title
+				ref.URL = ent.URL
+				if ent.State != nil {
+					ref.Status = ent.State["status"]
+				}
+			}
+			wi.Tickets = append(wi.Tickets, ref)
+		}
+	}
+	if !lastActivity.IsZero() {
+		wi.LastActivity = lastActivity.UTC().Format(time.RFC3339Nano)
+	}
 }
 
 func needsFollowup(attention string) bool {
@@ -248,6 +488,9 @@ func SignalToEntity(s model.Signal, cfg Config) model.Entity {
 			ent.Coordinates[k] = v
 			ent.State[k] = v
 		}
+	}
+	if !s.ObservedAt.IsZero() {
+		ent.State["observedAt"] = s.ObservedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if s.Kind == "session" || s.Source == "docent-wm" {
 		ent.Kind = "session"

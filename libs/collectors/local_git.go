@@ -86,23 +86,30 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		if repoTicket == "" {
 			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), correlation.Config{})
 		}
-		if repoTicket != "" && branch != "" {
+		if branch != "" {
+			fields := map[string]string{
+				"path":   abs,
+				"branch": branch,
+			}
+			if repoTicket != "" {
+				fields["ticket"] = repoTicket
+			}
+			summary := fmt.Sprintf("local branch %s", branch)
+			if repoTicket != "" {
+				summary = fmt.Sprintf("local branch %s -> %s", branch, repoTicket)
+			}
 			out = append(out, StatusItem{
 				DirectiveID: directive.ID,
 				Repository:  repoLabel,
 				Source:      "local-git",
 				Kind:        "branch",
 				Title:       branch,
-				Summary:     fmt.Sprintf("local branch %s -> %s", branch, repoTicket),
+				Summary:     summary,
 				Severity:    "info",
 				ObservedAt:  now.UTC(),
 				StableID:    "branch:" + repoLabel + ":" + branch,
 				IsSelf:      true,
-				Fields: map[string]string{
-					"path":   abs,
-					"branch": branch,
-					"ticket": repoTicket,
-				},
+				Fields:      fields,
 			})
 		}
 
@@ -195,6 +202,9 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				"gd":         gd,
 				"gs":         gs,
 			}
+			if b := localGitReflogBranch(gd, gs); b != "" {
+				fields["branch"] = b
+			}
 			// Reflog subjects like "checkout: moving from main to salsa-123"
 			// carry the branch (and thus ticket); fall back to the repo's
 			// current-branch ticket otherwise.
@@ -222,6 +232,8 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 // StatusItem. Splitting this out keeps Collect's scope branching readable.
 type localGitCommit struct {
 	hash     string
+	ref      string
+	branch   string
 	iso      string
 	author   string
 	email    string
@@ -231,7 +243,7 @@ type localGitCommit struct {
 }
 
 func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since, now time.Time, matcher localGitSelfMatcher, opts *CollectOpts, directiveID string) ([]localGitCommit, error) {
-	logOut, err := gitOutput(ctx, repoDir, opts, directiveID, "log", "--all", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%aI%x09%an%x09%ae%x09%s")
+	logOut, err := gitOutput(ctx, repoDir, opts, directiveID, "log", "--all", "--source", "--no-merges", "--since="+sinceISO, "--pretty=format:%H%x09%S%x09%aI%x09%an%x09%ae%x09%s")
 	if err != nil {
 		return nil, err
 	}
@@ -241,15 +253,16 @@ func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 5)
-		if len(parts) < 5 {
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
 			continue
 		}
 		hash := strings.TrimSpace(parts[0])
-		iso := strings.TrimSpace(parts[1])
-		author := strings.TrimSpace(parts[2])
-		email := strings.TrimSpace(parts[3])
-		subject := strings.TrimSpace(parts[4])
+		ref := strings.TrimSpace(parts[1])
+		iso := strings.TrimSpace(parts[2])
+		author := strings.TrimSpace(parts[3])
+		email := strings.TrimSpace(parts[4])
+		subject := strings.TrimSpace(parts[5])
 		obs, err := time.Parse(time.RFC3339, iso)
 		if err != nil {
 			if obs, err = time.Parse("2006-01-02 15:04:05 -0700", strings.ReplaceAll(iso, "T", " ")); err != nil {
@@ -261,6 +274,8 @@ func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since
 		}
 		out = append(out, localGitCommit{
 			hash:     hash,
+			ref:      ref,
+			branch:   normalizeGitRef(ref),
 			iso:      iso,
 			author:   author,
 			email:    email,
@@ -320,16 +335,61 @@ func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitComm
 		ObservedAt:  ci.observed.UTC(),
 		Author:      authorIdentity,
 		IsSelf:      ci.isSelf,
-		Fields: map[string]string{
-			"path":         abs,
-			"hash":         ci.hash,
-			"short_hash":   short,
-			"author":       ci.author,
-			"author_email": ci.email,
-			"iso":          ci.iso,
-			"subject":      ci.subject,
-		},
+		Fields: func() map[string]string {
+			fields := map[string]string{
+				"path":         abs,
+				"hash":         ci.hash,
+				"short_hash":   short,
+				"author":       ci.author,
+				"author_email": ci.email,
+				"iso":          ci.iso,
+				"subject":      ci.subject,
+			}
+			if ci.branch != "" {
+				fields["branch"] = ci.branch
+			}
+			return fields
+		}(),
 	}
+}
+
+// normalizeGitRef maps a git log --source ref to a local branch name, or ""
+// when the ref is not a local branch (remote, tag, detached, etc.).
+func normalizeGitRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	const heads = "refs/heads/"
+	if strings.HasPrefix(ref, heads) {
+		return strings.TrimPrefix(ref, heads)
+	}
+	return ""
+}
+
+// localGitReflogBranch derives a branch name from reflog gd/gs fields.
+func localGitReflogBranch(gd, gs string) string {
+	gd = strings.TrimSpace(gd)
+	gs = strings.TrimSpace(gs)
+	ref := gd
+	if i := strings.Index(gd, "@{"); i >= 0 {
+		ref = gd[:i]
+	}
+	ref = strings.TrimSpace(ref)
+	if ref != "" && !strings.EqualFold(ref, "HEAD") {
+		return ref
+	}
+	// HEAD@{n} checkout: moving from X to Y -> Y
+	const prefix = "checkout: moving from "
+	if !strings.HasPrefix(gs, prefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(gs, prefix)
+	i := strings.LastIndex(rest, " to ")
+	if i < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[i+len(" to "):])
 }
 
 // localGitCurrentBranch returns the checked-out branch name for a repo (or

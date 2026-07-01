@@ -110,10 +110,32 @@ function render(d) {
     kv.appendChild(row);
   };
   addKV("Key", d.key);
+  if (d.branch) {
+    addKV("Branch", d.branch);
+    if (d.repo) addKV("Repo", d.repo);
+    if (d.openPath) addKV("Open path", d.openPath);
+  }
   if (d.summary || d.title) addKV("Summary", d.summary || d.title);
   if (d.jiraStatus) addKV("Status", d.jiraStatus);
   if (d.jiraUrl) addKV("Jira", d.key, d.jiraUrl);
   overview.appendChild(kv);
+  if ((d.tickets || []).length) {
+    const tk = el("div", "wrap");
+    (d.tickets || []).forEach((t) => {
+      const row = el("div", "kv");
+      row.appendChild(el("span", "k", "Ticket"));
+      if (t.url) {
+        const a = el("a", null, t.key + (t.title ? " — " + t.title : ""));
+        a.href = t.url; a.target = "_blank"; a.rel = "noopener";
+        row.appendChild(a);
+      } else {
+        row.appendChild(el("span", null, t.key));
+      }
+      if (t.status) row.appendChild(el("span", "chip", t.status));
+      tk.appendChild(row);
+    });
+    overview.appendChild(tk);
+  }
   board.appendChild(overview);
 
   const sessions = section("Sessions (" + (d.sessions || []).length + ")");

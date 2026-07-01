@@ -343,6 +343,86 @@ func TestBuildDashboardOrderingAndVisibility(t *testing.T) {
 	}
 }
 
+func TestBuildDashboardBranchUnit(t *testing.T) {
+	e := newTestEngine(t)
+	wi := model.WorkItem{
+		Key:          "wb:org/repo@salsa-1-fix",
+		Title:        "salsa-1-fix",
+		Repo:         "org/repo",
+		Branch:       "salsa-1-fix",
+		OpenPath:     "/code/repo",
+		LastActivity: "2026-06-01T12:00:00Z",
+		Tickets: []model.TicketRef{
+			{Key: "SALSA-1", Title: "SALSA-1 Fix widget", URL: "https://jira/SALSA-1", Status: "In Progress"},
+		},
+		Entities: []model.Entity{
+			{Kind: "branch", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-1-fix", "path": "/code/repo", "ticket": "SALSA-1"}},
+			{Kind: "commit", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-1-fix", "ticket": "SALSA-1"}, State: map[string]string{"observedAt": "2026-06-01T12:00:00Z"}},
+			{Kind: "issue", Title: "SALSA-1 Fix widget", URL: "https://jira/SALSA-1", Coordinates: map[string]string{"ticket": "SALSA-1"}, State: map[string]string{"status": "In Progress", "status_tier": "started"}},
+			{Kind: "pr_review_status", Title: "salsa-1 fix", URL: "https://github.com/org/repo/pull/5", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "salsa-1-fix", "ticket": "SALSA-1"}, State: map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"}},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi})
+	if dash.GroupCount != 1 {
+		t.Fatalf("expected 1 group, got %d", dash.GroupCount)
+	}
+	g := dash.Groups[0]
+	if g.Branch != "salsa-1-fix" || g.Repo != "org/repo" || g.OpenPath != "/code/repo" {
+		t.Errorf("branch unit fields = repo:%q branch:%q path:%q", g.Repo, g.Branch, g.OpenPath)
+	}
+	if len(g.Tickets) != 1 || g.Tickets[0].Key != "SALSA-1" {
+		t.Errorf("tickets = %+v", g.Tickets)
+	}
+	if len(g.PRs) != 1 || g.PRs[0].PRNumber != 5 {
+		t.Errorf("prs = %+v", g.PRs)
+	}
+	if g.Status != statusApproved {
+		t.Errorf("status = %q, want approved", g.Status)
+	}
+}
+
+func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
+	e := newTestEngine(t)
+	wi := model.WorkItem{
+		Key:    "wb:org/repo@feature-x",
+		Title:  "feature-x",
+		Repo:   "org/repo",
+		Branch: "feature-x",
+		Entities: []model.Entity{
+			{Kind: "pr_review_status", Title: "their PR", URL: "https://github.com/org/repo/pull/9", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "feature-x"}, State: map[string]string{"relation": "review_requested", "is_draft": "false"}},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi})
+	if dash.GroupCount != 1 {
+		t.Fatalf("expected 1 group, got %d", dash.GroupCount)
+	}
+	g := dash.Groups[0]
+	if g.Key != "wb:org/repo@feature-x" {
+		t.Errorf("key = %q", g.Key)
+	}
+	if g.Status != statusAwaiting || !g.ActionRequired {
+		t.Errorf("review-requested branch unit = status:%q action:%v", g.Status, g.ActionRequired)
+	}
+}
+
+func TestBuildDashboardOrphanTicket(t *testing.T) {
+	e := newTestEngine(t)
+	wi := model.WorkItem{
+		Key:   "SALSA-99",
+		Title: "SALSA-99 Unstarted",
+		Entities: []model.Entity{
+			{Kind: "issue", Title: "SALSA-99 Unstarted", Coordinates: map[string]string{"ticket": "SALSA-99"}, State: map[string]string{"status_tier": "assigned", "status": "To Do"}},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi})
+	if dash.GroupCount != 1 || dash.Groups[0].Key != "SALSA-99" {
+		t.Fatalf("orphan ticket group: %+v", dash.Groups)
+	}
+	if dash.Groups[0].Status != statusAssigned {
+		t.Errorf("status = %q", dash.Groups[0].Status)
+	}
+}
+
 func boolStr(b bool) string {
 	if b {
 		return "true"

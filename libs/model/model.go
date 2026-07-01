@@ -35,10 +35,23 @@ type Entity struct {
 
 // WorkItem is a source-agnostic unit of effort assembled by correlation.
 type WorkItem struct {
-	Key       string   `json:"key"`
-	Title     string   `json:"title"`
-	Entities  []Entity `json:"entities"`
-	Attention string   `json:"attention"`
-	Color     string   `json:"color"`
-	FG        string   `json:"fg"`
+	Key          string      `json:"key"`
+	Title        string      `json:"title"`
+	Entities     []Entity    `json:"entities"`
+	Attention    string      `json:"attention"`
+	Color        string      `json:"color"`
+	FG           string      `json:"fg"`
+	Repo         string      `json:"repo,omitempty"`
+	Branch       string      `json:"branch,omitempty"`
+	OpenPath     string      `json:"openPath,omitempty"`
+	LastActivity string      `json:"lastActivity,omitempty"`
+	Tickets      []TicketRef `json:"tickets,omitempty"`
+}
+
+// TicketRef is a JIRA (or ticket-pattern) link attached to a repo/branch work unit.
+type TicketRef struct {
+	Key    string `json:"key"`
+	Title  string `json:"title,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Status string `json:"status,omitempty"`
 }

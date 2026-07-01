@@ -188,26 +188,30 @@ func TestPrReviewItemFields(t *testing.T) {
 	row.IsDraft = true
 	row.Repository.NameWithOwner = "o/r"
 
-	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "authored", "passing", "APPROVED", true)
+	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "authored", "passing", "APPROVED", true, "feature-branch")
 	if authored.Kind != "pr_review_status" {
 		t.Fatalf("kind = %q", authored.Kind)
 	}
 	for k, want := range map[string]string{
 		"relation": "authored", "is_draft": "true", "checks": "passing",
 		"review_decision": "APPROVED", "ready": "true", "repo": "o/r",
+		"head_branch": "feature-branch",
 	} {
 		if authored.Fields[k] != want {
 			t.Errorf("authored field %q = %q, want %q", k, authored.Fields[k], want)
 		}
 	}
 
-	// review-requested rows omit the authored-only fields.
-	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "review_requested", "", "", false)
+	// review-requested rows omit the authored-only fields but carry head_branch.
+	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "review_requested", "", "", false, "their-branch")
 	if rr.Fields["relation"] != "review_requested" {
 		t.Errorf("relation = %q", rr.Fields["relation"])
 	}
 	if _, ok := rr.Fields["review_decision"]; ok {
 		t.Errorf("review_requested row should not carry review_decision: %v", rr.Fields)
+	}
+	if rr.Fields["head_branch"] != "their-branch" {
+		t.Errorf("head_branch = %q, want their-branch", rr.Fields["head_branch"])
 	}
 }
 

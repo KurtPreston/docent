@@ -44,6 +44,7 @@ type ghSearchActivityRow struct {
 type ghPRView struct {
 	StatusCheckRollup []ghCheckRollupEntry `json:"statusCheckRollup"`
 	ReviewDecision    string               `json:"reviewDecision"`
+	HeadRefName       string               `json:"headRefName"`
 }
 
 // ghCheckRollupEntry covers both shapes returned in statusCheckRollup.
@@ -474,7 +475,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 
 	var items []StatusItem
 	for _, row := range authored {
-		checks, decision := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
+		checks, decision, headBranch := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
 		completed++
 		reportProgress(opts, DirectiveProgress{
 			DirectiveID: directive.ID,
@@ -485,10 +486,11 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 			Total:       totalSteps,
 		})
 		ready := !row.IsDraft && (checks == "passing" || checks == "none")
-		items = append(items, prReviewItem(directive, user, host, now, row, "authored", checks, decision, ready))
+		items = append(items, prReviewItem(directive, user, host, now, row, "authored", checks, decision, ready, headBranch))
 	}
 	for _, row := range reviewRequested {
-		items = append(items, prReviewItem(directive, user, host, now, row, "review_requested", "", "", false))
+		headBranch := c.fetchPRHeadRef(ctx, env, row.URL, directive, opts)
+		items = append(items, prReviewItem(directive, user, host, now, row, "review_requested", "", "", false, headBranch))
 	}
 	return dedupePRReviewItems(items), nil
 }
@@ -518,7 +520,7 @@ func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directiv
 // prReviewItem builds one pr_review_status StatusItem for an open PR in the
 // given relationship. checks/decision/ready are only meaningful for
 // authored PRs; review-requested rows pass zero values.
-func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, relation, checks, decision string, ready bool) StatusItem {
+func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, relation, checks, decision string, ready bool, headBranch string) StatusItem {
 	repo := strings.TrimSpace(row.Repository.NameWithOwner)
 	if repo == "" {
 		repo = gitHubOwnerRepoFromURL(row.URL)
@@ -530,6 +532,9 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		"state":    "open",
 		"relation": relation,
 		"is_draft": strconv.FormatBool(row.IsDraft),
+	}
+	if headBranch != "" {
+		fields["head_branch"] = headBranch
 	}
 	if relation == "authored" {
 		fields["checks"] = checks
@@ -576,28 +581,48 @@ func dedupePRReviewItems(items []StatusItem) []StatusItem {
 	return out
 }
 
-// fetchPRStatus resolves the aggregate checks status and review decision
-// for a single PR via `gh pr view --json statusCheckRollup,reviewDecision`.
+// fetchPRStatus resolves the aggregate checks status, review decision, and
+// head branch for a single PR via `gh pr view --json ...`.
 // checks is one of "passing", "failing", "pending", "none", or "unknown"
 // (when the call fails or the payload can't be parsed). Failures are
 // non-fatal: an unknown status keeps the PR out of "ready" without aborting
 // the whole run.
-func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision string) {
+func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch string) {
 	if strings.TrimSpace(prURL) == "" {
-		return "unknown", ""
+		return "unknown", "", ""
 	}
-	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup,reviewDecision"}
+	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup,reviewDecision,headRefName"}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
-		return "unknown", ""
+		return "unknown", "", ""
 	}
 	var view ghPRView
 	if err := json.Unmarshal(out, &view); err != nil {
-		return "unknown", ""
+		return "unknown", "", ""
 	}
-	return rollupChecksState(view.StatusCheckRollup), strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
+	return rollupChecksState(view.StatusCheckRollup), strings.ToUpper(strings.TrimSpace(view.ReviewDecision)), strings.TrimSpace(view.HeadRefName)
+}
+
+// fetchPRHeadRef resolves only the PR head branch name. Used for
+// review-requested PRs where we don't need checks/review_decision.
+func (c GitHubCollector) fetchPRHeadRef(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) string {
+	if strings.TrimSpace(prURL) == "" {
+		return ""
+	}
+	args := []string{"pr", "view", prURL, "--json", "headRefName"}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Env = env
+	out, err := runAndLogExec(cmd, opts, directive.ID)
+	if err != nil {
+		return ""
+	}
+	var view ghPRView
+	if err := json.Unmarshal(out, &view); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(view.HeadRefName)
 }
 
 // rollupChecksState reduces a statusCheckRollup array to a single label.

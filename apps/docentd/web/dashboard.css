@@ -49,6 +49,9 @@ body {
 .ticket { font-weight: 680; text-decoration: none; color: var(--text); }
 .ticket.link:hover { color: var(--accent); }
 .ticket.untracked { color: var(--text-faint); }
+.branch { font-weight: 680; color: var(--text); }
+.ticket-links .ticket { margin-right: 0.35em; }
+.chip.path { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .summary { color: var(--text-dim); font-size: 12.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
 .pill.followup { color: var(--amber); }

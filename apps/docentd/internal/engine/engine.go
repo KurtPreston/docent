@@ -30,6 +30,10 @@ type DashboardGroup struct {
 	Key            string             `json:"key"`
 	Ticket         string             `json:"ticket,omitempty"`
 	Summary        string             `json:"summary,omitempty"`
+	Repo           string             `json:"repo,omitempty"`
+	Branch         string             `json:"branch,omitempty"`
+	OpenPath       string             `json:"openPath,omitempty"`
+	LastActivity   string             `json:"lastActivity,omitempty"`
 	JiraStatus     string             `json:"jiraStatus,omitempty"`
 	JiraURL        string             `json:"jiraUrl,omitempty"`
 	Color          string             `json:"color,omitempty"`
@@ -40,6 +44,7 @@ type DashboardGroup struct {
 	ActionRequired bool               `json:"actionRequired"`
 	Sessions       []DashboardSession `json:"sessions"`
 	PRs            []DashboardPR      `json:"prs"`
+	Tickets        []DashboardTicket  `json:"tickets,omitempty"`
 }
 
 // Work-item status tiers, ordered by display priority (lower rank sorts
@@ -82,6 +87,13 @@ type DashboardPR struct {
 	State    string `json:"state,omitempty"`
 	Draft    bool   `json:"draft"`
 	Ticket   string `json:"ticket,omitempty"`
+}
+
+type DashboardTicket struct {
+	Key    string `json:"key"`
+	Title  string `json:"title,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Status string `json:"status,omitempty"`
 }
 
 const (
@@ -581,10 +593,28 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 			Key:      wi.Key,
 			Ticket:   wi.Key,
 			Summary:  wi.Title,
+			Repo:     wi.Repo,
+			Branch:   wi.Branch,
+			OpenPath: wi.OpenPath,
+			LastActivity: wi.LastActivity,
 			Color:    wi.Color,
 			FG:       wi.FG,
 			Sessions: []DashboardSession{},
 			PRs:      []DashboardPR{},
+		}
+		if strings.HasPrefix(wi.Key, "wb:") {
+			g.Ticket = ""
+			if len(wi.Tickets) > 0 {
+				g.Ticket = wi.Tickets[0].Key
+			}
+			for _, tr := range wi.Tickets {
+				g.Tickets = append(g.Tickets, DashboardTicket{
+					Key:    tr.Key,
+					Title:  tr.Title,
+					URL:    tr.URL,
+					Status: tr.Status,
+				})
+			}
 		}
 		if wi.Attention == "needs-followup" || wi.Attention == "working" {
 			g.NeedsFollowup = wi.Attention == "needs-followup"
@@ -650,11 +680,11 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 					}
 				}
 			case "branch", "commit", "reflog":
-				// Not rendered as a row, but proof that a local branch
-				// exists for the ticket (drives the "started" status).
-				// Only counts when ticket-anchored, so orphan reflog/commit
-				// noise stays hidden rather than showing up as "started".
-				if ent.Coordinates["ticket"] != "" {
+				// Repo/branch units always have local git evidence.
+				// Legacy ticket-keyed units only count when ticket-anchored.
+				if strings.HasPrefix(wi.Key, "wb:") {
+					facts.branchEvidence = true
+				} else if ent.Coordinates["ticket"] != "" {
 					facts.branchEvidence = true
 				}
 			default:
@@ -692,6 +722,9 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 		}
 		if groups[i].ActionRequired != groups[j].ActionRequired {
 			return groups[i].ActionRequired // action-required first
+		}
+		if groups[i].LastActivity != groups[j].LastActivity {
+			return groups[i].LastActivity > groups[j].LastActivity
 		}
 		return groups[i].Key < groups[j].Key
 	})
@@ -822,18 +855,23 @@ type CollectorsView struct {
 
 // WorkItemDetail is the payload for GET /api/workitems/{key}.
 type WorkItemDetail struct {
-	Key      string             `json:"key"`
-	Title    string             `json:"title,omitempty"`
-	Ticket   string             `json:"ticket,omitempty"`
-	Summary  string             `json:"summary,omitempty"`
-	JiraURL  string             `json:"jiraUrl,omitempty"`
-	Status   string             `json:"jiraStatus,omitempty"`
-	Color    string             `json:"color,omitempty"`
-	FG       string             `json:"fg,omitempty"`
-	Sessions []DashboardSession `json:"sessions"`
-	PRs      []DashboardPR      `json:"prs"`
-	Entities []EntityView       `json:"entities"`
-	Signals  []SignalView       `json:"signals"`
+	Key          string             `json:"key"`
+	Title        string             `json:"title,omitempty"`
+	Ticket       string             `json:"ticket,omitempty"`
+	Summary      string             `json:"summary,omitempty"`
+	Repo         string             `json:"repo,omitempty"`
+	Branch       string             `json:"branch,omitempty"`
+	OpenPath     string             `json:"openPath,omitempty"`
+	LastActivity string             `json:"lastActivity,omitempty"`
+	JiraURL      string             `json:"jiraUrl,omitempty"`
+	Status       string             `json:"jiraStatus,omitempty"`
+	Color        string             `json:"color,omitempty"`
+	FG           string             `json:"fg,omitempty"`
+	Sessions     []DashboardSession `json:"sessions"`
+	PRs          []DashboardPR      `json:"prs"`
+	Tickets      []DashboardTicket  `json:"tickets,omitempty"`
+	Entities     []EntityView       `json:"entities"`
+	Signals      []SignalView       `json:"signals"`
 }
 
 // EntityView is a correlated entity shown on a work-item detail page.
@@ -931,15 +969,33 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 		return WorkItemDetail{}, false
 	}
 	detail := WorkItemDetail{
-		Key:      wi.Key,
-		Title:    wi.Title,
-		Ticket:   wi.Key,
-		Color:    wi.Color,
-		FG:       wi.FG,
-		Sessions: []DashboardSession{},
-		PRs:      []DashboardPR{},
-		Entities: make([]EntityView, 0, len(wi.Entities)),
-		Signals:  []SignalView{},
+		Key:          wi.Key,
+		Title:        wi.Title,
+		Ticket:       wi.Key,
+		Repo:         wi.Repo,
+		Branch:       wi.Branch,
+		OpenPath:     wi.OpenPath,
+		LastActivity: wi.LastActivity,
+		Color:        wi.Color,
+		FG:           wi.FG,
+		Sessions:     []DashboardSession{},
+		PRs:          []DashboardPR{},
+		Entities:     make([]EntityView, 0, len(wi.Entities)),
+		Signals:      []SignalView{},
+	}
+	if strings.HasPrefix(wi.Key, "wb:") {
+		detail.Ticket = ""
+		if len(wi.Tickets) > 0 {
+			detail.Ticket = wi.Tickets[0].Key
+		}
+		for _, tr := range wi.Tickets {
+			detail.Tickets = append(detail.Tickets, DashboardTicket{
+				Key:    tr.Key,
+				Title:  tr.Title,
+				URL:    tr.URL,
+				Status: tr.Status,
+			})
+		}
 	}
 	for _, g := range e.lastDashboard.Groups {
 		if g.Key == key {
@@ -948,6 +1004,9 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 			detail.Status = g.JiraStatus
 			detail.Sessions = g.Sessions
 			detail.PRs = g.PRs
+			if len(detail.Tickets) == 0 {
+				detail.Tickets = g.Tickets
+			}
 			break
 		}
 	}
