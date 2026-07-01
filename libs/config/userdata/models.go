@@ -60,7 +60,7 @@ type PollConfig struct {
 	// "0" disables background polling (manual/on-request only).
 	Interval string `yaml:"interval,omitempty"`
 	// OnRequest collects the unit inline when a page is requested. Reserved
-	// for fast, high-priority sources (e.g. docent-wm).
+	// for fast, high-priority sources (e.g. wsm).
 	OnRequest bool `yaml:"on_request,omitempty"`
 	// OnLoad collects the unit once at daemon startup so the cache isn't
 	// empty before the first interval elapses.

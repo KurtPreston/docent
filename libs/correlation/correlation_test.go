@@ -235,7 +235,7 @@ func TestSignalsToEntities_session(t *testing.T) {
 	cfg := Config{}
 	signals := []model.Signal{
 		{
-			Source: "docent-wm",
+			Source: "wsm",
 			Kind:   "session",
 			Title:  "my-feature",
 			Fields: map[string]string{"window_id": "w1", "machine": "mac"},

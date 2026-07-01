@@ -284,7 +284,7 @@ are managed on your workstation.
 The window manager is now the standalone [wsm](https://github.com/KurtPreston/wsm)
 daemon (`wsmd`): a localhost-only REST service that owns the Cursor windows on the
 machine you sit at (default port **39788**). docent is a *client* of it via the
-`docent-wm` collector (see below) and the dashboard's focus button. The contract
+`wsm` collector (see below) and the dashboard's focus button. The contract
 `GET /health`, `GET /windows`, `POST /open`, `POST /focus` is published as an
 OpenAPI spec in the wsm repo. Install and run it from there; there is no window
 manager binary in this repo anymore.

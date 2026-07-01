@@ -10,23 +10,23 @@ import (
 	"github.com/KurtPreston/docent/libs/wmclient"
 )
 
-// DocentWMCollector polls the local wsm window-manager REST service for live
-// Cursor windows. (The collector directive is still named "docent-wm".)
-type DocentWMCollector struct {
+// WSMCollector polls the local wsm window-manager REST service for live Cursor
+// windows. The collector directive is named "wsm".
+type WSMCollector struct {
 	Clock func() time.Time
 }
 
-func (c DocentWMCollector) clock() func() time.Time {
+func (c WSMCollector) clock() func() time.Time {
 	if c.Clock != nil {
 		return c.Clock
 	}
 	return time.Now
 }
 
-func (c DocentWMCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
+func (c WSMCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	base := strings.TrimSpace(directive.Config["base_url"])
 	if base == "" {
-		return nil, fmt.Errorf("config.base_url is required for docent-wm collector")
+		return nil, fmt.Errorf("config.base_url is required for wsm collector")
 	}
 	machine := strings.TrimSpace(directive.Config["machine"])
 	if machine == "" {
@@ -56,7 +56,7 @@ func (c DocentWMCollector) CollectState(ctx context.Context, directive userdata.
 		}
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
-			Source:      "docent-wm",
+			Source:      "wsm",
 			Kind:        "session",
 			Title:       leaf,
 			Summary:     win.Title,
@@ -69,13 +69,13 @@ func (c DocentWMCollector) CollectState(ctx context.Context, directive userdata.
 	return items, nil
 }
 
-func (c DocentWMCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
+func (c WSMCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
 	if strings.TrimSpace(directive.Config["base_url"]) == "" {
 		return []ValidationIssue{{
 			DirectiveID: directive.ID,
 			Field:       "config.base_url",
-			Message:     "docent-wm collector requires config.base_url",
-			Remediation: "set config.base_url to the docent-wm HTTP base (e.g. http://127.0.0.1:39788)",
+			Message:     "wsm collector requires config.base_url",
+			Remediation: "set config.base_url to the wsm HTTP base (e.g. http://127.0.0.1:39788)",
 		}}
 	}
 	return nil
