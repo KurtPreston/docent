@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${DOCENT_BIN_DIR:-$HOME/.local/bin}"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
+# launchd starts services with a minimal PATH; Homebrew and ~/.local/bin are not included.
+DOCENT_SERVICE_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 CONFIG_DIR="${DOCENT_CONFIG_DIR:-$HOME/.config/docent}"
 CONFIG_PATH="$CONFIG_DIR/docentd.yaml"
 LEGACY_CONFIG_DIR="$ROOT/userdata"
@@ -278,6 +280,10 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
     <string>$WEB_ROOT</string>
   </array>
   <key>WorkingDirectory</key><string>$CONFIG_DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$DOCENT_SERVICE_PATH</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$LOG_DIR/docentd.log</string>
