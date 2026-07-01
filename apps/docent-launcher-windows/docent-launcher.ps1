@@ -13,15 +13,16 @@ Windows, so there is no extra runtime to install and no admin required.
 
 Adapted from the legacy docent-powershell launcher for the monorepo split:
 session rows are pulled from docentd's GET /sessions (which may be a REMOTE
-docentd), while focusing a session POSTs to the LOCAL docent-wm /focus (the
-window manager that actually owns the windows on this machine).
+docentd), while focusing a session POSTs to the LOCAL wsm /focus (the window
+manager, from https://github.com/KurtPreston/wsm, that actually owns the windows
+on this machine).
 
 .PARAMETER SessionsUrl
 Base URL of docentd (serves /sessions). Default http://127.0.0.1:39787. Point
 this at your remote docentd when docentd runs elsewhere.
 
 .PARAMETER WmUrl
-Base URL of the local docent-wm window manager (serves /focus). Default
+Base URL of the local wsm window manager (serves /focus). Default
 http://127.0.0.1:39788.
 
 .PARAMETER Token
@@ -139,7 +140,7 @@ function Test-FuzzyMatch {
     return ($qi -ge $Query.Length)
 }
 
-# Activate the chosen entry: focus the session via the LOCAL docent-wm, or open
+# Activate the chosen entry: focus the session via the LOCAL wsm, or open
 # the ticket/PR URL in a browser.
 function Invoke-LauncherEntry {
     param($Entry)

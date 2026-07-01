@@ -2,8 +2,9 @@
 # Install docentd on Linux (binary + config + systemd --user service).
 #
 # This is the Linux counterpart to install-docent-macos.sh. It only installs
-# docentd (the dashboard/collector daemon); there is no docent-wm for Linux —
-# the window manager + launcher run on the Windows host that connects here.
+# docentd (the dashboard/collector daemon); there is no window manager for Linux
+# — the wsm window manager (https://github.com/KurtPreston/wsm) + launcher run on
+# the Windows/macOS host that connects here.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

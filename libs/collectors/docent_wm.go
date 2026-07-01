@@ -10,7 +10,8 @@ import (
 	"github.com/KurtPreston/docent/libs/wmclient"
 )
 
-// DocentWMCollector polls a docent-wm REST service for live Cursor windows.
+// DocentWMCollector polls the local wsm window-manager REST service for live
+// Cursor windows. (The collector directive is still named "docent-wm".)
 type DocentWMCollector struct {
 	Clock func() time.Time
 }

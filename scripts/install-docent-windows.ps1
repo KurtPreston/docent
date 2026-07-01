@@ -1,20 +1,20 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-Install the docent Windows front-end (docent-wm-windows + docent-launcher-windows)
-and, optionally, docentd locally.
+Install the docent Windows front-end (docent-launcher-windows) and, optionally,
+docentd locally. The window manager lives in the separate wsm project -- install
+it from https://github.com/KurtPreston/wsm (default port 39788).
 
 .DESCRIPTION
 The Windows counterpart to install-docent-macos.sh / install-docent-linux.sh,
 written natively in PowerShell so it runs in your shell without Git Bash / WSL.
 
-docent-wm and the launcher are PowerShell programs (no Go build):
-  - docent-wm-windows        apps/docent-wm-windows/serve.ps1            (REST window manager, :39788)
+The launcher is a PowerShell program (no Go build):
   - docent-launcher-windows  apps/docent-launcher-windows/docent-launcher.ps1  (WPF hotkey picker)
-Both run hidden + auto-restarting via Scheduled Tasks using the watchdog pattern
-documented in docent-powershell/README.md (at-logon trigger + a 1-minute
-repeating watchdog + MultipleInstances=IgnoreNew, launched through a hidden,
-waiting .vbs so no console window flashes).
+It runs hidden + auto-restarting via a Scheduled Task using the watchdog pattern
+(at-logon trigger + a 1-minute repeating watchdog + MultipleInstances=IgnoreNew,
+launched through a hidden, waiting .vbs so no console window flashes). The window
+manager (wsm) has its own installer in the wsm repo.
 
 On first run it asks whether docentd runs on THIS machine (local) or on a REMOTE
 host. Local builds docentd.exe, runs docent-setup, and registers a docentd task.
@@ -39,7 +39,8 @@ Skip Scheduled Task registration (build/config only).
 Skip docentd.exe build (reuse an existing binary in BinDir).
 
 .PARAMETER NoModules
-Skip the VirtualDesktop PowerShell module check/install.
+Deprecated no-op. The VirtualDesktop module is now installed by wsm's own
+installer; kept for backward compatibility.
 
 .PARAMETER Hotkey
 Launcher hotkey (default: Ctrl+Alt+Space).
@@ -136,7 +137,7 @@ else {
     Write-Host ""
     Write-Host "Where does docentd run?"
     Write-Host "  1) This machine (build + register docentd locally) [default]"
-    Write-Host "  2) Remote host  (only install the window manager + launcher here)"
+    Write-Host "  2) Remote host  (only install the launcher here)"
     $choice = Read-Host "Choice [1]"
     if ($choice -in '2', 'remote', 'Remote') { $Mode = 'remote' } else { $Mode = 'local' }
 }
@@ -274,35 +275,8 @@ if ($Mode -eq 'local') {
     }
 }
 
-# --- PowerShell prerequisites: VirtualDesktop module -------------------------
-# docent-wm uses MScholtes' VirtualDesktop module to place/switch windows across
-# virtual desktops (window control still works without it, just no desktop hop).
-if ($NoModules) {
-    Log "skipping PowerShell module check (-NoModules)"
-}
-else {
-    Log "checking PowerShell module: VirtualDesktop"
-    if ($DryRun) {
-        Write-Host "[dry-run] Install-Module VirtualDesktop -Scope CurrentUser"
-    }
-    elseif (Get-Module -ListAvailable -Name VirtualDesktop) {
-        Write-Host "  VirtualDesktop already installed"
-    }
-    else {
-        try {
-            if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-                Install-PackageProvider -Name NuGet -Scope CurrentUser -Force | Out-Null
-            }
-            Install-Module VirtualDesktop -Scope CurrentUser -Force -AllowClobber
-            Write-Host "  installed VirtualDesktop (CurrentUser)"
-        }
-        catch {
-            Write-Warning ("Could not auto-install VirtualDesktop: " + $_.Exception.Message)
-            Write-Warning "Install it manually: Install-Module VirtualDesktop -Scope CurrentUser"
-            Write-Warning "docent-wm will still run (foreground focus only, no virtual-desktop hop)."
-        }
-    }
-}
+# The window manager (wsm) and its VirtualDesktop module prerequisite are
+# installed separately from the wsm repo; nothing to do here.
 
 # --- Scheduled Tasks (hidden + watchdog) -------------------------------------
 # A hidden, *waiting* .vbs runs the program with no console window. Waiting keeps
@@ -338,7 +312,7 @@ shell.Run "$literal", 0, $waitArg
 # (wscript .vbs -> cmd -> leaf), and Stop-ScheduledTask doesn't reliably reap
 # that leaf -- so stop the task and kill the whole tree, matched by a token that
 # appears in both the wscript host (.vbs name) and the leaf command line
-# (e.g. 'docent-launcher', 'docent-wm', 'docentd').
+# (e.g. 'docent-launcher', 'docentd').
 function Stop-DocentProgram {
     param([string]$TaskName, [string]$Match)
     if ($DryRun) { Write-Host "[dry-run] stop task '$TaskName' + kill processes matching '$Match'"; return }
@@ -377,16 +351,8 @@ if ($NoTasks) {
 }
 else {
     $extra = if ($Mode -eq 'local') { ', docentd' } else { '' }
-    Log "registering Scheduled Tasks (docent-wm, docent-launcher$extra) -- stopping any running instances first so fresh code loads"
+    Log "registering Scheduled Tasks (docent-launcher$extra) -- stopping any running instances first so fresh code loads"
     $tmp = $env:TEMP
-
-    # docent-wm-windows (always)
-    $wmVbs = Join-Path $ConfigDir 'docent-wm-hidden.vbs'
-    $wmScript = Join-Path $Root 'apps\docent-wm-windows\serve.ps1'
-    Write-HiddenVbs -Path $wmVbs -Exe $PwshExe `
-        -ArgLine ('-NoLogo -NoProfile -File "{0}" -Port {1}' -f $wmScript, $WmPort) `
-        -LogFile (Join-Path $tmp 'docent-wm.log')
-    Register-DocentTask -Name 'docent-wm' -Vbs $wmVbs -Match 'docent-wm'
 
     # docent-launcher-windows (always)
     $lnVbs = Join-Path $ConfigDir 'docent-launcher-hidden.vbs'
@@ -424,16 +390,14 @@ if (-not $DryRun -and -not $NoTasks) {
         Write-Host "  docentd       remote  $RemoteUrl"
     }
     if (Test-Health "http://127.0.0.1:$WmPort/health") {
-        Write-Host "  docent-wm     http://127.0.0.1:$WmPort/  ok"
-        if (Test-Health "http://127.0.0.1:$WmPort/windows") { Write-Host "  docent-wm     /windows ok" }
+        Write-Host "  wsm           http://127.0.0.1:$WmPort/  ok"
     }
-    else { Write-Warning "docent-wm FAIL - see $env:TEMP\docent-wm.log" }
+    else { Write-Warning "wsm not reachable on :$WmPort - install it from https://github.com/KurtPreston/wsm" }
 }
 
 # --- summary -----------------------------------------------------------------
 Write-Host ""
 Write-Host "Installed (docentd: $Mode):"
-Write-Host "  docent-wm-windows       apps/docent-wm-windows/serve.ps1            (127.0.0.1:$WmPort)"
 Write-Host "  docent-launcher-windows apps/docent-launcher-windows/docent-launcher.ps1  (hotkey $Hotkey)"
 if ($Mode -eq 'local') {
     Write-Host "  docentd                 $DocentdBin   (127.0.0.1:$Port)"
@@ -448,22 +412,23 @@ if (-not $NoTasks) {
     $extra = if ($Mode -eq 'local') { ', docentd' } else { '' }
     Write-Host ""
     Write-Host "Scheduled Tasks (hidden, at-logon + 1-min watchdog):"
-    Write-Host "  docent-wm$extra, docent-launcher"
-    Write-Host "  logs: $env:TEMP\docent-wm.log, $env:TEMP\docent-launcher.log$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })"
+    Write-Host "  docent-launcher$extra"
+    Write-Host "  logs: $env:TEMP\docent-launcher.log$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })"
     Write-Host ""
     Write-Host "Manage:"
-    Write-Host "  Get-ScheduledTask docent-wm | Get-ScheduledTaskInfo"
-    Write-Host "  Stop-ScheduledTask -TaskName docent-wm          # watchdog relaunches within ~1 min"
-    Write-Host "  Disable-ScheduledTask -TaskName docent-wm       # turn OFF autostart + watchdog"
-    Write-Host "  Unregister-ScheduledTask -TaskName docent-wm -Confirm:`$false"
+    Write-Host "  Get-ScheduledTask docent-launcher | Get-ScheduledTaskInfo"
+    Write-Host "  Stop-ScheduledTask -TaskName docent-launcher          # watchdog relaunches within ~1 min"
+    Write-Host "  Disable-ScheduledTask -TaskName docent-launcher       # turn OFF autostart + watchdog"
+    Write-Host "  Unregister-ScheduledTask -TaskName docent-launcher -Confirm:`$false"
 }
 
 Write-Host ""
 Write-Host "Notes:"
-Write-Host "  - docent-wm needs your interactive desktop to enumerate/focus Cursor windows,"
-Write-Host "    so its task runs as you (LogonType Interactive) and only while logged on."
-Write-Host "  - The dashboard focuses windows directly via the local docent-wm at"
+Write-Host "  - The window manager is the separate wsm daemon; install it from"
+Write-Host "    https://github.com/KurtPreston/wsm (it serves :$WmPort and needs your"
+Write-Host "    interactive desktop to enumerate/focus Cursor windows)."
+Write-Host "  - The dashboard focuses windows directly via the local wsm at"
 Write-Host "    http://127.0.0.1:$WmPort (the browser's localhost), so focus works even when docentd is remote."
 Write-Host "  - For a REMOTE docentd to also *list* this machine's windows, give docentd a"
 Write-Host "    'docent-wm' directive whose base_url reaches this host's :$WmPort (e.g. over a reverse SSH"
-Write-Host "    tunnel). Local docentd auto-adds that directive."
+Write-Host "    tunnel) -- i.e. the local wsm daemon. Local docentd auto-adds that directive."

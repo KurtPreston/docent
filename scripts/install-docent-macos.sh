@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Install docentd + docent-wm-macos on macOS (binaries, launchd, Hammerspoon launcher, Cursor hooks when Cursor is installed).
+# Install docentd on macOS (binary, launchd, Hammerspoon launcher, Cursor hooks
+# when Cursor is installed). The local window manager is a separate project --
+# install it from https://github.com/KurtPreston/wsm (default port 39788).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,14 +30,15 @@ usage() {
   cat <<'EOF'
 Usage: install-docent-macos.sh [options]
 
-Installs docent-wm-macos (always) and optionally docentd locally, with
-launchd LaunchAgents, the Hammerspoon launcher, and Cursor hooks when
-Cursor.app is installed.
+Installs docentd (optionally, locally) with a launchd LaunchAgent, the
+Hammerspoon launcher, and Cursor hooks when Cursor.app is installed. The
+window manager itself lives in the separate wsm project -- install it from
+https://github.com/KurtPreston/wsm.
 
 On first run, asks whether docentd runs on this Mac (local) or remotely.
 Local installs build docentd, run docent-setup when needed, and register
-both LaunchAgents. Remote installs only docent-wm-macos locally and point
-hooks/launcher at the remote docentd URL you provide.
+its LaunchAgent. Remote installs point hooks/launcher at the remote docentd
+URL you provide (nothing is built locally).
 
 Options:
   --hooks           Install Cursor hooks even if Cursor.app is not found
@@ -113,7 +116,7 @@ resolve_docentd_location() {
   echo ""
   echo "Where does docentd run?"
   echo "  1) This Mac (build + launchd docentd locally) [default]"
-  echo "  2) Remote machine (only install docent-wm-macos here)"
+  echo "  2) Remote machine (configure hooks/launcher for a remote docentd)"
   printf "Choice [1]: "
   read -r choice
   case "${choice:-1}" in
@@ -202,19 +205,16 @@ if [ "$DOCENTD_MODE" = remote ]; then
 fi
 
 DOCENTD_BIN="$BIN_DIR/docentd"
-WM_BIN="$BIN_DIR/docent-wm-macos"
 PLIST_DOCENTD="$LAUNCH_AGENTS/com.docent.docentd.plist"
-PLIST_WM="$LAUNCH_AGENTS/com.docent.docent-wm-macos.plist"
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
-  run mkdir -p "$BIN_DIR"
   if [ "$DOCENTD_MODE" = local ]; then
-    log "building docentd and docent-wm-macos"
+    run mkdir -p "$BIN_DIR"
+    log "building docentd"
     run go build -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
   else
-    log "building docent-wm-macos (remote docentd)"
+    log "remote docentd — nothing to build locally"
   fi
-  run go build -o "$WM_BIN" "$ROOT/apps/docent-wm-macos"
 else
   log "skipping build (--no-build)"
 fi
@@ -259,13 +259,12 @@ if [ "$DOCENTD_MODE" = local ]; then
   run_docent_setup_if_needed
 fi
 
-if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
-  log "writing launchd plists"
+if [ "$INSTALL_LAUNCHD" -eq 1 ] && [ "$DOCENTD_MODE" = local ]; then
+  log "writing launchd plist"
   run mkdir -p "$LAUNCH_AGENTS" "$LOG_DIR"
 
   if [ "$DRY_RUN" -eq 0 ]; then
-    if [ "$DOCENTD_MODE" = local ]; then
-      cat >"$PLIST_DOCENTD" <<EOF
+    cat >"$PLIST_DOCENTD" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -291,32 +290,8 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ]; then
 </dict>
 </plist>
 EOF
-    fi
-
-    cat >"$PLIST_WM" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.docent.docent-wm-macos</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$WM_BIN</string>
-    <string>-port</string>
-    <string>$WM_PORT</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$LOG_DIR/docent-wm-macos.log</string>
-  <key>StandardErrorPath</key><string>$LOG_DIR/docent-wm-macos.log</string>
-</dict>
-</plist>
-EOF
   else
-    if [ "$DOCENTD_MODE" = local ]; then
-      run printf '%s\n' "write $PLIST_DOCENTD"
-    fi
-    run printf '%s\n' "write $PLIST_WM"
+    run printf '%s\n' "write $PLIST_DOCENTD"
   fi
 
   uid="$(id -u)"
@@ -328,20 +303,8 @@ EOF
     run launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || run launchctl load "$plist"
   }
 
-  unload_agent() {
-    local label="$1" plist="$2"
-    if launchctl print "gui/$uid/$label" &>/dev/null; then
-      run launchctl bootout "gui/$uid" "$plist" 2>/dev/null || run launchctl unload "$plist" 2>/dev/null || true
-    fi
-  }
-
-  log "loading launch agents"
-  if [ "$DOCENTD_MODE" = local ]; then
-    reload_agent com.docent.docentd "$PLIST_DOCENTD"
-  else
-    unload_agent com.docent.docentd "$PLIST_DOCENTD"
-  fi
-  reload_agent com.docent.docent-wm-macos "$PLIST_WM"
+  log "loading launch agent"
+  reload_agent com.docent.docentd "$PLIST_DOCENTD"
 fi
 
 install_hooks() {
@@ -439,51 +402,21 @@ if [ "$INSTALL_HAMMERSPOON" -eq 1 ]; then
   install_hammerspoon
 fi
 
-open_accessibility_settings() {
-  # Ventura+ URL; older releases ignore unknown schemes harmlessly.
-  open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility" \
-    2>/dev/null \
-    || open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" \
-    2>/dev/null \
-    || true
-}
-
-# macOS only adds a binary to the Accessibility list after it actually calls
-# assistive APIs (osascript / System Events). We cannot pre-enable the toggle;
-# probing /windows registers docent-wm-macos as interested.
-prompt_accessibility_if_needed() {
-  local resp
-  resp="$(curl -sf --max-time 5 "http://127.0.0.1:$WM_PORT/windows" 2>/dev/null || true)"
-  if [ -n "$resp" ] && ! printf '%s' "$resp" | grep -qi 'assistive access\|osascript'; then
-    echo "  docent-wm   accessibility ok (/windows)"
-    return 0
-  fi
-
-  echo "  docent-wm   needs Accessibility (enable this exact binary in System Settings):" >&2
-  echo "              $WM_BIN" >&2
-  open_accessibility_settings
-  if command -v osascript >/dev/null 2>&1; then
-    osascript -e "display notification \"Enable docent-wm-macos in Privacy & Security → Accessibility\" with title \"docent install\"" 2>/dev/null || true
-  fi
-}
-
 if [ "$DRY_RUN" -eq 0 ]; then
   if [ "$DOCENTD_MODE" = local ]; then
     log "running doctor"
     "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
-  fi
 
-  log "health checks"
-  sleep 1
-  if [ "$DOCENTD_MODE" = local ]; then
+    log "health checks"
+    sleep 1
     curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null && echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok" || echo "  docentd     FAIL (see $LOG_DIR/docentd.log)" >&2
-  else
-    echo "  docentd     remote  $DOCENTD_URL"
   fi
-  curl -sf "http://127.0.0.1:$WM_PORT/health" >/dev/null && echo "  docent-wm   http://127.0.0.1:$WM_PORT/  ok" || echo "  docent-wm   FAIL (see $LOG_DIR/docent-wm-macos.log)" >&2
 
-  log "accessibility probe (registers docent-wm-macos with TCC)"
-  prompt_accessibility_if_needed
+  if curl -sf --max-time 5 "http://127.0.0.1:$WM_PORT/health" >/dev/null 2>&1; then
+    echo "  wsm         http://127.0.0.1:$WM_PORT/  ok"
+  else
+    echo "  wsm         not reachable on :$WM_PORT — install it from https://github.com/KurtPreston/wsm" >&2
+  fi
 fi
 
 if [ "$DOCENTD_MODE" = local ]; then
@@ -491,40 +424,32 @@ if [ "$DOCENTD_MODE" = local ]; then
 
 Installed:
   docentd           $DOCENTD_BIN
-  docent-wm-macos   $WM_BIN
   config            $CONFIG_DIR/
     docentd.yaml    daemon settings
     config.yaml     collector directives
     .env            secrets (optional)
   dashboard         http://127.0.0.1:$DOCENT_PORT/
-  window manager    http://127.0.0.1:$WM_PORT/
 
 LaunchAgents:
   $PLIST_DOCENTD
-  $PLIST_WM
-  logs: $LOG_DIR/docentd.log, $LOG_DIR/docent-wm-macos.log
+  logs: $LOG_DIR/docentd.log
 
 Unload: launchctl bootout gui/\$(id -u) <plist>   (or launchctl unload <plist>)
 
-If /windows still fails, enable docent-wm-macos under
-Privacy & Security → Accessibility (the install probes /windows to register it).
+Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
+(it serves the window manager on http://127.0.0.1:$WM_PORT/ and handles its own
+Accessibility permission).
 EOF
 else
   cat <<EOF
 
 Installed (remote docentd):
-  docent-wm-macos   $WM_BIN
   docentd           $DOCENTD_URL  (remote — not installed locally)
   config            $CONFIG_DIR/
     .env            DOCENT_URL, DOCENT_TOKEN
     launcher.lua    Hammerspoon overrides
-  window manager    http://127.0.0.1:$WM_PORT/
 
-LaunchAgents:
-  $PLIST_WM
-  logs: $LOG_DIR/docent-wm-macos.log
-
-If /windows still fails, enable docent-wm-macos under
-Privacy & Security → Accessibility (the install probes /windows to register it).
+Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
+(it serves the window manager on http://127.0.0.1:$WM_PORT/).
 EOF
 fi
