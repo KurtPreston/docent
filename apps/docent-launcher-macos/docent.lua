@@ -9,7 +9,7 @@
 
 local DOCENT = {
   port = tonumber(os.getenv("DOCENT_PORT")) or 39787,
-  wmPort = tonumber(os.getenv("DOCENT_WM_PORT")) or 39788,
+  wsmPort = tonumber(os.getenv("WSM_PORT")) or 39788,
   token = os.getenv("DOCENT_TOKEN"),
   hotkey = { mods = { "ctrl", "alt" }, key = "space" },
 }
@@ -24,7 +24,7 @@ if chunk then
 end
 
 local base = DOCENT.url or ("http://127.0.0.1:" .. DOCENT.port)
-local wmBase = "http://127.0.0.1:" .. DOCENT.wmPort
+local wsmBase = "http://127.0.0.1:" .. DOCENT.wsmPort
 
 local chooser = nil
 
@@ -77,7 +77,7 @@ local function activate(choice)
   if choice.kind == "session" then
     local payload = { name = choice.name }
     if choice.host then payload.host = choice.host end
-    hs.http.asyncPost(wmBase .. "/focus", hs.json.encode(payload), { ["Content-Type"] = "application/json" },
+    hs.http.asyncPost(wsmBase .. "/focus", hs.json.encode(payload), { ["Content-Type"] = "application/json" },
       function(status, body, _)
         if status == 200 then return end
         local msg = (body and body ~= "") and body or ("HTTP " .. tostring(status))

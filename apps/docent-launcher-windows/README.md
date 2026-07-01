@@ -15,7 +15,7 @@ adapted for the monorepo split:
 - **Session rows** come from docentd's `GET /sessions` (`-SessionsUrl`, which may
   point at a **remote** docentd).
 - **Focusing a session** POSTs to the **local** [wsm](https://github.com/KurtPreston/wsm)
-  `/focus` (`-WmUrl`, default `http://127.0.0.1:39788`) — the window manager that
+  `/focus` (`-WsmUrl`, default `http://127.0.0.1:39788`) — the window manager that
   owns the windows on this machine.
 
 ```powershell
@@ -23,7 +23,7 @@ adapted for the monorepo split:
 pwsh -File docent-launcher.ps1
 
 # remote docentd, local window manager
-pwsh -File docent-launcher.ps1 -SessionsUrl http://desktop:39787 -WmUrl http://127.0.0.1:39788
+pwsh -File docent-launcher.ps1 -SessionsUrl http://desktop:39787 -WsmUrl http://127.0.0.1:39788
 
 # connectivity / parsing check (no GUI)
 pwsh -File docent-launcher.ps1 -SelfTest
@@ -31,6 +31,6 @@ pwsh -File docent-launcher.ps1 -SelfTest
 
 `scripts/install-docent-windows.ps1` registers this as a hidden, auto-restarting
 Scheduled Task (see the repo `docent-powershell` README for the watchdog
-pattern). `SessionsUrl`/`WmUrl`/`Token`/`Hotkey` may also be supplied via the
-`DOCENT_SESSIONS_URL` (or `DOCENT_URL`), `DOCENT_WM_URL`, and `DOCENT_TOKEN`
+pattern). `SessionsUrl`/`WsmUrl`/`Token`/`Hotkey` may also be supplied via the
+`DOCENT_SESSIONS_URL` (or `DOCENT_URL`), `WSM_URL`, and `DOCENT_TOKEN`
 environment variables.

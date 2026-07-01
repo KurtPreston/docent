@@ -15,7 +15,7 @@ CONFIG_PATH="$CONFIG_DIR/docentd.yaml"
 LEGACY_CONFIG_DIR="$ROOT/userdata"
 WEB_ROOT="$ROOT/apps/docentd/web"
 DOCENT_PORT=39787
-WM_PORT=39788
+WSM_PORT=39788
 
 INSTALL_HOOKS=auto
 INSTALL_HAMMERSPOON=1
@@ -173,7 +173,7 @@ write_remote_config() {
 return {
   url = "$DOCENTD_URL",
   token = "$DOCENTD_TOKEN",
-  wmPort = $WM_PORT,
+  wsmPort = $WSM_PORT,
 }
 EOF
 }
@@ -412,10 +412,10 @@ if [ "$DRY_RUN" -eq 0 ]; then
     curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null && echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok" || echo "  docentd     FAIL (see $LOG_DIR/docentd.log)" >&2
   fi
 
-  if curl -sf --max-time 5 "http://127.0.0.1:$WM_PORT/health" >/dev/null 2>&1; then
-    echo "  wsm         http://127.0.0.1:$WM_PORT/  ok"
+  if curl -sf --max-time 5 "http://127.0.0.1:$WSM_PORT/health" >/dev/null 2>&1; then
+    echo "  wsm         http://127.0.0.1:$WSM_PORT/  ok"
   else
-    echo "  wsm         not reachable on :$WM_PORT — install it from https://github.com/KurtPreston/wsm" >&2
+    echo "  wsm         not reachable on :$WSM_PORT — install it from https://github.com/KurtPreston/wsm" >&2
   fi
 fi
 
@@ -437,7 +437,7 @@ LaunchAgents:
 Unload: launchctl bootout gui/\$(id -u) <plist>   (or launchctl unload <plist>)
 
 Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
-(it serves the window manager on http://127.0.0.1:$WM_PORT/ and handles its own
+(it serves the window manager on http://127.0.0.1:$WSM_PORT/ and handles its own
 Accessibility permission).
 EOF
 else
@@ -450,6 +450,6 @@ Installed (remote docentd):
     launcher.lua    Hammerspoon overrides
 
 Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
-(it serves the window manager on http://127.0.0.1:$WM_PORT/).
+(it serves the window manager on http://127.0.0.1:$WSM_PORT/).
 EOF
 fi

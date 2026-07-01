@@ -55,7 +55,7 @@ func TestLaunchWorkItem_runsHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.DaemonConfig{OnClickScript: script, DocentWMURL: "http://127.0.0.1:39788"}
+	cfg := config.DaemonConfig{OnClickScript: script, WSMURL: "http://127.0.0.1:39788"}
 	e := New(cfg, reg)
 	seedWorkItem(e, "wb:org/repo@feature-x")
 

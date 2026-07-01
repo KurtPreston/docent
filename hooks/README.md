@@ -25,7 +25,7 @@ Copy `apps/docent-launcher-macos/docent.lua` to `~/.hammerspoon/docent.lua` and 
 Environment (or `~/.config/docent/launcher.lua` written by install script):
 - `DOCENT_URL` — remote docentd base URL
 - `DOCENT_PORT` — local docentd (default 39787)
-- `DOCENT_WM_PORT` — local wsm window manager (default 39788)
+- `WSM_PORT` — local wsm window manager (default 39788)
 
 Focus actions go to wsm; session list comes from docentd `/sessions`.
 

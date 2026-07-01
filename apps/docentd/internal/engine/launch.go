@@ -46,7 +46,7 @@ func (e *Engine) LaunchWorkItem(ctx context.Context, key string) (LaunchResult, 
 	}
 
 	env := os.Environ()
-	env = append(env, launchEnv(detail, e.cfg.DocentWMURL, e.cfg.SSHHost)...)
+	env = append(env, launchEnv(detail, e.cfg.WSMURL, e.cfg.SSHHost)...)
 
 	cctx, cancel := context.WithTimeout(ctx, launchTimeout)
 	defer cancel()
@@ -76,7 +76,7 @@ func (e *Engine) LaunchWorkItem(ctx context.Context, key string) (LaunchResult, 
 	return LaunchResult{OK: true, Message: msg}, true
 }
 
-func launchEnv(d WorkItemDetail, wmURL, sshHost string) []string {
+func launchEnv(d WorkItemDetail, wsmURL, sshHost string) []string {
 	ticket := d.Ticket
 	if ticket == "" {
 		ticket = d.Key
@@ -102,7 +102,7 @@ func launchEnv(d WorkItemDetail, wmURL, sshHost string) []string {
 		{"DOCENT_COLOR", d.Color},
 		{"DOCENT_FG", d.FG},
 		{"DOCENT_LAST_ACTIVITY", d.LastActivity},
-		{"DOCENT_WM_URL", wmURL},
+		{"WSM_URL", wsmURL},
 		{"DOCENT_HOST", sshHost},
 	}
 	out := make([]string, 0, len(pairs))

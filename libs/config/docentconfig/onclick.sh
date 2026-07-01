@@ -8,7 +8,7 @@
 # Fallback chain:
 #   1. grove (cd to repo / grove project root, then grove "$DOCENT_BRANCH")
 #   2. local Cursor (when DOCENT_OPEN_PATH is a directory and cursor is on PATH)
-#   3. remote wsm window manager (when DOCENT_OPEN_PATH, DOCENT_WM_URL, DOCENT_HOST are set)
+#   3. remote wsm window manager (when DOCENT_OPEN_PATH, WSM_URL, DOCENT_HOST are set)
 #   4. otherwise print guidance and exit non-zero
 
 set -euo pipefail
@@ -58,7 +58,7 @@ if [[ -n "${DOCENT_OPEN_PATH:-}" && -d "${DOCENT_OPEN_PATH}" ]] && command -v cu
 fi
 
 # 3. remote SSH window via wsm on the workstation
-if [[ -n "${DOCENT_OPEN_PATH:-}" && -n "${DOCENT_WM_URL:-}" && -n "${DOCENT_HOST:-}" ]]; then
+if [[ -n "${DOCENT_OPEN_PATH:-}" && -n "${WSM_URL:-}" && -n "${DOCENT_HOST:-}" ]]; then
   name="${DOCENT_BRANCH:-}"
   if [[ -z "$name" ]]; then
     name="$(leaf_name "$DOCENT_OPEN_PATH")"
@@ -80,7 +80,7 @@ print(json.dumps({
     else
       die "python3 required to build JSON for remote open (or customize onclick.sh)"
     fi
-    curl -fsS -X POST "${DOCENT_WM_URL%/}/open" \
+    curl -fsS -X POST "${WSM_URL%/}/open" \
       -H 'Content-Type: application/json' \
       -d "$payload"
     echo "remote open requested"
