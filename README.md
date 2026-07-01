@@ -1,6 +1,6 @@
 # docent
 
-Monorepo suite containing local-first tooling for developer activity: **docent** (live dashboard + window management) and **docent-reporter** (collectors → AI → Markdown reports).
+Monorepo suite containing local-first tooling for developer activity: **docent** (live dashboard + session focus) and **docent-reporter** (collectors → AI → Markdown reports). The local window manager it drives now lives in the separate [wsm](https://github.com/KurtPreston/wsm) project.
 
 ## Monorepo layout
 
@@ -8,8 +8,6 @@ Monorepo suite containing local-first tooling for developer activity: **docent**
 libs/           shared Go packages (model, collectors, correlation, ai, config, …)
 apps/
   docentd/              merged daemon (collectors, dashboard, /ingest)
-  docent-wm-macos/      local window manager REST service (macOS)
-  docent-wm-windows/    local window manager REST service (Windows)
   docent-launcher-*/    hotkey + webview launchers
   docent-reporter/      stateless CLI reporter (was `slakkr`)
   docent-setup/         config wizard + `check` validator
@@ -266,13 +264,14 @@ Caveats:
 Beyond the reporter, `docentd` doubles as a **mission-control dashboard**: a live,
 color-coded, grouped-by-ticket view of your Cursor sessions, JIRA tickets, and
 GitHub PRs, with focus-or-open window control. The window control itself lives in
-a small **local** REST service (`docent-wm`) so `docentd` can run remotely (on your
-dev box) while the windows are managed on your workstation.
+a small **local** REST service — the separate [wsm](https://github.com/KurtPreston/wsm)
+project (`wsmd`) — so `docentd` can run remotely (on your dev box) while the windows
+are managed on your workstation.
 
 ```
- dev box (grove / docentd)                     workstation (docent-wm + launcher)
- ─────────────────────────                     ──────────────────────────────────
- POST /open {host,path,name} ──► reverse SSH tunnel ──► 127.0.0.1:39788  docent-wm
+ dev box (grove / docentd)                     workstation (wsm + launcher)
+ ─────────────────────────                     ────────────────────────────
+ POST /open {host,path,name} ──► reverse SSH tunnel ──► 127.0.0.1:39788  wsmd
                                                               │
                                                               ▼
                                           open-or-focus a remote Cursor window
@@ -280,26 +279,15 @@ dev box) while the windows are managed on your workstation.
                                            macOS: window raised, no Spaces)
 ```
 
-### docent-wm (local window manager)
+### Window manager (wsm)
 
-A localhost-only REST service that owns the Cursor windows on the machine you sit
-at. Same contract on both platforms (default port **39788**):
-
-| Method + path | Purpose |
-| ------------- | ------- |
-| `GET /health` | liveness probe |
-| `GET /windows` | live Cursor windows `{ id, title, app, host }` |
-| `POST /open` | open-or-focus `{host, path, name, uri?}` (builds `vscode-remote://ssh-remote+{host}{path}`) |
-| `POST /focus` | focus a window by `{name|id, host?}` |
-
-- **`docent-wm-macos`** (`apps/docent-wm-macos/`) — Go service; window control via
-  the `cursor` CLI + `osascript`. Window-only (never creates/switches Spaces).
-- **`docent-wm-windows`** (`apps/docent-wm-windows/serve.ps1`) — PowerShell service
-  backed by Win32 helpers in `apps/docent-wm-windows/lib/` (`Logging`/`Native`/`Desktop`/`Window`).
-  Uses the optional `VirtualDesktop` module to place a window on a desktop named
-  after the workspace, falling back to plain foregrounding when it isn't installed.
-  If the helpers are missing it still answers `/health` and returns an empty
-  `/windows` list so `docentd` degrades gracefully.
+The window manager is now the standalone [wsm](https://github.com/KurtPreston/wsm)
+daemon (`wsmd`): a localhost-only REST service that owns the Cursor windows on the
+machine you sit at (default port **39788**). docent is a *client* of it via the
+`docent-wm` collector (see below) and the dashboard's focus button. The contract
+`GET /health`, `GET /windows`, `POST /open`, `POST /focus` is published as an
+OpenAPI spec in the wsm repo. Install and run it from there; there is no window
+manager binary in this repo anymore.
 
 ### Cursor hooks → docentd
 
@@ -310,17 +298,17 @@ a down `docentd` never blocks Cursor). Point it with `DOCENT_URL` (remote base U
 or `DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sends
 `DOCENT_TOKEN` when set. See [`hooks/README.md`](hooks/README.md).
 
-### grove → docent-wm
+### grove → wsm
 
-The [`grove`](https://github.com/KurtPreston/docent-powershell) sender POSTs the
-`{host, path, name}` webhook to the **local** `docent-wm` `/open`, tunneled from the
-dev box to the workstation over reverse SSH. `docent-wm` needs no SSH of its own —
+The [`grove`](https://github.com/KurtPreston/grove) sender POSTs the
+`{host, path, name}` webhook to the **local** wsm `/open`, tunneled from the
+dev box to the workstation over reverse SSH. wsm needs no SSH of its own —
 the remote path arrives in the payload.
 
 ### Launchers
 
 Spotlight-style pickers bound to a global hotkey; type to fuzzy-filter your
-sessions / tickets / PRs, **Enter** focuses the session (via `docent-wm` `/focus`)
+sessions / tickets / PRs, **Enter** focuses the session (via wsm `/focus`)
 or opens the URL, **Esc** dismisses. Session rows come from `docentd`'s `/sessions`,
 which may point at a **remote** `docentd`.
 
@@ -334,7 +322,7 @@ which may point at a **remote** `docentd`.
 
 The dashboard/daemon reads `docentd.yaml` (separate from the reporter's
 `config.yaml`): `port` (default 39787), `refreshSec`, `docentWmUrl`
-(default `http://127.0.0.1:39788`), and optional `token`/`bindHost` (see
+(default `http://127.0.0.1:39788`, the local wsm daemon), and optional `token`/`bindHost` (see
 [docentd dashboard (binding + auth)](#docentd-dashboard-binding--auth) above). See
 [`config/docent/docentd.yaml.example`](config/docent/docentd.yaml.example).
 
@@ -343,18 +331,23 @@ The dashboard/daemon reads `docentd.yaml` (separate from the reporter's
 Per-OS installers build the relevant binaries, write config into
 `~/.config/docent/`, and register background services. Re-running is idempotent.
 
+The window manager itself is installed separately from the
+[wsm](https://github.com/KurtPreston/wsm) repo (its own macOS/Windows installers).
+The docent installers below set up `docentd`, the launcher, and Cursor hooks.
+
 - **Linux** — [`scripts/install-docent-linux.sh`](scripts/install-docent-linux.sh):
   installs `docentd` only (the dashboard/collector daemon) as a `systemd --user`
-  service. There is no `docent-wm` on Linux — the window manager + launcher run on
-  the Windows/macOS host that connects here.
+  service. There is no window manager on Linux — install wsm on the Windows/macOS
+  host that connects here.
 - **macOS** — [`scripts/install-docent-macos.sh`](scripts/install-docent-macos.sh):
-  installs `docent-wm-macos` (always) and optionally `docentd` locally via `launchd`,
-  the Hammerspoon launcher by default, and Cursor hooks when Cursor.app is installed
-  (`--no-hooks` / `--no-hammerspoon` to skip).
+  installs `docentd` (optionally, locally via `launchd`), the Hammerspoon launcher
+  by default, and Cursor hooks when Cursor.app is installed (`--no-hooks` /
+  `--no-hammerspoon` to skip). Install the window manager from wsm separately.
 - **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
-  installs `docent-wm-windows` + `docent-launcher-windows` as hidden,
-  auto-restarting Scheduled Tasks (at-logon + a 1-minute watchdog), and optionally
-  `docentd` locally. Prompts whether `docentd` runs locally or on a remote host.
+  installs `docent-launcher-windows` as a hidden, auto-restarting Scheduled Task
+  (at-logon + a 1-minute watchdog), and optionally `docentd` locally. Prompts
+  whether `docentd` runs locally or on a remote host. Install the window manager
+  from wsm separately.
 
 ## Layout
 
@@ -362,8 +355,8 @@ Per-OS installers build the relevant binaries, write config into
 - `apps/docent-reporter/` — reporter CLI
 - `apps/docent-setup/` — config wizard + `check`
 - `apps/docentd/` — daemon + dashboard
-- `apps/docent-wm-macos/`, `apps/docent-wm-windows/` — local window-manager REST services
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
+- the local window manager lives in the separate [wsm](https://github.com/KurtPreston/wsm) repo
 - `hooks/` — Cursor hook (`docent-notify.sh`) + snippet that report sessions to `docentd`
 - `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers
 - `~/.config/docent/` — `config.yaml`, `docentd.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)

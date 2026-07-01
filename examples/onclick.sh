@@ -8,7 +8,7 @@
 # Fallback chain:
 #   1. grove (cd to repo / grove project root, then grove "$DOCENT_BRANCH")
 #   2. local Cursor (when DOCENT_OPEN_PATH is a directory and cursor is on PATH)
-#   3. remote docent-wm (when DOCENT_OPEN_PATH, DOCENT_WM_URL, DOCENT_HOST are set)
+#   3. remote wsm window manager (when DOCENT_OPEN_PATH, DOCENT_WM_URL, DOCENT_HOST are set)
 #   4. otherwise print guidance and exit non-zero
 
 set -euo pipefail
@@ -57,7 +57,7 @@ if [[ -n "${DOCENT_OPEN_PATH:-}" && -d "${DOCENT_OPEN_PATH}" ]] && command -v cu
   exec cursor --new-window "$DOCENT_OPEN_PATH"
 fi
 
-# 3. remote SSH window via docent-wm on the workstation
+# 3. remote SSH window via wsm on the workstation
 if [[ -n "${DOCENT_OPEN_PATH:-}" && -n "${DOCENT_WM_URL:-}" && -n "${DOCENT_HOST:-}" ]]; then
   name="${DOCENT_BRANCH:-}"
   if [[ -z "$name" ]]; then
@@ -86,7 +86,7 @@ print(json.dumps({
     echo "remote open requested"
     exit 0
   fi
-  die "curl required for remote open via docent-wm"
+  die "curl required for remote open via wsm"
 fi
 
 # 4. ticket-only / no local path — user extension point

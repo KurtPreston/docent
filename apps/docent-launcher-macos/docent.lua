@@ -82,7 +82,7 @@ local function activate(choice)
         if status == 200 then return end
         local msg = (body and body ~= "") and body or ("HTTP " .. tostring(status))
         if msg:find("assistive access", 1, true) then
-          msg = "Enable ~/.local/bin/docent-wm-macos in System Settings → Privacy & Security → Accessibility"
+          msg = "Enable the wsm-macos binary in System Settings → Privacy & Security → Accessibility"
         end
         hs.notify.new({ title = "docent focus failed", informativeText = msg }):send()
       end)

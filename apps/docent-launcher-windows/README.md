@@ -14,9 +14,9 @@ adapted for the monorepo split:
 
 - **Session rows** come from docentd's `GET /sessions` (`-SessionsUrl`, which may
   point at a **remote** docentd).
-- **Focusing a session** POSTs to the **local** `docent-wm` `/focus` (`-WmUrl`,
-  default `http://127.0.0.1:39788`) — the window manager that owns the windows
-  on this machine.
+- **Focusing a session** POSTs to the **local** [wsm](https://github.com/KurtPreston/wsm)
+  `/focus` (`-WmUrl`, default `http://127.0.0.1:39788`) — the window manager that
+  owns the windows on this machine.
 
 ```powershell
 # defaults: sessions from 127.0.0.1:39787, focus via 127.0.0.1:39788

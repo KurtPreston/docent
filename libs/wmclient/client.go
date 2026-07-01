@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Window describes an open Cursor window reported by docent-wm.
+// Window describes an open Cursor window reported by the wsm window manager.
 type Window struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -38,7 +38,7 @@ type FocusRequest struct {
 	Name string `json:"name,omitempty"`
 }
 
-// Client talks to a docent-wm REST service.
+// Client talks to the local wsm window-manager REST service.
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
@@ -65,7 +65,7 @@ func (c *Client) ListWindows(ctx context.Context) ([]Window, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("docent-wm GET /windows: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("wsm GET /windows: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	var out WindowsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -99,7 +99,7 @@ func (c *Client) post(ctx context.Context, path string, body any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("docent-wm POST %s: %s: %s", path, resp.Status, strings.TrimSpace(string(b)))
+		return fmt.Errorf("wsm POST %s: %s: %s", path, resp.Status, strings.TrimSpace(string(b)))
 	}
 	return nil
 }

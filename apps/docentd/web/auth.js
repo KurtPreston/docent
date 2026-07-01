@@ -11,7 +11,7 @@
 //
 // Usage: load this BEFORE the page script, then call docentFetch(url, opts)
 // instead of fetch(url, opts) for same-origin docentd endpoints. (The local
-// docent-wm /focus calls keep using plain fetch.)
+// wsm /focus calls keep using plain fetch.)
 (function () {
   const KEY = "docent_token";
 
