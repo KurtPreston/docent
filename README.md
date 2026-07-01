@@ -1,37 +1,58 @@
-# slakkr-ai
+# docent
 
-Local-first CLI: collect **time-bounded activity** from configured sources, send it to an AI provider, and get a **Markdown** document (printed to stdout and saved under `userdata/output/`).
+Monorepo suite containing local-first tooling for developer activity: **docent** (live dashboard + window management) and **docent-reporter** (collectors → AI → Markdown reports).
 
-## Quick start
+## Monorepo layout
+
+```
+libs/           shared Go packages (model, collectors, correlation, ai, config, …)
+apps/
+  docentd/              merged daemon (collectors, dashboard, /ingest)
+  docent-wm-macos/      local window manager REST service (macOS)
+  docent-wm-windows/    local window manager REST service (Windows)
+  docent-launcher-*/    hotkey + webview launchers
+  docent-reporter/      stateless CLI reporter (was `slakkr`)
+  docent-setup/         config wizard + `check` validator
+```
+
+## Quick start (reporter)
 
 ```sh
 go test ./...
-go run ./cmd/slakkr --help
-# First run creates userdata/config.yaml if missing
-go run ./cmd/slakkr --mode recent-activity --days 3
+go run ./apps/docent-reporter --help
+# First run creates ~/.config/docent/config.yaml if missing
+go run ./apps/docent-reporter --mode recent-activity --days 3
 ```
 
-Or use [`scripts/slakkr`](scripts/slakkr) from the repo root.
+Or use [`scripts/docent-reporter`](scripts/docent-reporter) from the repo root.
 
 ## Setup
 
-Bootstrap or refresh `userdata/config.yaml` and reconcile secret placeholders in `userdata/.env`:
+Bootstrap or refresh docent config (`~/.config/docent/config.yaml` by default) and reconcile secret placeholders in `.env`:
 
 ```sh
 ./scripts/setup
-# or: go run ./cmd/slakkr-setup --userdata userdata
+# or: go run ./apps/docent-setup --config-dir ~/.config/docent
 ```
 
-The wizard picks an AI provider (cursor / claude / ollama / offline `rule-based`), an activity formatter, walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `userdata/.env` as `KEY=` lines; stderr lists keys you still need to fill.
+Validate configured collectors without running a report:
 
-Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`internal/configschema/config.schema.json`](internal/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
+```sh
+./scripts/check
+# or: go run ./apps/docent-setup check
+```
 
-## Configuration (`userdata/config.yaml`)
+The wizard picks an AI provider (cursor / claude / ollama / offline `rule-based`), an activity formatter, walks collectors, and writes env-var **names** into `credential_refs` (never secret values). Missing variables are appended to `~/.config/docent/.env` as `KEY=` lines; stderr lists keys you still need to fill.
 
-Single file: `ai` and `directives`.
+Config shape is validated at runtime against [`jsonschema/config.schema.json`](jsonschema/config.schema.json). The same file is embedded at [`libs/config/configschema/config.schema.json`](libs/config/configschema/config.schema.json); keep them identical (tests enforce this). After setup, the written config includes a header such as `# yaml-language-server: $schema=../jsonschema/config.schema.json` so editors can offer completions against the schema.
 
-- **`directives`**: Collector, target, config, `credential_refs` for secrets in `userdata/.env`.
+## Configuration (`~/.config/docent/config.yaml`)
+
+Single file: `ai`, `directives`, optional `execution_modes`, and optional `output_dir`.
+
+- **`directives`**: Collector, target, config, `credential_refs` for secrets in `~/.config/docent/.env`.
 - **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory’s immediate children that contain `.git`.
+- **`output_dir`** (optional): where `docent-reporter` writes generated markdown (supports a leading `~`). Defaults to `~/docent`; override per-run with `--out-dir`.
 
 ### Activity formatter (`ai.activity_formatter`)
 
@@ -67,12 +88,12 @@ directives:
     enabled: true
     # target.username is optional; omit to track the authenticated `gh` user (@me).
     credential_refs:
-      token: SLAKKR_GITHUB_TOKEN
+      token: DOCENT_GITHUB_TOKEN
 ```
 
 ## Modes
 
-Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, a **scope**, and an optional **collector allow-list**. Built-in modes ship with the binary; users can declare additional modes in `userdata/config.yaml` under `execution_modes:`.
+Modes are declarative: every run is described by an `ExecutionMode` value that bundles a **lookback window**, an optional **formatter** override, an **LLM prompt**, a **scope**, and an optional **collector allow-list**. Built-in modes ship with the binary; users can declare additional modes in `~/.config/docent/config.yaml` under `execution_modes:`.
 
 | Mode | Lookback | Scope | Behavior |
 |------|----------|-------|----------|
@@ -101,7 +122,7 @@ Leaving `collectors:` unset (the default) collects from every enabled directive,
 
 ### Declaring your own modes
 
-Add `execution_modes:` to `userdata/config.yaml`. Any property you omit is asked at runtime (or filled from CLI flags) — including `scope`, which becomes an interactive picker (defaulting to `involved`) when left unset. Set the ones you want to lock in:
+Add `execution_modes:` to `~/.config/docent/config.yaml`. Any property you omit is asked at runtime (or filled from CLI flags) — including `scope`, which becomes an interactive picker (defaulting to `involved`) when left unset. Set the ones you want to lock in:
 
 ```yaml
 execution_modes:
@@ -153,7 +174,7 @@ directives:
       base_url: https://gitea.example
       followed_repos: "some-org, some-org/some-repo" # bare owner fans out across all that owner's repos
     credential_refs:
-      token: SLAKKR_GITEA_TOKEN
+      token: DOCENT_GITEA_TOKEN
   - id: jira
     collector: jira
     enabled: true
@@ -161,16 +182,21 @@ directives:
       base_url: https://jira.example
       followed_projects: "PROJ, OTHER"
     credential_refs:
-      pat: SLAKKR_JIRA_PAT
+      pat: DOCENT_JIRA_PAT
 ```
 
 Without these fields, `scope: all` collects the same set as `scope: involved` (the collectors have nothing extra to broaden on).
 
 ### Common flags
 
-- `--userdata DIR` (default `userdata`)
-- `--config PATH`, `-c PATH` (default `userdata/config.yaml`)
-- `--out PATH` — default `userdata/output/<date>-<mode>.md`
+Paths follow the XDG base-directory layout by default:
+
+- `--config-dir DIR` — config.yaml + .env (default `~/.config/docent`, i.e. `$XDG_CONFIG_HOME/docent`)
+- `--config PATH`, `-c PATH` (default `<config-dir>/config.yaml`)
+- `--state-dir DIR` — run logs under `<state-dir>/logs/` (default `~/.local/state/docent`, i.e. `$XDG_STATE_HOME/docent`)
+- `--out-dir DIR` — generated markdown (default config `output_dir`, then `~/docent`)
+- `--out PATH` — explicit output file (default `<out-dir>/<date>-<mode>.md`)
+- `--userdata DIR` — legacy: put config.yaml/.env/logs/output all under one dir (overrides the three above)
 - `--no-save` — stdout only
 - `--date YYYY-MM-DD` — label for default output filename only
 - `--mode ID` — execution mode (built-in or from `execution_modes:`); prompts interactively when omitted on a TTY
@@ -186,7 +212,7 @@ Without these fields, `scope: all` collects the same set as `scope: involved` (t
 
 ### Aborting slow collection
 
-On an interactive terminal, slakkr prints `Press 'c' to abort pending collection…` while collectors run. Pressing **`c`** stops any in-flight and not-yet-started collector work and immediately proceeds to run the prompt against whatever was gathered so far (partial data is kept rather than discarded). This is handy when a broad-scope Slack run is taking longer than you want to wait. `Ctrl-C` still terminates the whole process as usual.
+On an interactive terminal, docent-reporter prints `Press 'c' to abort pending collection…` while collectors run. Pressing **`c`** stops any in-flight and not-yet-started collector work and immediately proceeds to run the prompt against whatever was gathered so far (partial data is kept rather than discarded). This is handy when a broad-scope Slack run is taking longer than you want to wait. `Ctrl-C` still terminates the whole process as usual.
 
 ## Collectors
 
@@ -199,16 +225,148 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `google-calendar` — events from a secret iCal URL.
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [docs/Slack.md](docs/Slack.md) for token setup and required scopes.
 
+## docentd dashboard (binding + auth)
+
+`docentd` serves the live dashboard and its data APIs (`/sessions`, `/api/*`).
+By default it binds **`127.0.0.1` only and serves openly** — fine for localhost
+or when reached over an SSH tunnel / Cursor Remote-SSH port forward.
+
+To reach it directly from another machine, set a **shared secret**. Setting
+`token:` in `docentd.yaml` (or the `DOCENT_TOKEN` env var, which wins) flips two
+things at once:
+
+- docentd binds **all interfaces (`0.0.0.0`)** by default, so it is reachable
+  off the loopback (override with `bindHost:` — e.g. `127.0.0.1` to force
+  loopback even with a token, or `-host` on the command line).
+- Every **data** endpoint now requires `Authorization: Bearer <token>`.
+  `/health` and the static dashboard shell (HTML/CSS/JS) stay open; only the
+  data behind them is protected. Comparison is constant-time.
+
+Clients:
+
+- **Browser dashboard** — open `http://<host>:39787/?token=<secret>` once per
+  browser. The page caches the token in `sessionStorage` (stripping it from the
+  URL) and sends it on every data fetch; subsequent visits in that tab need no
+  query string.
+- **docent launcher (Windows)** — pass `-Token <secret>` (the installer wires
+  this through); it sends the bearer header automatically.
+
+Caveats:
+
+- Binding externally exposes your activity data to anyone who can reach the
+  port. A token is a reasonable bar for a personal dev box; open the host
+  firewall for the port deliberately. There is **no TLS** — front it with a
+  reverse proxy if the host is broadly reachable.
+- With no token configured, behavior is unchanged (loopback-only, open). If you
+  set `bindHost` to a non-loopback address **without** a token, docentd logs a
+  loud startup warning that data is exposed unauthenticated.
+
+## Window management & session dashboard
+
+Beyond the reporter, `docentd` doubles as a **mission-control dashboard**: a live,
+color-coded, grouped-by-ticket view of your Cursor sessions, JIRA tickets, and
+GitHub PRs, with focus-or-open window control. The window control itself lives in
+a small **local** REST service (`docent-wm`) so `docentd` can run remotely (on your
+dev box) while the windows are managed on your workstation.
+
+```
+ dev box (grove / docentd)                     workstation (docent-wm + launcher)
+ ─────────────────────────                     ──────────────────────────────────
+ POST /open {host,path,name} ──► reverse SSH tunnel ──► 127.0.0.1:39788  docent-wm
+                                                              │
+                                                              ▼
+                                          open-or-focus a remote Cursor window
+                                          (Windows: on a named virtual desktop;
+                                           macOS: window raised, no Spaces)
+```
+
+### docent-wm (local window manager)
+
+A localhost-only REST service that owns the Cursor windows on the machine you sit
+at. Same contract on both platforms (default port **39788**):
+
+| Method + path | Purpose |
+| ------------- | ------- |
+| `GET /health` | liveness probe |
+| `GET /windows` | live Cursor windows `{ id, title, app, host }` |
+| `POST /open` | open-or-focus `{host, path, name, uri?}` (builds `vscode-remote://ssh-remote+{host}{path}`) |
+| `POST /focus` | focus a window by `{name|id, host?}` |
+
+- **`docent-wm-macos`** (`apps/docent-wm-macos/`) — Go service; window control via
+  the `cursor` CLI + `osascript`. Window-only (never creates/switches Spaces).
+- **`docent-wm-windows`** (`apps/docent-wm-windows/serve.ps1`) — PowerShell service
+  backed by Win32 helpers in `apps/docent-wm-windows/lib/` (`Logging`/`Native`/`Desktop`/`Window`).
+  Uses the optional `VirtualDesktop` module to place a window on a desktop named
+  after the workspace, falling back to plain foregrounding when it isn't installed.
+  If the helpers are missing it still answers `/health` and returns an empty
+  `/windows` list so `docentd` degrades gracefully.
+
+### Cursor hooks → docentd
+
+`hooks/docent-notify.sh` + `hooks/hooks.snippet.json` report session activity to
+`docentd`. Copy the script to `~/.cursor/hooks/` and merge the snippet into
+`~/.cursor/hooks.json`; the hook POSTs to `docentd`'s `/ingest` (fire-and-forget, so
+a down `docentd` never blocks Cursor). Point it with `DOCENT_URL` (remote base URL)
+or `DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sends
+`DOCENT_TOKEN` when set. See [`hooks/README.md`](hooks/README.md).
+
+### grove → docent-wm
+
+The [`grove`](https://github.com/KurtPreston/docent-powershell) sender POSTs the
+`{host, path, name}` webhook to the **local** `docent-wm` `/open`, tunneled from the
+dev box to the workstation over reverse SSH. `docent-wm` needs no SSH of its own —
+the remote path arrives in the payload.
+
+### Launchers
+
+Spotlight-style pickers bound to a global hotkey; type to fuzzy-filter your
+sessions / tickets / PRs, **Enter** focuses the session (via `docent-wm` `/focus`)
+or opens the URL, **Esc** dismisses. Session rows come from `docentd`'s `/sessions`,
+which may point at a **remote** `docentd`.
+
+- **Windows** — `apps/docent-launcher-windows/docent-launcher.ps1`, a WPF window with
+  a Win32 `RegisterHotKey` (default **Ctrl+Alt+Space**). See its
+  [README](apps/docent-launcher-windows/README.md).
+- **macOS** — `apps/docent-launcher-macos/docent.lua`, a Hammerspoon chooser
+  (default **Cmd+Alt+Space**). Copy to `~/.hammerspoon/` and `require("docent")`.
+
+### docentd config (`~/.config/docent/docentd.yaml`)
+
+The dashboard/daemon reads `docentd.yaml` (separate from the reporter's
+`config.yaml`): `port` (default 39787), `refreshSec`, `docentWmUrl`
+(default `http://127.0.0.1:39788`), and optional `token`/`bindHost` (see
+[docentd dashboard (binding + auth)](#docentd-dashboard-binding--auth) above). See
+[`config/docent/docentd.yaml.example`](config/docent/docentd.yaml.example).
+
+## Installation
+
+Per-OS installers build the relevant binaries, write config into
+`~/.config/docent/`, and register background services. Re-running is idempotent.
+
+- **Linux** — [`scripts/install-docent-linux.sh`](scripts/install-docent-linux.sh):
+  installs `docentd` only (the dashboard/collector daemon) as a `systemd --user`
+  service. There is no `docent-wm` on Linux — the window manager + launcher run on
+  the Windows/macOS host that connects here.
+- **macOS** — [`scripts/install-docent-macos.sh`](scripts/install-docent-macos.sh):
+  installs `docent-wm-macos` (always) and optionally `docentd` locally via `launchd`,
+  the Hammerspoon launcher by default, and Cursor hooks when Cursor.app is installed
+  (`--no-hooks` / `--no-hammerspoon` to skip).
+- **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
+  installs `docent-wm-windows` + `docent-launcher-windows` as hidden,
+  auto-restarting Scheduled Tasks (at-logon + a 1-minute watchdog), and optionally
+  `docentd` locally. Prompts whether `docentd` runs locally or on a remote host.
+
 ## Layout
 
-- `userdata/config.yaml` — only required config file.
-- `userdata/.env` — secret values referenced by `credential_refs` (optional).
-- `userdata/output/` — saved markdown.
-- `userdata/logs/<date>-<mode>/` — one directory per run, matching the saved markdown filename sans `.md` (including any `-2`/`-3` collision suffix). Contains:
-  - `run.log` — resolved mode/options + per-directive collection summary.
-  - `<directive-id>.log` — one file per enabled directive, recording every HTTP request and subprocess invocation the collector made (status, payload sizes, duration).
-  - `<provider>-summary-request.json` / `<provider>-summary-response.json` — the LLM provider's full request/response payloads (`cursor`, `claude`, or `ollama`); `<provider>-summary-error.json` appears when the call fails. The deterministic `rule-based` provider writes nothing here.
-  - Only the 20 most recent run directories are kept; older ones are pruned automatically.
-- `jsonschema/config.schema.json` — JSON Schema for `userdata/config.yaml` (canonical copy alongside embedded duplicate).
-
-The `userdata/` directory is gitignored; initialize with [`scripts/setup`](scripts/setup), run the CLI once (minimal default config), or copy an example by hand.
+- `libs/` — shared packages (`model`, `collectors`, `correlation`, `ai`, `config`, `wmclient`, `webhook`, …)
+- `apps/docent-reporter/` — reporter CLI
+- `apps/docent-setup/` — config wizard + `check`
+- `apps/docentd/` — daemon + dashboard
+- `apps/docent-wm-macos/`, `apps/docent-wm-windows/` — local window-manager REST services
+- `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
+- `hooks/` — Cursor hook (`docent-notify.sh`) + snippet that report sessions to `docentd`
+- `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers
+- `~/.config/docent/` — `config.yaml`, `docentd.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
+- `~/.local/state/docent/logs/<run>/` — reporter run logs (`$XDG_STATE_HOME/docent`)
+- `~/docent/` — saved markdown from the reporter (override via `output_dir` in config.yaml or `--out-dir`)
+- `--userdata DIR` keeps the legacy all-in-one layout (config + .env + logs + output under one dir)
