@@ -1,6 +1,6 @@
 module github.com/KurtPreston/docent
 
-go 1.22
+go 1.18
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7

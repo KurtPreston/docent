@@ -12,16 +12,27 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 1.18 is the supported floor (matches go.mod). GOTOOLCHAIN=local means
+        # this job fails loudly if the go directive is ever bumped above 1.18 or
+        # a newer stdlib import sneaks in. "stable" catches the other direction.
+        go-version: ["1.18", "stable"]
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: ${{ matrix.go-version }}
           cache: true
 
       - name: Build applications
         run: go build -o /dev/null ./apps/...
+
+      - name: Vet
+        run: go vet ./...
 
   test:
     name: Test
@@ -31,7 +42,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "stable"
           cache: true
 
       - name: Run tests
