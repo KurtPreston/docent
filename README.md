@@ -349,7 +349,8 @@ Per-OS installers build the relevant binaries, write config into
   the Windows/macOS host that connects here.
 - **macOS** — [`scripts/install-docent-macos.sh`](scripts/install-docent-macos.sh):
   installs `docent-wm-macos` (always) and optionally `docentd` locally via `launchd`,
-  with optional Cursor hooks and the Hammerspoon launcher.
+  the Hammerspoon launcher by default, and Cursor hooks when Cursor.app is installed
+  (`--no-hooks` / `--no-hammerspoon` to skip).
 - **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
   installs `docent-wm-windows` + `docent-launcher-windows` as hidden,
   auto-restarting Scheduled Tasks (at-logon + a 1-minute watchdog), and optionally

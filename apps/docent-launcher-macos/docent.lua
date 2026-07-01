@@ -1,5 +1,11 @@
 -- docent-launcher-macos (Hammerspoon)
 -- Install: copy to ~/.hammerspoon/docent.lua and `require("docent")` from init.lua
+--
+-- Spotlight-style chooser (default Ctrl+Alt+Space). Enter focuses a session or
+-- opens a ticket/PR URL; Esc hides. The "Open ↗" toolbar button pops the full
+-- dashboard into your system browser — when DOCENT.token is set it is forwarded
+-- as a one-time ?token= query param, which the dashboard caches in
+-- sessionStorage and strips from the address bar.
 
 local DOCENT = {
   port = tonumber(os.getenv("DOCENT_PORT")) or 39787,
@@ -57,6 +63,15 @@ local function buildChoices(data, cb)
   cb(choices)
 end
 
+local function openDashboard()
+  local url = base:gsub("/+$", "") .. "/"
+  if DOCENT.token and DOCENT.token ~= "" then
+    url = url .. "?token=" .. hs.http.encodeForQuery(DOCENT.token)
+  end
+  if chooser then chooser:hide() end
+  hs.urlevent.openURL(url)
+end
+
 local function activate(choice)
   if not choice then return end
   if choice.kind == "session" then
@@ -86,6 +101,20 @@ local function show()
     if not chooser then
       chooser = hs.chooser.new(activate)
       chooser:searchSubText(true)
+      local toolbar = hs.webview.toolbar.new("docentChooserToolbar")
+        :addItems({
+            { id = "NSToolbarFlexibleSpaceItem" },
+            {
+              id = "openDashboard",
+              label = "Open ↗",
+              tooltip = "Open the dashboard in your system browser",
+              selectable = true,
+            },
+          })
+        :setCallback(function(_, itemId)
+            if itemId == "openDashboard" then openDashboard() end
+          end)
+      chooser:attachedToolbar(toolbar)
     end
     chooser:choices(choices)
     chooser:query("")

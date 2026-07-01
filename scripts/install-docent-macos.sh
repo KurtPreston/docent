@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install docentd + docent-wm-macos on macOS (binaries, launchd, optional hooks/launcher).
+# Install docentd + docent-wm-macos on macOS (binaries, launchd, Hammerspoon launcher, Cursor hooks when Cursor is installed).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,8 +13,8 @@ WEB_ROOT="$ROOT/apps/docentd/web"
 DOCENT_PORT=39787
 WM_PORT=39788
 
-INSTALL_HOOKS=0
-INSTALL_HAMMERSPOON=0
+INSTALL_HOOKS=auto
+INSTALL_HAMMERSPOON=1
 INSTALL_LAUNCHD=1
 SKIP_BUILD=0
 DRY_RUN=0
@@ -27,7 +27,8 @@ usage() {
 Usage: install-docent-macos.sh [options]
 
 Installs docent-wm-macos (always) and optionally docentd locally, with
-launchd LaunchAgents. Optional Cursor hooks and Hammerspoon launcher.
+launchd LaunchAgents, the Hammerspoon launcher, and Cursor hooks when
+Cursor.app is installed.
 
 On first run, asks whether docentd runs on this Mac (local) or remotely.
 Local installs build docentd, run docent-setup when needed, and register
@@ -35,8 +36,9 @@ both LaunchAgents. Remote installs only docent-wm-macos locally and point
 hooks/launcher at the remote docentd URL you provide.
 
 Options:
-  --hooks           Install ~/.cursor/hooks/docent-notify.sh and merge hooks.json
-  --hammerspoon     Copy docent.lua and require it from ~/.hammerspoon/init.lua
+  --hooks           Install Cursor hooks even if Cursor.app is not found
+  --no-hooks        Skip ~/.cursor/hooks install
+  --no-hammerspoon  Skip docent.lua install (~/.hammerspoon)
   --no-launchd      Skip launchd plist install (binaries only)
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
@@ -63,7 +65,8 @@ run() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --hooks) INSTALL_HOOKS=1 ;;
-    --hammerspoon) INSTALL_HAMMERSPOON=1 ;;
+    --no-hooks) INSTALL_HOOKS=0 ;;
+    --no-hammerspoon) INSTALL_HAMMERSPOON=0 ;;
     --no-launchd) INSTALL_LAUNCHD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
@@ -75,6 +78,26 @@ while [ $# -gt 0 ]; do
 done
 
 command -v go >/dev/null 2>&1 || { echo "go is required on PATH" >&2; exit 1; }
+
+cursor_installed() {
+  for candidate in /Applications/Cursor.app "$HOME/Applications/Cursor.app"; do
+    [ -d "$candidate" ] && return 0
+  done
+  return 1
+}
+
+resolve_install_hooks() {
+  case "$INSTALL_HOOKS" in
+    auto)
+      if cursor_installed; then
+        INSTALL_HOOKS=1
+      else
+        INSTALL_HOOKS=0
+        log "Cursor not installed — skipping hooks (--hooks to install anyway)"
+      fi
+      ;;
+  esac
+}
 
 resolve_docentd_location() {
   if [ -n "$DOCENTD_URL" ]; then
@@ -399,6 +422,8 @@ install_hammerspoon() {
   echo "Hammerspoon config installed. Hotkey: Ctrl+Alt+Space." >&2
   echo "If the chooser does not appear, use the menu bar icon → Reload Config." >&2
 }
+
+resolve_install_hooks
 
 if [ "$INSTALL_HOOKS" -eq 1 ]; then
   install_hooks
