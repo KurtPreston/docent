@@ -55,6 +55,20 @@ async function focusSession(name, host) {
   }
 }
 
+async function launchWorkItem(key) {
+  if (!key) return;
+  try {
+    const r = await docentFetch("/api/workitems/" + encodeURIComponent(key) + "/launch", {
+      method: "POST",
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) toast(d.message || "opened editor");
+    else toast(d.message || d.error || "launch failed", true);
+  } catch (e) {
+    toast("launch error: " + e.message, true);
+  }
+}
+
 function section(title) {
   const sec = el("div", "section");
   const head = el("div", "section-head");
@@ -96,6 +110,12 @@ function render(d) {
   board.innerHTML = "";
 
   const overview = section("Overview");
+  const head = overview.querySelector(".section-head");
+  const launchBtn = el("button", "launch-btn", "open editor");
+  launchBtn.type = "button";
+  launchBtn.title = "Open editor for this work item";
+  launchBtn.addEventListener("click", () => launchWorkItem(d.key));
+  head.appendChild(launchBtn);
   const kv = el("div", "wrap");
   const addKV = (k, v, link) => {
     const row = el("div", "kv");

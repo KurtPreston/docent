@@ -105,3 +105,16 @@ table.tbl a:hover { text-decoration: underline; }
 .kv .k { color: var(--text-dim); min-width: 90px; }
 .group-head.clickable { cursor: pointer; }
 .group-head.clickable:hover { background: var(--bg-elev-2); }
+.launch-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.launch-btn:hover { border-color: var(--accent); color: var(--accent); }
+.section-head .launch-btn { margin-left: auto; }

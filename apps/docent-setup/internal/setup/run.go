@@ -9,6 +9,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/kurt/slakkr-ai/libs/config/configschema"
+	"github.com/kurt/slakkr-ai/libs/config/docentconfig"
 	"github.com/kurt/slakkr-ai/libs/config/userdata"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -93,6 +94,10 @@ func Run(opts Options) error {
 		return err
 	}
 
+	if err := offerOnClickInstall(surveyOpt, errOut); err != nil {
+		return err
+	}
+
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
@@ -122,6 +127,36 @@ func Run(opts Options) error {
 		for _, k := range missing {
 			fmt.Fprintf(errOut, "  - %s\n", k)
 		}
+	}
+	return nil
+}
+
+func offerOnClickInstall(surveyOpt survey.AskOpt, errOut *os.File) error {
+	path := docentconfig.OnClickScriptPath()
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	fmt.Fprintf(errOut, "\n=== Work-item launch hook ===\n")
+	var yes bool
+	confirm := &survey.Confirm{
+		Message: fmt.Sprintf("Install default onclick.sh at %s? (skipped if you already have one)", path),
+		Default: true,
+	}
+	if err := survey.AskOne(confirm, &yes, surveyOpt); err != nil {
+		return err
+	}
+	if !yes {
+		return nil
+	}
+	installed, err := docentconfig.InstallDefaultOnClickScript()
+	if err != nil {
+		return err
+	}
+	if installed {
+		fmt.Fprintf(errOut, "Wrote %s\n", path)
 	}
 	return nil
 }

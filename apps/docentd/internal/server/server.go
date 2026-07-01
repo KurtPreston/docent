@@ -93,11 +93,16 @@ func (s *Server) collectorsAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workItemDetail(w http.ResponseWriter, r *http.Request) {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/workitems/"), "/")
+	if strings.HasSuffix(rest, "/launch") {
+		s.workItemLaunch(w, r, strings.TrimSuffix(rest, "/launch"))
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	key := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/workitems/"), "/")
+	key := rest
 	if key == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "work item key required"})
 		return
@@ -108,6 +113,30 @@ func (s *Server) workItemDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) workItemLaunch(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key = strings.Trim(key, "/")
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "work item key required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	result, ok := s.engine.LaunchWorkItem(ctx, key)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "work item not found"})
+		return
+	}
+	status := http.StatusOK
+	if !result.OK {
+		status = http.StatusBadRequest
+	}
+	writeJSON(w, status, result)
 }
 
 // collectUnit force-collects one (directive, mode) unit now, ignoring its

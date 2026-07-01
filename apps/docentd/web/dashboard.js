@@ -68,6 +68,32 @@ async function focusSession(name, host) {
   }
 }
 
+async function launchWorkItem(key) {
+  if (!key) return;
+  try {
+    const r = await docentFetch("/api/workitems/" + encodeURIComponent(key) + "/launch", {
+      method: "POST",
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.ok) toast(d.message || "opened editor");
+    else toast(d.message || d.error || "launch failed", true);
+  } catch (e) {
+    toast("launch error: " + e.message, true);
+  }
+}
+
+function makeLaunchButton(key) {
+  const btn = el("button", "launch-btn", "open");
+  btn.type = "button";
+  btn.title = "Open editor for this work item";
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    launchWorkItem(key);
+  });
+  return btn;
+}
+
 function renderSessionRow(s) {
   const clickable = s.live;
   const row = el(clickable ? "div" : "div", "row session" + (clickable ? " clickable" : ""));
@@ -144,6 +170,7 @@ function renderGroup(g) {
   head.title = "Open work-item details";
   head.addEventListener("click", (e) => {
     if (e.target.closest("a.ticket")) return;
+    if (e.target.closest(".launch-btn")) return;
     window.location.href = "/workitem?key=" + encodeURIComponent(g.key || g.ticket || "");
   });
   const sw = el("span", "swatch");
@@ -179,6 +206,7 @@ function renderGroup(g) {
   } else if (g.needsFollowup) {
     head.appendChild(el("span", "followup-dot"));
   }
+  head.appendChild(makeLaunchButton(g.key || g.ticket || ""));
   card.appendChild(head);
 
   const rows = el("div", "rows");

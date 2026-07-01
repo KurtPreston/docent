@@ -23,6 +23,8 @@ type DaemonConfig struct {
 	UserdataDir    string `yaml:"userdataDir,omitempty"`  // deprecated alias for configDir
 	SlakkrConfig   string `yaml:"slakkrConfig,omitempty"` // optional extra config from slakkr userdata
 	DocentWMURL    string `yaml:"docentWmUrl"`            // local wm URL injected into dashboard
+	OnClickScript  string `yaml:"onClickScript"`          // hook run when a work-item is launched from the dashboard
+	SSHHost        string `yaml:"sshHost"`                // optional ssh alias for remote editor open (DOCENT_HOST)
 	Directives     []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI is optional.
@@ -56,7 +58,20 @@ func Load(path string) (DaemonConfig, error) {
 	if token := os.Getenv("DOCENT_TOKEN"); token != "" {
 		cfg.Token = token
 	}
+	if v := os.Getenv("DOCENT_ONCLICK"); v != "" {
+		cfg.OnClickScript = v
+	}
+	cfg.OnClickScript = resolveOnClickScript(cfg)
 	return cfg, nil
+}
+
+// resolveOnClickScript returns the onclick hook path, defaulting to
+// ~/.config/docent/onclick.sh when unset.
+func resolveOnClickScript(cfg DaemonConfig) string {
+	if cfg.OnClickScript != "" {
+		return cfg.OnClickScript
+	}
+	return filepath.Join(docentconfig.DefaultDir(), "onclick.sh")
 }
 
 // ResolveBindHost picks the listen interface. Precedence: an explicit -host
