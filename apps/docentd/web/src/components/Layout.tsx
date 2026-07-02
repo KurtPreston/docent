@@ -32,6 +32,9 @@ export function Layout({ mainClass, stats, controls, children }: Props) {
           <NavLink to="/collectors" className={navClass}>
             Collectors
           </NavLink>
+          <NavLink to="/report" className={navClass}>
+            Report
+          </NavLink>
         </nav>
         <div className="stats">{stats}</div>
         <div className="controls">{controls}</div>
