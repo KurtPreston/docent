@@ -112,6 +112,49 @@ export type EntityView = {
   url?: string;
 };
 
+// Report page: mirrors the docentd /api/report* payloads.
+
+export type ReportMode = {
+  id: string;
+  name: string;
+  promptRequired: boolean;
+};
+
+export type ReportMeta = {
+  modes: ReportMode[];
+  scopes: string[];
+  provider: {
+    label: string;
+    provider: string;
+    model: string;
+  };
+};
+
+export type ReportRunMeta = {
+  mode: string;
+  modeName: string;
+  scope: string;
+  lookbackDays: number;
+  statuses: number;
+};
+
+export type ReportStatus = "pending" | "running" | "done" | "error";
+
+export type ReportJob = {
+  id: string;
+  status: ReportStatus;
+  markdown?: string;
+  meta?: ReportRunMeta;
+  error?: string;
+};
+
+export type ReportRequest = {
+  mode: string;
+  days?: number;
+  scope?: string;
+  prompt?: string;
+};
+
 export type WorkItemDetail = {
   key: string;
   title?: string;

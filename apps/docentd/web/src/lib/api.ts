@@ -1,7 +1,15 @@
 import { docentFetch } from "./auth";
 import { toast } from "./toast";
 import { errMsg } from "./format";
-import type { Dashboard, SignalsView, CollectorsView, WorkItemDetail } from "./types";
+import type {
+  Dashboard,
+  SignalsView,
+  CollectorsView,
+  WorkItemDetail,
+  ReportMeta,
+  ReportJob,
+  ReportRequest,
+} from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await docentFetch(url, { cache: "no-store" });
@@ -37,6 +45,25 @@ export async function launchWorkItem(key: string): Promise<void> {
     toast("launch error: " + errMsg(e), true);
   }
 }
+
+// Report API: fetch the form metadata, start an async generation job, and poll
+// it. Generation runs in a docentd goroutine, so startReport returns quickly
+// with a job id the page polls via fetchReportJob.
+export const fetchReportMeta = (): Promise<ReportMeta> => getJSON<ReportMeta>("/api/report/meta");
+
+export async function startReport(req: ReportRequest): Promise<string> {
+  const r = await docentFetch("/api/report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  const d = (await r.json().catch(() => ({}))) as { ok?: boolean; id?: string; error?: string };
+  if (!r.ok || !d.id) throw new Error(d.error ?? "HTTP " + r.status);
+  return d.id;
+}
+
+export const fetchReportJob = (id: string): Promise<ReportJob> =>
+  getJSON<ReportJob>("/api/report/" + encodeURIComponent(id));
 
 // collectUnit force-collects one (directive, mode) unit now, ignoring its poll
 // interval. Throws on failure so the caller can toast and refresh.
