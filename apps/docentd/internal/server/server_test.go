@@ -1,11 +1,15 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
@@ -35,13 +39,25 @@ func newTestServer(t *testing.T, token string) http.Handler {
 
 func status(t *testing.T, h http.Handler, method, path, bearer string) int {
 	t.Helper()
-	req := httptest.NewRequest(method, path, nil)
+	return doJSON(t, h, method, path, bearer, "").Code
+}
+
+func doJSON(t *testing.T, h http.Handler, method, path, bearer, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, rdr)
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	return rr.Code
+	return rr
 }
 
 func TestAuth_openWhenNoToken(t *testing.T) {
@@ -64,6 +80,8 @@ func TestAuth_requiredWhenTokenSet(t *testing.T) {
 		{http.MethodPost, "/api/workitems/SALSA-1/launch"},
 		{http.MethodGet, "/api/signals"},
 		{http.MethodGet, "/api/collectors"},
+		{http.MethodPost, "/api/report"},
+		{http.MethodGet, "/api/report/meta"},
 	}
 	for _, g := range gated {
 		if code := status(t, h, g.method, g.path, ""); code != http.StatusUnauthorized {
@@ -92,6 +110,97 @@ func TestAuth_healthAndStaticStayOpen(t *testing.T) {
 	}
 	if code := status(t, h, http.MethodGet, "/", ""); code != http.StatusOK {
 		t.Errorf("/ (index) without token: got %d, want 200", code)
+	}
+}
+
+func TestReportJobLifecycle(t *testing.T) {
+	h := newTestServer(t, "")
+
+	// Meta lists modes, scopes, and the AI identity (rule-based by default).
+	metaRR := doJSON(t, h, http.MethodGet, "/api/report/meta", "", "")
+	if metaRR.Code != http.StatusOK {
+		t.Fatalf("meta: got %d", metaRR.Code)
+	}
+	var meta struct {
+		Modes []struct {
+			ID             string `json:"id"`
+			Name           string `json:"name"`
+			PromptRequired bool   `json:"promptRequired"`
+		} `json:"modes"`
+		Scopes   []string `json:"scopes"`
+		Provider struct {
+			Label    string `json:"label"`
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(metaRR.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("meta json: %v", err)
+	}
+	if len(meta.Modes) == 0 {
+		t.Fatal("meta: expected at least one mode")
+	}
+	if len(meta.Scopes) != 3 {
+		t.Fatalf("meta scopes: got %v", meta.Scopes)
+	}
+	if meta.Provider.Provider != "rule-based" {
+		t.Fatalf("meta provider: got %q want rule-based", meta.Provider.Provider)
+	}
+
+	// Start a report: rule-based provider + no directives => fast, deterministic.
+	startRR := doJSON(t, h, http.MethodPost, "/api/report", "", `{"mode":"recent-activity","days":7}`)
+	if startRR.Code != http.StatusAccepted {
+		t.Fatalf("start: got %d body=%s", startRR.Code, startRR.Body.String())
+	}
+	var start struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(startRR.Body.Bytes(), &start); err != nil || start.ID == "" {
+		t.Fatalf("start json: err=%v id=%q", err, start.ID)
+	}
+
+	// Poll until the job reaches a terminal state.
+	var final struct {
+		Status   string `json:"status"`
+		Markdown string `json:"markdown"`
+		Error    string `json:"error"`
+		Meta     *struct {
+			LookbackDays int `json:"lookbackDays"`
+		} `json:"meta"`
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		pollRR := doJSON(t, h, http.MethodGet, "/api/report/"+start.ID, "", "")
+		if pollRR.Code != http.StatusOK {
+			t.Fatalf("poll: got %d", pollRR.Code)
+		}
+		if err := json.Unmarshal(pollRR.Body.Bytes(), &final); err != nil {
+			t.Fatalf("poll json: %v", err)
+		}
+		if final.Status == "done" || final.Status == "error" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if final.Status != "done" {
+		t.Fatalf("report did not finish: status=%q err=%q", final.Status, final.Error)
+	}
+	if strings.TrimSpace(final.Markdown) == "" {
+		t.Fatal("done report has empty markdown")
+	}
+	if final.Meta == nil || final.Meta.LookbackDays != 7 {
+		t.Fatalf("resolved meta lookback: %+v", final.Meta)
+	}
+
+	// Bad requests and unknown ids are handled cleanly.
+	if code := doJSON(t, h, http.MethodPost, "/api/report", "", `{"mode":""}`).Code; code != http.StatusBadRequest {
+		t.Fatalf("empty mode: got %d want 400", code)
+	}
+	if code := doJSON(t, h, http.MethodPost, "/api/report", "", `{"mode":"x","scope":"bogus"}`).Code; code != http.StatusBadRequest {
+		t.Fatalf("bad scope: got %d want 400", code)
+	}
+	if code := status(t, h, http.MethodGet, "/api/report/deadbeef", ""); code != http.StatusNotFound {
+		t.Fatalf("unknown report id: got %d want 404", code)
 	}
 }
 

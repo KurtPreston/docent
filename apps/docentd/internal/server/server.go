@@ -27,13 +27,14 @@ type Server struct {
 	registry *registry.Store
 	webRoot  string
 	web      fs.FS
+	reports  *reportStore
 }
 
 // New builds the HTTP server. webRoot is the on-disk dashboard directory used
 // in dev/disk mode; webFS, when non-nil (embed builds), takes precedence and
 // serves the dashboard from assets baked into the binary.
 func New(cfg config.DaemonConfig, eng *engine.Engine, reg *registry.Store, webRoot string, webFS fs.FS) *Server {
-	return &Server{cfg: cfg, engine: eng, registry: reg, webRoot: webRoot, web: webFS}
+	return &Server{cfg: cfg, engine: eng, registry: reg, webRoot: webRoot, web: webFS, reports: newReportStore()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -49,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/signals", s.requireAuth(s.signalsAPI))
 	mux.HandleFunc("/api/collectors", s.requireAuth(s.collectorsAPI))
 	mux.HandleFunc("/api/units/", s.requireAuth(s.collectUnit))
+	mux.HandleFunc("/api/report", s.requireAuth(s.reportStart))
+	mux.HandleFunc("/api/report/", s.requireAuth(s.reportSub))
 	mux.HandleFunc("/ingest", s.requireAuth(s.ingest))
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux
