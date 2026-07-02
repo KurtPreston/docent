@@ -37,6 +37,11 @@ type ResolveOpts struct {
 	// non-empty it replaces mode.Prompt.Instruction for this run.
 	PromptOverride string
 
+	// ScopeOverride forces the collection scope for this run regardless of
+	// what the mode pinned. Precedence: override > mode-pinned > interactive
+	// prompt / default (involved). ScopeUnset ("") means "no override".
+	ScopeOverride Scope
+
 	// ConfigActivityFormatter is the ai.activity_formatter value from
 	// userdata/config.yaml. Used as the fallback when the mode does not
 	// override the formatter. Empty falls through to the AI package's own
@@ -145,6 +150,15 @@ func resolveLookback(l *Lookback, opts ResolveOpts, now time.Time) (time.Time, i
 // collection per run. Non-interactive callers (Prompter == nil) silently
 // inherit ScopeInvolved, preserving the historical default.
 func resolveScope(declared Scope, opts ResolveOpts) (Scope, error) {
+	// An explicit override wins over both the mode-pinned scope and the
+	// interactive/default fallback. This backs docentd's `scope` form field
+	// and any future `--scope` flag.
+	if opts.ScopeOverride != ScopeUnset {
+		if err := opts.ScopeOverride.Validate(); err != nil {
+			return "", err
+		}
+		return opts.ScopeOverride, nil
+	}
 	if declared != ScopeUnset {
 		return declared, nil
 	}

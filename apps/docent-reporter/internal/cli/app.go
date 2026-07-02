@@ -20,7 +20,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/executionmode"
 	"github.com/KurtPreston/docent/apps/docent-reporter/internal/runlog"
 	"github.com/KurtPreston/docent/libs/config/userdata"
-	"github.com/KurtPreston/docent/apps/docent-reporter/internal/workflow"
+	"github.com/KurtPreston/docent/libs/report"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -271,27 +271,14 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	stopAbort := startAbortListener(a.In, collectCancel)
 
 	collectStart := a.Now()
-	collectMode := collectors.ModeEvents
-	if resolved.ModeID == executionmode.BuiltinPRs {
-		// The `prs` mode lists current open PRs (state view) rather than
-		// the activity timeline.
-		collectMode = collectors.ModeState
-	}
-	statuses, err := workflow.CollectStatuses(collectCtx, workflow.Deps{
-		Registry: a.Reg,
-		Now:      a.Now,
+	statuses, err := report.Collect(collectCtx, a.Reg, cfg, resolved, report.CollectOptions{
+		ConfigDir:      envDir,
 		ExpandRepoPath: expand,
 		OnDirectiveUpdate: func(p collectors.DirectiveProgress) {
 			tracker.Update(p, a.Now())
 			progress.Update(p)
 		},
 		RunLog: runLogAdapter{run: run},
-	}, cfg, envDir, workflow.RunOptions{
-		Since:              resolved.Since,
-		Until:              resolved.Until,
-		Scope:              collectors.Scope(resolved.Scope),
-		OnlyCollectorTypes: resolved.Collectors,
-		Mode:               collectMode,
 	})
 	stopAbort()
 	collectDuration := a.Now().Sub(collectStart)
@@ -311,31 +298,18 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	// collectors.FilterToSelf remains exported as a fallback helper for
 	// callers (tests, ad-hoc tooling) that want the old behavior.
 
-	// Per-run provider formatter override: SelectProvider picks formatter
-	// from ai.activity_formatter; ExecutionMode may override it for this
-	// run only.
-	if resolved.Formatter != "" {
-		provider = withFormatter(provider, ai.SelectActivityFormatter(resolved.Formatter))
-	}
-
+	// report.Render applies the mode's per-run formatter override (if any)
+	// on top of the provider SelectProvider chose from ai.activity_formatter.
 	aiStart := a.Now()
-	md, err := provider.RunMode(ctx, ai.RunInput{
-		ModeID:       resolved.ModeID,
-		ModeName:     resolved.ModeName,
-		Now:          resolved.Until,
-		Since:        resolved.Since,
-		LookbackDays: resolved.LookbackDays,
-		Instruction:  resolved.Instruction,
-		Statuses:     statuses,
-		DebugDir:     run.Dir(),
-		StreamOut:    stream,
+	md, err := report.Render(ctx, resolved, statuses, provider, report.RenderOptions{
+		DebugDir:  run.Dir(),
+		StreamOut: stream,
 	})
 	aiDuration := a.Now().Sub(aiStart)
 	if err != nil {
 		writeRunLogAIError(run.RunInfo(), provider, err, aiDuration)
 		return err
 	}
-	md = strings.TrimSpace(md) + "\n"
 
 	fmt.Fprint(a.Out, md)
 
@@ -461,28 +435,6 @@ func readPromptOverride(promptFlag, promptFile string) (string, error) {
 		return string(b), nil
 	}
 	return promptFlag, nil
-}
-
-// withFormatter returns a provider whose ActivityFormatter has been
-// overridden. Only the three concrete provider types in this package are
-// handled; other implementations are returned unchanged.
-func withFormatter(p ai.Provider, f ai.ActivityFormatter) ai.Provider {
-	switch pp := p.(type) {
-	case ai.RuleBasedProvider:
-		pp.Formatter = f
-		return pp
-	case ai.OllamaProvider:
-		pp.Formatter = f
-		return pp
-	case ai.CursorCLIProvider:
-		pp.Formatter = f
-		return pp
-	case ai.ClaudeCLIProvider:
-		pp.Formatter = f
-		return pp
-	default:
-		return p
-	}
 }
 
 // uniqueOutputPath returns path if nothing exists at that path yet; otherwise it
