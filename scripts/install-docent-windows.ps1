@@ -46,7 +46,7 @@ Don't set up the SSH forward; point the launcher directly at the remote URL.
 Skip Scheduled Task registration (build/config only).
 
 .PARAMETER NoBuild
-Skip docentd.exe build (reuse an existing binary in BinDir).
+Skip the dashboard + docentd.exe build (reuse an existing binary in BinDir).
 
 .PARAMETER NoModules
 Deprecated no-op. The VirtualDesktop module is now installed by wsm's own
@@ -138,6 +138,13 @@ function Test-GoOk {
     return $false
 }
 
+# --- Node toolchain (the dashboard is a Vite/React build, embedded -tags embed) --
+function Test-NodeOk {
+    $v = try { (& node -v) 2>$null } catch { $null }
+    if ($v -match 'v(\d+)\.') { return ([int]$Matches[1] -ge 18) }
+    return $false
+}
+
 # --- resolve docentd location ------------------------------------------------
 $Mode = $null
 $Sessions = $null
@@ -211,21 +218,34 @@ else {
     $Sessions = "http://127.0.0.1:$Port"
 }
 
-# --- build docentd (local only) ----------------------------------------------
+# --- build dashboard + docentd (local only) ----------------------------------
+# The Vite output (apps\docentd\web\dist) is embedded into docentd via the
+# `embed` build tag, so the installed binary is self-contained (no -web needed).
 if ($Mode -eq 'local' -and -not $NoBuild) {
     if (-not (Test-GoOk)) {
         Write-Error "need Go >= 1.22 on PATH to build docentd locally (install Go or pass -NoBuild / use -RemoteUrl)."
         exit 1
     }
-    Log "building docentd -> $DocentdBin"
-    Step "go build -o $DocentdBin ./apps/docentd" {
+    if (-not (Test-NodeOk)) {
+        Write-Error "need Node >= 18 on PATH to build the dashboard (install Node 18+, or pass -NoBuild)."
+        exit 1
+    }
+    Log "building dashboard -> $WebRoot\dist"
+    Step "npm ci + npm run build ($WebRoot)" {
+        & npm --prefix $WebRoot ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+        & npm --prefix $WebRoot run build
+        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+    }
+    Log "building docentd -> $DocentdBin (dashboard embedded via -tags embed)"
+    Step "go build -tags embed -o $DocentdBin ./apps/docentd" {
         New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-        & go build -o $DocentdBin (Join-Path $Root 'apps\docentd')
+        & go build -tags embed -o $DocentdBin (Join-Path $Root 'apps\docentd')
         if ($LASTEXITCODE -ne 0) { throw "go build failed" }
     }
 }
 elseif ($Mode -eq 'local') {
-    Log "skipping docentd build (-NoBuild)"
+    Log "skipping dashboard + docentd build (-NoBuild)"
 }
 
 # --- build docent-tunnel (remote + tunnel) -----------------------------------
@@ -433,7 +453,7 @@ else {
     # docentd (local only)
     if ($Mode -eq 'local') {
         $ddVbs = Join-Path $ConfigDir 'docentd-hidden.vbs'
-        $ddArgs = ('-config "{0}" -web "{1}" -port {2}' -f $ConfigPath, $WebRoot, $Port)
+        $ddArgs = ('-config "{0}" -port {1}' -f $ConfigPath, $Port)
         Write-HiddenVbs -Path $ddVbs -Exe $DocentdBin -ArgLine $ddArgs `
             -LogFile (Join-Path $tmp 'docentd.log')
         Register-DocentTask -Name 'docentd' -Vbs $ddVbs -Match 'docentd'
