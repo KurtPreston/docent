@@ -1,1 +1,5 @@
 .DS_Store
+
+# docentd dashboard (Vite/React) build system
+/apps/docentd/web/node_modules/
+/apps/docentd/web/dist/
