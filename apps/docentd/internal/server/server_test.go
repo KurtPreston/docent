@@ -21,7 +21,7 @@ func newTestServer(t *testing.T, token string) http.Handler {
 	web := t.TempDir()
 	for name, body := range map[string]string{
 		"index.html": "<!doctype html><title>t</title>",
-		"auth.js":    "// auth",
+		"app.js":     "// app",
 	} {
 		if err := os.WriteFile(filepath.Join(web, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -29,7 +29,8 @@ func newTestServer(t *testing.T, token string) http.Handler {
 	}
 	cfg := config.DaemonConfig{Token: token}
 	eng := engine.New(cfg, reg)
-	return New(cfg, eng, reg, web).Handler()
+	// nil webFS => disk-serve mode from the temp dir above.
+	return New(cfg, eng, reg, web, nil).Handler()
 }
 
 func status(t *testing.T, h http.Handler, method, path, bearer string) int {
@@ -86,10 +87,32 @@ func TestAuth_healthAndStaticStayOpen(t *testing.T) {
 	if code := status(t, h, http.MethodGet, "/health", ""); code != http.StatusOK {
 		t.Errorf("/health without token: got %d, want 200", code)
 	}
-	if code := status(t, h, http.MethodGet, "/auth.js", ""); code != http.StatusOK {
-		t.Errorf("/auth.js (static) without token: got %d, want 200", code)
+	if code := status(t, h, http.MethodGet, "/app.js", ""); code != http.StatusOK {
+		t.Errorf("/app.js (static) without token: got %d, want 200", code)
 	}
 	if code := status(t, h, http.MethodGet, "/", ""); code != http.StatusOK {
 		t.Errorf("/ (index) without token: got %d, want 200", code)
+	}
+}
+
+func TestStaticSPAFallback(t *testing.T) {
+	h := newTestServer(t, "")
+	// A real asset is served as-is.
+	if code := status(t, h, http.MethodGet, "/app.js", ""); code != http.StatusOK {
+		t.Errorf("/app.js: got %d, want 200", code)
+	}
+	// Extensionless client-side routes fall back to index.html so react-router
+	// can render them (including future routes like /report).
+	for _, p := range []string{"/signals", "/collectors", "/workitem", "/report"} {
+		if code := status(t, h, http.MethodGet, p, ""); code != http.StatusOK {
+			t.Errorf("client route %s: got %d, want 200 (index fallback)", p, code)
+		}
+	}
+	// Missing files with an extension, and unmatched /api/* paths, stay 404s.
+	if code := status(t, h, http.MethodGet, "/missing.js", ""); code != http.StatusNotFound {
+		t.Errorf("/missing.js: got %d, want 404", code)
+	}
+	if code := status(t, h, http.MethodGet, "/api/nope", ""); code != http.StatusNotFound {
+		t.Errorf("/api/nope: got %d, want 404", code)
 	}
 }

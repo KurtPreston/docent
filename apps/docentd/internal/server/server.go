@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,10 +26,14 @@ type Server struct {
 	engine   *engine.Engine
 	registry *registry.Store
 	webRoot  string
+	web      fs.FS
 }
 
-func New(cfg config.DaemonConfig, eng *engine.Engine, reg *registry.Store, webRoot string) *Server {
-	return &Server{cfg: cfg, engine: eng, registry: reg, webRoot: webRoot}
+// New builds the HTTP server. webRoot is the on-disk dashboard directory used
+// in dev/disk mode; webFS, when non-nil (embed builds), takes precedence and
+// serves the dashboard from assets baked into the binary.
+func New(cfg config.DaemonConfig, eng *engine.Engine, reg *registry.Store, webRoot string, webFS fs.FS) *Server {
+	return &Server{cfg: cfg, engine: eng, registry: reg, webRoot: webRoot, web: webFS}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -218,40 +224,84 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": name, "kind": kind})
 }
 
+// staticOrIndex serves the single-page dashboard. It serves the requested
+// asset when it exists; otherwise, for extensionless client-side routes
+// (e.g. /signals, /collectors, /workitem, and any future route), it falls back
+// to index.html so react-router can render them. Assets come from the embedded
+// FS in embed builds, else from webRoot on disk.
 func (s *Server) staticOrIndex(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/")
-	if path == "" || path == "dashboard" {
-		path = "index.html"
+	// Normalize to a clean, slash-rooted asset name; path.Clean against a
+	// leading "/" neutralizes any ".." traversal before we hit the FS/disk.
+	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+	if name == "" {
+		name = "index.html"
 	}
-	// Map extensionless app routes (e.g. /signals, /collectors, /workitem)
-	// to their backing HTML page.
-	if path != "" && filepath.Ext(path) == "" {
-		path += ".html"
-	}
-	full := filepath.Join(s.webRoot, filepath.Clean(path))
-	if !strings.HasPrefix(full, s.webRoot) {
-		http.NotFound(w, r)
+	if b, ctype, ok := s.readAsset(name); ok {
+		writeAsset(w, b, ctype)
 		return
 	}
-	b, err := os.ReadFile(full)
+	// SPA fallback for client routes. Missing files that look like assets
+	// (have an extension) and unmatched /api/* paths stay 404s.
+	if path.Ext(name) == "" && !strings.HasPrefix(name, "api/") {
+		if b, _, ok := s.readAsset("index.html"); ok {
+			writeAsset(w, b, "text/html; charset=utf-8")
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+// readAsset returns the named dashboard asset from the embedded FS (embed
+// builds) or from webRoot on disk, along with its content type.
+func (s *Server) readAsset(name string) (data []byte, contentType string, ok bool) {
+	var (
+		b   []byte
+		err error
+	)
+	if s.web != nil {
+		b, err = fs.ReadFile(s.web, name)
+	} else {
+		full := filepath.Join(s.webRoot, filepath.FromSlash(name))
+		if !strings.HasPrefix(full, s.webRoot) {
+			return nil, "", false
+		}
+		b, err = os.ReadFile(full)
+	}
 	if err != nil {
-		http.NotFound(w, r)
-		return
+		return nil, "", false
 	}
-	switch filepath.Ext(full) {
-	case ".html":
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	case ".css":
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	case ".js":
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	return b, contentTypeFor(name), true
+}
+
+func writeAsset(w http.ResponseWriter, b []byte, contentType string) {
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
+}
+
+func contentTypeFor(name string) string {
+	switch path.Ext(name) {
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".json", ".map":
+		return "application/json; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	}
+	if ct := mime.TypeByExtension(path.Ext(name)); ct != "" {
+		return ct
+	}
+	return ""
 }
 
 func (s *Server) authOK(r *http.Request) bool {
@@ -271,6 +321,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-
-// WebFS returns an fs.FS for embedded web assets (optional).
-var WebFS fs.FS

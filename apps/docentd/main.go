@@ -13,6 +13,7 @@ import (
 	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
 	"github.com/KurtPreston/docent/apps/docentd/internal/server"
+	"github.com/KurtPreston/docent/apps/docentd/web"
 )
 
 func main() {
@@ -48,7 +49,9 @@ func serve(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	eng.StartScheduler(ctx)
-	srv := server.New(cfg, eng, reg, *webRoot)
+	// web.FS() is the embedded dashboard (non-nil only in -tags embed builds);
+	// otherwise it's nil and the server serves from -web on disk.
+	srv := server.New(cfg, eng, reg, *webRoot, web.FS())
 
 	bindHost := config.ResolveBindHost(cfg, *host)
 	addr := net.JoinHostPort(bindHost, strconv.Itoa(cfg.Port))
