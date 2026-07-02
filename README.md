@@ -237,7 +237,7 @@ things at once:
   off the loopback (override with `bindHost:` — e.g. `127.0.0.1` to force
   loopback even with a token, or `-host` on the command line).
 - Every **data** endpoint now requires `Authorization: Bearer <token>`.
-  `/health` and the static dashboard shell (HTML/CSS/JS) stay open; only the
+  `/health` and the dashboard shell (the built SPA assets) stay open; only the
   data behind them is protected. Comparison is constant-time.
 
 Clients:
@@ -258,6 +258,35 @@ Caveats:
 - With no token configured, behavior is unchanged (loopback-only, open). If you
   set `bindHost` to a non-loopback address **without** a token, docentd logs a
   loud startup warning that data is exposed unauthenticated.
+
+### Dashboard frontend (build)
+
+The dashboard is a **Vite + React + TypeScript** single-page app under
+[`apps/docentd/web`](apps/docentd/web). It's a pure client of docentd's JSON API
+(`/sessions`, `/api/*`) and is embedded into the `docentd` binary at build time,
+so a released binary is self-contained. Requires **Node >= 18**.
+
+- **Dev** (hot reload) — run a `docentd` (default `127.0.0.1:39787`), then:
+
+  ```bash
+  cd apps/docentd/web
+  npm install
+  npm run dev     # http://localhost:5173; proxies /api,/sessions,/ingest,/health to docentd
+  ```
+
+  Point the proxy at a non-default docentd with `DOCENTD_URL=http://host:port npm run dev`.
+
+- **Release** (embedded) — build the SPA, then compile docentd with the `embed`
+  tag so `dist/` is baked in (this is what the installers do):
+
+  ```bash
+  ( cd apps/docentd/web && npm ci && npm run build )   # -> apps/docentd/web/dist
+  go build -tags embed ./apps/docentd
+  ```
+
+- **Bare `go build` / `go vet` / `go test` stay Node-free** — without `-tags
+  embed` no assets are baked in and docentd serves the dashboard from disk via
+  `-web` (default `apps/docentd/web/dist`, so it works after an `npm run build`).
 
 ## Window management & session dashboard
 
@@ -384,7 +413,7 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - `libs/` — shared packages (`model`, `collectors`, `correlation`, `ai`, `config`, `wmclient`, `webhook`, …)
 - `apps/docent-reporter/` — reporter CLI
 - `apps/docent-setup/` — config wizard + `check`
-- `apps/docentd/` — daemon + dashboard
+- `apps/docentd/` — daemon + dashboard (Vite/React SPA in `apps/docentd/web`, embedded via `-tags embed`)
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
 - `apps/docent-tunnel/` — workstation SSH local-forward helper for a remote, loopback-only docentd
 - the local window manager lives in the separate [wsm](https://github.com/KurtPreston/wsm) repo

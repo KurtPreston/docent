@@ -27,13 +27,17 @@ SKIP_BUILD=0
 ENABLE_LINGER=0
 DRY_RUN=0
 GO="${DOCENT_GO:-}"
+NODE="${DOCENT_NODE:-node}"
+NPM="${DOCENT_NPM:-npm}"
 
 usage() {
   cat <<'EOF'
 Usage: install-docent-linux.sh [options]
 
-Builds docentd, lays down config under ~/.config/docent, and registers a
-systemd --user service that serves the dashboard on 127.0.0.1:39787.
+Builds the dashboard (Vite/React) and docentd (with the built dashboard
+embedded into the binary via -tags embed), lays down config under
+~/.config/docent, and registers a systemd --user service that serves the
+dashboard on 127.0.0.1:39787.
 
 config.yaml and .env are canonical real files in ~/.config/docent. On first
 run they are seeded from the repo's userdata/ (or the bundled examples) when
@@ -54,6 +58,8 @@ Environment:
   DOCENT_CONFIG_DIR  Config root (default: ~/.config/docent)
   DOCENT_PORT        Same as --port
   DOCENT_GO          Path to a Go >= 1.22 toolchain (auto-detected otherwise)
+  DOCENT_NODE        Node binary for the dashboard build (default: node; needs >= 18)
+  DOCENT_NPM         npm binary (default: npm)
 EOF
 }
 
@@ -106,6 +112,25 @@ choose_go() {
   exit 1
 }
 
+# --- Node toolchain (the dashboard is a Vite/React build, embedded via -tags embed) --
+node_major() { "$1" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
+build_frontend() {
+  if [ "$DRY_RUN" -eq 0 ]; then
+    command -v "$NODE" >/dev/null 2>&1 || { echo "need Node >= 18 on PATH to build the dashboard (set DOCENT_NODE, or e.g. 'nvm use 20')" >&2; exit 1; }
+    command -v "$NPM" >/dev/null 2>&1 || { echo "need npm on PATH to build the dashboard (set DOCENT_NPM)" >&2; exit 1; }
+    local nmajor; nmajor="$(node_major "$NODE")"
+    if [ -z "$nmajor" ] || [ "$nmajor" -lt 18 ]; then
+      echo "need Node >= 18 to build the dashboard (found $("$NODE" -v 2>/dev/null || echo none)); set DOCENT_NODE or run 'nvm use 20'" >&2
+      exit 1
+    fi
+    log "building dashboard with Node $("$NODE" -v)"
+  else
+    log "building dashboard (requires Node >= 18)"
+  fi
+  run "$NPM" --prefix "$WEB_ROOT" ci
+  run "$NPM" --prefix "$WEB_ROOT" run build
+}
+
 if [ "$SKIP_BUILD" -eq 0 ]; then
   choose_go
   log "using Go $(go_version "$GO") ($GO)"
@@ -114,10 +139,13 @@ fi
 DOCENTD_BIN="$BIN_DIR/docentd"
 
 # --- Build --------------------------------------------------------------------
+# The Vite output (apps/docentd/web/dist) is embedded into docentd with the
+# `embed` build tag, so the installed binary is self-contained (no -web needed).
 if [ "$SKIP_BUILD" -eq 0 ]; then
+  build_frontend
   log "building docentd -> $DOCENTD_BIN"
   run mkdir -p "$BIN_DIR"
-  run "$GO" build -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
+  run "$GO" build -tags embed -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
 else
   log "skipping build (--no-build)"
 fi
@@ -206,7 +234,7 @@ Wants=network-online.target
 Type=simple
 # gh lives in /usr/bin, cursor-agent/git tooling in ~/.local/bin
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=$DOCENTD_BIN -config $CONFIG_PATH -web $WEB_ROOT -port $DOCENT_PORT
+ExecStart=$DOCENTD_BIN -config $CONFIG_PATH -port $DOCENT_PORT
 WorkingDirectory=$CONFIG_DIR
 Restart=on-failure
 RestartSec=3

@@ -27,7 +27,9 @@ func main() {
 func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configPath := fs.String("config", "", "docentd config path")
-	webRoot := fs.String("web", "apps/docentd/web", "dashboard static files")
+	// Disk-serve fallback (non-embed builds): the built SPA lives in dist/.
+	// Embed builds (-tags embed) ignore this and serve from the baked-in FS.
+	webRoot := fs.String("web", "apps/docentd/web/dist", "dashboard static files (built SPA dir; used when not built with -tags embed)")
 	port := fs.Int("port", 0, "listen port override")
 	host := fs.String("host", "", "bind address override (default 0.0.0.0 when a token is set, else 127.0.0.1)")
 	_ = fs.Parse(args)

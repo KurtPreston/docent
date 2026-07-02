@@ -28,6 +28,8 @@ DOCENTD_TOKEN="${DOCENTD_TOKEN:-${DOCENT_TOKEN:-}}"
 USE_TUNNEL=auto  # auto (default: forward a remote docentd via docent-tunnel) | 0 (--no-tunnel)
 SSH_HOST="${DOCENT_TUNNEL_HOST:-}"
 SSH_IDENTITY="${DOCENT_TUNNEL_IDENTITY:-}"
+NODE="${DOCENT_NODE:-node}"
+NPM="${DOCENT_NPM:-npm}"
 
 usage() {
   cat <<'EOF'
@@ -39,7 +41,8 @@ window manager itself lives in the separate wsm project -- install it from
 https://github.com/KurtPreston/wsm.
 
 On first run, asks whether docentd runs on this Mac (local) or remotely.
-Local installs build docentd, run docent-setup when needed, and register
+Local installs build the dashboard (Vite/React) + docentd (dashboard embedded
+into the binary via -tags embed), run docent-setup when needed, and register
 its LaunchAgent. Remote installs point hooks/launcher at the remote docentd
 URL you provide (nothing is built locally).
 
@@ -64,6 +67,8 @@ Environment:
   DOCENTD_TOKEN        Bearer token for remote docentd / hooks
   DOCENT_TUNNEL_HOST   Same as --ssh-host (implies --tunnel)
   DOCENT_TUNNEL_IDENTITY  Same as --ssh-identity
+  DOCENT_NODE          Node binary for the dashboard build (default: node; needs >= 18)
+  DOCENT_NPM           npm binary (default: npm)
 EOF
 }
 
@@ -95,6 +100,25 @@ while [ $# -gt 0 ]; do
 done
 
 command -v go >/dev/null 2>&1 || { echo "go is required on PATH" >&2; exit 1; }
+
+# The dashboard is a Vite/React build embedded into docentd via -tags embed.
+node_major() { "$1" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
+build_frontend() {
+  if [ "$DRY_RUN" -eq 0 ]; then
+    command -v "$NODE" >/dev/null 2>&1 || { echo "need Node >= 18 on PATH to build the dashboard (set DOCENT_NODE; e.g. 'nvm use 20' or 'brew install node')" >&2; exit 1; }
+    command -v "$NPM" >/dev/null 2>&1 || { echo "need npm on PATH to build the dashboard (set DOCENT_NPM)" >&2; exit 1; }
+    local nmajor; nmajor="$(node_major "$NODE")"
+    if [ -z "$nmajor" ] || [ "$nmajor" -lt 18 ]; then
+      echo "need Node >= 18 to build the dashboard (found $("$NODE" -v 2>/dev/null || echo none)); set DOCENT_NODE" >&2
+      exit 1
+    fi
+    log "building dashboard with Node $("$NODE" -v)"
+  else
+    log "building dashboard (requires Node >= 18)"
+  fi
+  run "$NPM" --prefix "$WEB_ROOT" ci
+  run "$NPM" --prefix "$WEB_ROOT" run build
+}
 
 cursor_installed() {
   for candidate in /Applications/Cursor.app "$HOME/Applications/Cursor.app"; do
@@ -261,8 +285,9 @@ PLIST_TUNNEL="$LAUNCH_AGENTS/com.docent.docent-tunnel.plist"
 if [ "$SKIP_BUILD" -eq 0 ]; then
   if [ "$DOCENTD_MODE" = local ]; then
     run mkdir -p "$BIN_DIR"
-    log "building docentd"
-    run go build -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
+    build_frontend
+    log "building docentd (dashboard embedded via -tags embed)"
+    run go build -tags embed -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
   else
     log "remote docentd — nothing to build locally"
   fi
@@ -340,8 +365,6 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ] && [ "$DOCENTD_MODE" = local ]; then
     <string>$DOCENTD_BIN</string>
     <string>-config</string>
     <string>$CONFIG_PATH</string>
-    <string>-web</string>
-    <string>$WEB_ROOT</string>
   </array>
   <key>WorkingDirectory</key><string>$CONFIG_DIR</string>
   <key>EnvironmentVariables</key>
