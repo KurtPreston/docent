@@ -1,3 +1,4 @@
+import "./lib/auth"; // capture/strip ?token= before the router reads the URL
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
