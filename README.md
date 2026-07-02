@@ -288,6 +288,27 @@ so a released binary is self-contained. Requires **Node >= 18**.
   embed` no assets are baked in and docentd serves the dashboard from disk via
   `-web` (default `apps/docentd/web/dist`, so it works after an `npm run build`).
 
+### Report page (`/report`)
+
+The dashboard's **Report** tab runs the same pipeline as the `docent-reporter`
+CLI (both share [`libs/report`](libs/report)): pick a mode, an optional lookback
+(days), a scope (`self` / `involved` / `all`, or the mode default), and an
+optional prompt override, then generate a Markdown report, view it in-browser,
+and download it as `.md`. Generation can take a while (LLM providers), so
+docentd runs it as a background job the page polls; jobs are in-memory and
+ephemeral (bounded, TTL-pruned, lost on restart — a report is cheap to re-run).
+
+Its endpoints are auth-gated like every other data endpoint:
+
+- **`POST /api/report`** — body `{ "mode": "<id>", "days"?: N, "scope"?: "self|involved|all", "prompt"?: "…" }`.
+  Starts a background generation and returns `202` with `{ "id": "<job>" }`.
+  A blank/omitted `days`/`scope` uses the mode default; a mode with no built-in
+  prompt (e.g. `custom-prompt`) requires `prompt`.
+- **`GET /api/report/{id}`** — poll a job: `{ "status": "pending|running|done|error", "markdown"?, "meta"?, "error"? }`.
+- **`GET /api/report/meta`** — form metadata: available `modes`
+  (`{id, name, promptRequired}`), the `scopes` list, and the configured AI
+  `provider` (label + provider/model) used for the topbar.
+
 ## Window management & session dashboard
 
 Beyond the reporter, `docentd` doubles as a **mission-control dashboard**: a live,
