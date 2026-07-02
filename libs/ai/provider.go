@@ -45,3 +45,26 @@ func SelectProvider(cfg userdata.AIConfig, fallback Provider) Provider {
 		return fallback
 	}
 }
+
+// WithFormatter returns a copy of p with its ActivityFormatter overridden.
+// Only the concrete providers in this package carry a formatter; any other
+// implementation is returned unchanged. Used for the per-run formatter
+// override an ExecutionMode may declare.
+func WithFormatter(p Provider, f ActivityFormatter) Provider {
+	switch pp := p.(type) {
+	case RuleBasedProvider:
+		pp.Formatter = f
+		return pp
+	case OllamaProvider:
+		pp.Formatter = f
+		return pp
+	case CursorCLIProvider:
+		pp.Formatter = f
+		return pp
+	case ClaudeCLIProvider:
+		pp.Formatter = f
+		return pp
+	default:
+		return p
+	}
+}

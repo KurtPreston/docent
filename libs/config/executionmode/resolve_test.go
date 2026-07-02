@@ -70,6 +70,46 @@ func TestResolvePRsDoesNotPromptAndCarriesCollectors(t *testing.T) {
 	}
 }
 
+func TestResolveScopeOverridePrecedence(t *testing.T) {
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+
+	// Override beats a mode that pinned a scope (daily-plan pins involved).
+	daily := mustFindBuiltin(t, BuiltinDailyPlan)
+	res, err := Resolve(daily, ResolveOpts{Now: now, ScopeOverride: ScopeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scope != ScopeAll {
+		t.Fatalf("override should beat mode-pinned scope: got %q want all", res.Scope)
+	}
+
+	// Override beats the interactive prompt: recent-activity leaves scope
+	// unset (would normally Select), but a non-empty override must skip the
+	// scope prompt entirely. --days keeps the lookback prompt from firing.
+	recent := mustFindBuiltin(t, BuiltinRecentActivity)
+	prompter := &scriptedPrompter{}
+	res, err = Resolve(recent, ResolveOpts{
+		Now:           now,
+		Prompter:      prompter,
+		DaysOverride:  3,
+		ScopeOverride: ScopeSelf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Scope != ScopeSelf {
+		t.Fatalf("override should beat interactive scope prompt: got %q want self", res.Scope)
+	}
+	if len(prompter.selectCalls) != 0 {
+		t.Fatalf("scope override must suppress the scope Select, got %d Select call(s)", len(prompter.selectCalls))
+	}
+
+	// An invalid override is rejected rather than silently ignored.
+	if _, err := Resolve(daily, ResolveOpts{Now: now, ScopeOverride: Scope("bogus")}); err == nil {
+		t.Fatal("expected error for invalid scope override")
+	}
+}
+
 func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	mode := mustFindBuiltin(t, BuiltinDailyPlan)
 	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC) // Tuesday
