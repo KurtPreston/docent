@@ -98,25 +98,10 @@ function JiraCell({ g }: { g: DashboardGroup }) {
   );
 }
 
-// PathCell shows the work item's repo path. When onOpen is provided (i.e. the
-// provider supplied a deep link), the path becomes the clickable open/focus
-// action anchor.
-function PathCell({ path, onOpen }: { path?: string; onOpen?: () => void }) {
+// PathCell shows the work item's repo path. Opening the editor now lives in the
+// Cursor column (see CursorOpenButton), so the path is display-only.
+function PathCell({ path }: { path?: string }) {
   if (!path) return <span className="muted">—</span>;
-  if (onOpen) {
-    return (
-      <span
-        className="path-cell mono clickable"
-        title={"Open " + path}
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpen();
-        }}
-      >
-        <span className="path-inner">{path}</span>
-      </span>
-    );
-  }
   return (
     <span className="path-cell mono" title={path}>
       <span className="path-inner">{path}</span>
@@ -290,9 +275,28 @@ function columnGating(collectors: CollectorsView | null): ColumnGating {
 
 // sessionHeaderFor names the single session column after the active provider.
 function sessionHeaderFor(provider: string): string {
-  if (provider === "cursor") return "Cursor Sessions";
+  if (provider === "cursor") return "Cursor";
   if (provider === "wsm") return "WSM Sessions";
   return "Sessions";
+}
+
+// CursorOpenButton launches/focuses the local Cursor window for a work item via
+// its provider deep link. It lives in the Cursor column (rather than the Path
+// column) so opening the editor is an explicit action next to the sessions.
+function CursorOpenButton({ provider, g }: { provider: string; g: DashboardGroup }) {
+  return (
+    <button
+      className="cursor-open-btn"
+      type="button"
+      title="Open in Cursor"
+      onClick={(e) => {
+        e.stopPropagation();
+        void activate(provider, g);
+      }}
+    >
+      open in Cursor
+    </button>
+  );
 }
 
 export function Dashboard() {
@@ -410,12 +414,7 @@ export function Dashboard() {
     {
       key: "path",
       header: "Path",
-      render: (g) => (
-        <PathCell
-          path={g.openPath}
-          onOpen={g.deepLink ? () => void activate(provider, g) : undefined}
-        />
-      ),
+      render: (g) => <PathCell path={g.openPath} />,
       sortValue: (g) => g.openPath || "",
       filterText: (g) => g.openPath || "",
     },
@@ -423,26 +422,29 @@ export function Dashboard() {
       key: "sessions",
       header: sessionHeaderFor(provider),
       render: (g) => (
-        <ExpandableCell
-          items={g.sessions ?? []}
-          itemKey={(s, i) => s.name + i}
-          renderItem={(s) => (
-            <SessionMini
-              s={s}
-              activateTitle={provider === "cursor" ? "Open in Cursor" : "Focus this window"}
-              onActivate={
-                provider === "cursor"
-                  ? g.deepLink
-                    ? () => void activate(provider, g)
-                    : undefined
-                  : () =>
-                      void activate(provider, g, { name: s.name, host: s.host }).then(() =>
-                        window.setTimeout(() => void load(), 400),
-                      )
-              }
-            />
-          )}
-        />
+        <div className="cell-stack">
+          {provider === "cursor" && g.deepLink ? (
+            <CursorOpenButton provider={provider} g={g} />
+          ) : null}
+          <ExpandableCell
+            items={g.sessions ?? []}
+            itemKey={(s, i) => s.name + i}
+            renderItem={(s) => (
+              <SessionMini
+                s={s}
+                activateTitle="Focus this window"
+                onActivate={
+                  provider === "cursor"
+                    ? undefined
+                    : () =>
+                        void activate(provider, g, { name: s.name, host: s.host }).then(() =>
+                          window.setTimeout(() => void load(), 400),
+                        )
+                }
+              />
+            )}
+          />
+        </div>
       ),
       sortValue: (g) => {
         const sessions = g.sessions ?? [];
