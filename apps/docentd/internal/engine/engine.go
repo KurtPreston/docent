@@ -153,6 +153,12 @@ type Engine struct {
 	sessionMgr    sessionmanager.SessionManager
 	sessionLinker sessionmanager.DeepLinker
 
+	// jiraBaseURL is the configured jira collector's base_url (trailing slash
+	// trimmed), used to synthesize /browse/<key> links for ticket keys that
+	// resolved without a collected JIRA entity. Empty when no jira directive
+	// with a base_url is configured.
+	jiraBaseURL string
+
 	mu             sync.Mutex
 	units          []*unit
 	collecting     map[unitKey]bool
@@ -178,8 +184,44 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
+	e.jiraBaseURL = jiraBaseURL(cfg)
 	e.units = e.buildUnits()
 	return e
+}
+
+// jiraBaseURL returns the first configured jira directive's base_url (trailing
+// slash trimmed), or "" when none is configured. Used to build /browse/<key>
+// links for resolved ticket keys that lack a collected JIRA entity.
+func jiraBaseURL(cfg config.DaemonConfig) string {
+	for _, d := range cfg.Directives {
+		if d.Collector != "jira" {
+			continue
+		}
+		if base := strings.TrimRight(strings.TrimSpace(d.Config["base_url"]), "/"); base != "" {
+			return base
+		}
+	}
+	return ""
+}
+
+// ticketBrowseURL builds a JIRA browse URL for a ticket key, or "" when no jira
+// base_url is configured (or the key is empty).
+func (e *Engine) ticketBrowseURL(key string) string {
+	if e.jiraBaseURL == "" || key == "" {
+		return ""
+	}
+	return e.jiraBaseURL + "/browse/" + key
+}
+
+// ticketURL prefers a ticket's collected URL, falling back to a synthesized
+// browse URL so a resolved key still links out even when its JIRA entity was
+// never collected (e.g. the ticket is outside the configured JQL scope). This
+// is what keeps JIRA links consistently clickable across work items.
+func (e *Engine) ticketURL(collected, key string) string {
+	if collected != "" {
+		return collected
+	}
+	return e.ticketBrowseURL(key)
 }
 
 // providerKey returns the normalized session_manager provider ("cursor",
@@ -752,7 +794,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 				g.Tickets = append(g.Tickets, DashboardTicket{
 					Key:    tr.Key,
 					Title:  tr.Title,
-					URL:    tr.URL,
+					URL:    e.ticketURL(tr.URL, tr.Key),
 					Status: tr.Status,
 				})
 			}
@@ -849,6 +891,11 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 					}
 				}
 			}
+		}
+		// A resolved ticket key without a collected JIRA entity still gets a
+		// synthesized browse link so its dashboard link is clickable.
+		if g.JiraURL == "" && correlation.ParseTicketKey(g.Ticket, corrCfg) != "" {
+			g.JiraURL = e.ticketBrowseURL(g.Ticket)
 		}
 		g.Status, g.StatusRank, g.ActionRequired = classifyGroup(facts)
 		if g.StatusRank >= rankHidden {
@@ -1139,7 +1186,7 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 			detail.Tickets = append(detail.Tickets, DashboardTicket{
 				Key:    tr.Key,
 				Title:  tr.Title,
-				URL:    tr.URL,
+				URL:    e.ticketURL(tr.URL, tr.Key),
 				Status: tr.Status,
 			})
 		}

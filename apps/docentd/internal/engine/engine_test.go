@@ -383,6 +383,65 @@ func TestBuildDashboardBranchUnit(t *testing.T) {
 	}
 }
 
+func TestBuildDashboardJiraBrowseFallback(t *testing.T) {
+	store, err := registry.NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(config.DaemonConfig{
+		Directives: []userdata.Directive{
+			{ID: "jira", Collector: "jira", Enabled: true, Config: map[string]string{"base_url": "https://jira.example.com/"}},
+		},
+	}, store)
+
+	// A branch unit whose second ticket has no collected URL should still get
+	// a synthesized /browse link, while a ticket that already has a URL keeps
+	// it verbatim.
+	branch := model.WorkItem{
+		Key:    "wb:org/repo@salsa-1-fix",
+		Repo:   "org/repo",
+		Branch: "salsa-1-fix",
+		Tickets: []model.TicketRef{
+			{Key: "SALSA-1", URL: "https://jira.example.com/browse/SALSA-1"},
+			{Key: "SALSA-2"},
+		},
+		Entities: []model.Entity{
+			{Kind: "branch", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-1-fix"}},
+		},
+	}
+	// A ticket-anchored unit with no collected JIRA entity should still get a
+	// clickable JiraURL.
+	orphan := model.WorkItem{
+		Key:   "SALSA-3",
+		Title: "SALSA-3",
+		Entities: []model.Entity{
+			{Kind: "session", Title: "SALSA-3-thing", Coordinates: map[string]string{"ticket": "SALSA-3"}, State: map[string]string{"live": "true", "attention": "idle"}},
+		},
+	}
+
+	dash := e.buildDashboard([]model.WorkItem{branch, orphan}, e.corrCfg)
+	byKey := map[string]DashboardGroup{}
+	for _, g := range dash.Groups {
+		byKey[g.Key] = g
+	}
+
+	b := byKey["wb:org/repo@salsa-1-fix"]
+	if len(b.Tickets) != 2 {
+		t.Fatalf("branch tickets = %+v", b.Tickets)
+	}
+	if b.Tickets[0].URL != "https://jira.example.com/browse/SALSA-1" {
+		t.Errorf("collected ticket URL changed: %q", b.Tickets[0].URL)
+	}
+	if b.Tickets[1].URL != "https://jira.example.com/browse/SALSA-2" {
+		t.Errorf("uncollected ticket URL = %q, want synthesized browse link", b.Tickets[1].URL)
+	}
+
+	o := byKey["SALSA-3"]
+	if o.JiraURL != "https://jira.example.com/browse/SALSA-3" {
+		t.Errorf("orphan ticket JiraURL = %q, want synthesized browse link", o.JiraURL)
+	}
+}
+
 func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
 	e := newTestEngine(t)
 	wi := model.WorkItem{
