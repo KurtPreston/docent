@@ -6,11 +6,12 @@ import { RefreshButton, AutoToggle } from "../components/Controls";
 import { DataTable } from "../components/DataTable";
 import type { Column } from "../components/DataTable";
 import { LinkButton } from "../components/LinkButton";
-import { fetchDashboard, launchWorkItem } from "../lib/api";
+import { fetchCollectors, fetchDashboard, launchWorkItem } from "../lib/api";
 import { focusSession } from "../lib/wsm";
 import { timeAgo, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type {
+  CollectorsView,
   Dashboard as DashboardData,
   DashboardGroup,
   DashboardSession,
@@ -244,9 +245,26 @@ function jiraFilterText(g: DashboardGroup): string {
     .join(" ");
 }
 
+// Which columns to show is driven by the docent config: a column only appears
+// when its backing collector is configured. `collectors` is null until the
+// /api/collectors fetch resolves, in which case we optimistically show every
+// column (matching the pre-gating behavior) rather than flashing them away.
+type ColumnGating = { jira: boolean; github: boolean; wsm: boolean };
+
+function columnGating(collectors: CollectorsView | null): ColumnGating {
+  if (!collectors) return { jira: true, github: true, wsm: true };
+  const configured = new Set(collectors.units.map((u) => u.collector));
+  return {
+    jira: configured.has("jira"),
+    github: configured.has("github") || configured.has("github-enterprise"),
+    wsm: configured.has("wsm"),
+  };
+}
+
 export function Dashboard() {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
+  const [collectors, setCollectors] = useState<CollectorsView | null>(null);
   const [auto, setAuto] = useState(true);
   const [errText, setErrText] = useState<string | null>(null);
   const lastOk = useRef(false);
@@ -271,6 +289,14 @@ export function Dashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Collector config rarely changes, so fetch it once to decide which columns
+  // are relevant. On failure we keep `collectors` null and show all columns.
+  useEffect(() => {
+    fetchCollectors()
+      .then(setCollectors)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!auto) return;
@@ -309,7 +335,8 @@ export function Dashboard() {
     </>
   );
 
-  const columns: Column<DashboardGroup>[] = [
+  const gating = columnGating(collectors);
+  const allColumns: Column<DashboardGroup>[] = [
     {
       key: "workItem",
       header: "Work item",
@@ -354,7 +381,7 @@ export function Dashboard() {
     },
     {
       key: "sessions",
-      header: "Sessions",
+      header: "WSM Sessions",
       render: (g) => (
         <ExpandableCell
           items={g.sessions ?? []}
@@ -402,6 +429,15 @@ export function Dashboard() {
       sortable: false,
     },
   ];
+
+  // Gate collector-backed columns on the docent config: JIRA needs a jira
+  // collector, PRs need a github collector, and sessions need a wsm collector.
+  const columns = allColumns.filter((c) => {
+    if (c.key === "jira") return gating.jira;
+    if (c.key === "prs") return gating.github;
+    if (c.key === "sessions") return gating.wsm;
+    return true;
+  });
 
   return (
     <Layout mainClass="wrap" stats={stats} controls={controls}>
