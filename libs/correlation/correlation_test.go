@@ -195,8 +195,8 @@ func TestSignalToEntity_commitFallback(t *testing.T) {
 func TestGroupKey_branchAnchor(t *testing.T) {
 	cfg := Config{}
 	ent := model.Entity{
-		ID:   "commit:1",
-		Kind: "commit",
+		ID:    "commit:1",
+		Kind:  "commit",
 		Title: "fix bug",
 		Coordinates: map[string]string{
 			"repo":   "org/repo",
@@ -277,6 +277,137 @@ func TestBuildWorkItems_multipleBranchesShareTicket(t *testing.T) {
 		if len(wi.Tickets) != 1 || wi.Tickets[0].Key != "SALSA-1" {
 			t.Errorf("%s tickets = %+v", wi.Key, wi.Tickets)
 		}
+	}
+}
+
+// TestBuildWorkItems_backportResolvesTicketViaPRNumber reproduces the real
+// SALSA backport scenario: a backport branch (and its own delta commits)
+// never names SALSA-12455 anywhere in its own text — only the PR number
+// (#7373) it backports. That PR's squash-merge commit ("[SALSA-12455] ...
+// (#7373)"), already collected as an unrelated entity (it lands on a
+// different branch in the shared repo), supplies the PR#->ticket mapping.
+func TestBuildWorkItems_backportResolvesTicketViaPRNumber(t *testing.T) {
+	cfg := Config{Projects: []string{"SALSA"}}
+	entities := []model.Entity{
+		{ID: "b1", Kind: "branch", Title: "backport/pr-7373-to-release-2026.4.2", Coordinates: map[string]string{
+			"repo": "Chip/salsa", "branch": "backport/pr-7373-to-release-2026.4.2", "path": "/code/salsa",
+		}},
+		{ID: "c1", Kind: "commit", Title: "[PR-7373] fix conflict", Coordinates: map[string]string{
+			"repo": "Chip/salsa", "branch": "backport/pr-7373-to-release-2026.4.2",
+		}},
+		{ID: "c2", Kind: "commit", Title: "[CONFLICTS] Backport PR #7373", Coordinates: map[string]string{
+			"repo": "Chip/salsa", "branch": "backport/pr-7373-to-release-2026.4.2",
+		}},
+		// The already-collected squash-merge commit, misattributed by
+		// `git log --all --source` to an unrelated branch ("purge").
+		{ID: "squash", Kind: "commit", Title: "[SALSA-12455] enable sound repeat loops when entering a playback window (#7373)", Coordinates: map[string]string{
+			"repo": "Chip/salsa", "branch": "purge", "ticket": "SALSA-12455",
+		}},
+	}
+	items := BuildWorkItems(entities, cfg)
+
+	var backport *model.WorkItem
+	for i := range items {
+		if items[i].Key == "wb:Chip/salsa@backport/pr-7373-to-release-2026.4.2" {
+			backport = &items[i]
+		}
+	}
+	if backport == nil {
+		t.Fatalf("backport work item not found: %+v", items)
+	}
+	if len(backport.Tickets) != 1 || backport.Tickets[0].Key != "SALSA-12455" {
+		t.Errorf("backport tickets = %+v, want exactly [SALSA-12455]", backport.Tickets)
+	}
+}
+
+// TestBuildWorkItems_leakedCommitsDontPolluteTickets reproduces the
+// SALSA-12684 scenario: `git log --all --source` over a shared grove
+// worktree can misattribute unrelated commits (each naming a different,
+// genuinely real ticket) to this branch. Because the branch name itself
+// names its own ticket, that alone must win — the leaked commits' distinct,
+// disagreeing tickets must not be added.
+func TestBuildWorkItems_leakedCommitsDontPolluteTickets(t *testing.T) {
+	cfg := Config{Projects: []string{"SALSA"}}
+	mk := func(id, title, ticket string) model.Entity {
+		coords := map[string]string{"repo": "Chip/salsa", "branch": "SALSA-12684"}
+		if ticket != "" {
+			coords["ticket"] = ticket
+		}
+		return model.Entity{ID: id, Kind: "commit", Title: title, Coordinates: coords}
+	}
+	entities := []model.Entity{
+		mk("own", "[SALSA-12684] Increase timeout for docker-compose container teardown", "SALSA-12684"),
+		mk("leak1", "[SALSA-12683] libs can declare a 'codegen' script to generate types (#7358)", "SALSA-12683"),
+		mk("leak2", "Fixing some build errors on AS3 import (#7289)", ""),
+		mk("leak3", "[SALSA-12568] Fix variable migration (#7360)", "SALSA-12568"),
+		mk("leak4", "[SALSA-12680] Restore `key` column in key/value tables (#7357)", "SALSA-12680"),
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("got %d work items, want 1: %+v", len(items), items)
+	}
+	wi := items[0]
+	if wi.Key != "wb:Chip/salsa@SALSA-12684" {
+		t.Fatalf("key = %q", wi.Key)
+	}
+	if len(wi.Tickets) != 1 || wi.Tickets[0].Key != "SALSA-12684" {
+		t.Errorf("tickets = %+v, want exactly [SALSA-12684]", wi.Tickets)
+	}
+}
+
+// TestBuildWorkItems_commitConsensusTicket guards the common case: a branch
+// whose name carries no ticket, but whose own (single) commit does, should
+// still resolve that ticket via consensus.
+func TestBuildWorkItems_commitConsensusTicket(t *testing.T) {
+	cfg := Config{Projects: []string{"SALSA"}}
+	entities := []model.Entity{
+		{ID: "c1", Kind: "commit", Title: "[SALSA-500] Fix misc bug", Coordinates: map[string]string{
+			"repo": "org/repo", "branch": "misc-fix", "ticket": "SALSA-500",
+		}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 || len(items[0].Tickets) != 1 || items[0].Tickets[0].Key != "SALSA-500" {
+		t.Fatalf("items = %+v, want single work item with ticket SALSA-500", items)
+	}
+}
+
+// TestBuildWorkItems_multiTicketBranchOrdered covers a branch that
+// legitimately carries more than one ticket: its own name resolves one
+// (primary), and its PR resolves a second, distinct one.
+func TestBuildWorkItems_multiTicketBranchOrdered(t *testing.T) {
+	cfg := Config{Projects: []string{"SALSA"}}
+	entities := []model.Entity{
+		{ID: "c1", Kind: "commit", Title: "salsa-100 nice", Coordinates: map[string]string{
+			"repo": "org/repo", "branch": "salsa-100-nice", "ticket": "SALSA-100",
+		}},
+		{ID: "pr1", Kind: "pr_review_status", Title: "SALSA-200 also fixes this", Coordinates: map[string]string{
+			"repo": "org/repo", "head_branch": "salsa-100-nice",
+		}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1: %+v", len(items), items)
+	}
+	tickets := items[0].Tickets
+	if len(tickets) != 2 || tickets[0].Key != "SALSA-100" || tickets[1].Key != "SALSA-200" {
+		t.Errorf("tickets = %+v, want ordered [SALSA-100, SALSA-200]", tickets)
+	}
+}
+
+// TestTicketFromEntity_rejectsBogusExplicitCoordinate guards against a
+// collector-set Coordinates["ticket"] that isn't really a ticket (e.g. a
+// generic scan upstream tagging a branch named "backport/pr-7373-..." as
+// "PR-7373"): once Projects restricts matching, that value must be
+// discarded rather than trusted verbatim.
+func TestTicketFromEntity_rejectsBogusExplicitCoordinate(t *testing.T) {
+	cfg := Config{Projects: []string{"SALSA"}}
+	ent := model.Entity{
+		Kind:        "branch",
+		Title:       "backport/pr-7373-to-release-2026.4.2",
+		Coordinates: map[string]string{"ticket": "PR-7373"},
+	}
+	if got := ticketFromEntity(ent, cfg); got != "" {
+		t.Errorf("ticketFromEntity = %q, want \"\" (bogus explicit ticket must be rejected)", got)
 	}
 }
 

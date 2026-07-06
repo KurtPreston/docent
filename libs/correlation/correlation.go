@@ -134,6 +134,196 @@ func projectTicketCore(projects []string) string {
 	return `(?:` + strings.Join(quoted, "|") + `)-\d+`
 }
 
+// prReferenceRe matches a PR number referenced in free-form text: "#7373",
+// "PR-7373", "PR 7373", "pr/7373" (case-insensitive).
+var prReferenceRe = regexp.MustCompile(`(?i)(?:#|\bpr[-/ ]?)(\d+)`)
+
+// parsePRNumbers extracts every PR number referenced anywhere in text
+// (order preserved, deduplicated), or nil when none are found.
+func parsePRNumbers(text string) []string {
+	matches := prReferenceRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range matches {
+		n := m[1]
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// prNumberFromURL extracts the PR number from a ".../pull/<n>" URL, or ""
+// when the URL doesn't look like a PR link.
+func prNumberFromURL(raw string) string {
+	const marker = "/pull/"
+	i := strings.LastIndex(raw, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := raw[i+len(marker):]
+	j := 0
+	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+		j++
+	}
+	if j == 0 {
+		return ""
+	}
+	return rest[:j]
+}
+
+// prNumbersFromEntity extracts PR numbers referenced by an entity's title
+// text or its URL (a ".../pull/<n>" link).
+func prNumbersFromEntity(ent model.Entity) []string {
+	nums := parsePRNumbers(ent.Title)
+	if n := prNumberFromURL(ent.URL); n != "" {
+		nums = append(nums, n)
+	}
+	return nums
+}
+
+// buildPRTicketIndex scans every entity for one that carries both a
+// resolvable ticket and a PR-number reference in its own text/URL — e.g. a
+// squash-merge commit subject "[SALSA-12455] ... (#7373)" — and returns a
+// PR-number -> ticket index (first entity found for a given number wins).
+// This lets a branch or commit that only references a PR number (no ticket
+// of its own) resolve the ticket that PR closes, using data already
+// collected elsewhere: no extra network calls.
+func buildPRTicketIndex(entities []model.Entity, cfg Config) map[string]model.TicketRef {
+	index := map[string]model.TicketRef{}
+	for _, ent := range entities {
+		t := ticketFromEntity(ent, cfg)
+		if t == "" {
+			continue
+		}
+		for _, n := range prNumbersFromEntity(ent) {
+			if _, exists := index[n]; !exists {
+				index[n] = model.TicketRef{Key: t}
+			}
+		}
+	}
+	return index
+}
+
+// jiraMetadataByKey indexes JIRA entity metadata (title/url/status) by
+// ticket key, so a key resolved via a branch name or a PR reference still
+// gets its JIRA title/status/url whenever a jira entity for that key was
+// collected.
+func jiraMetadataByKey(entities []model.Entity) map[string]model.TicketRef {
+	index := map[string]model.TicketRef{}
+	for _, ent := range entities {
+		if !isJiraEntity(ent) {
+			continue
+		}
+		key := strings.ToUpper(strings.TrimSpace(ent.Coordinates["ticket"]))
+		if key == "" {
+			continue
+		}
+		ref := model.TicketRef{Key: key, Title: ent.Title, URL: ent.URL}
+		if ent.State != nil {
+			ref.Status = ent.State["status"]
+		}
+		index[key] = ref
+	}
+	return index
+}
+
+// commitLikeEntityKind reports whether an entity kind directly carries git
+// history/state text (as opposed to a PR/session/jira entity), for the
+// branch-ticket consensus rule below.
+func commitLikeEntityKind(kind string) bool {
+	switch kind {
+	case "commit", "reflog", "branch":
+		return true
+	}
+	return false
+}
+
+// commitConsensusTicket returns the ticket key that every commit/reflog/
+// branch-kind entity carrying one agrees on, or "" when none of them carry
+// one, or when they disagree (2+ distinct values). Disagreement most likely
+// means one or more of those entities were merely reachable from this
+// branch — a `git log --all` artifact of a shared repository/worktree setup
+// — rather than truly belonging to it, in which case showing nothing is
+// better than guessing wrong.
+func commitConsensusTicket(entities []model.Entity, cfg Config) string {
+	seen := map[string]bool{}
+	var distinct []string
+	for _, ent := range entities {
+		if !commitLikeEntityKind(ent.Kind) {
+			continue
+		}
+		t := ticketFromEntity(ent, cfg)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		distinct = append(distinct, t)
+	}
+	if len(distinct) != 1 {
+		return ""
+	}
+	return distinct[0]
+}
+
+// candidateTicketKeys returns, in precedence order, the ticket keys a
+// repo/branch work item should carry:
+//  1. the branch name's own ticket;
+//  2. a PR entity anchored to this branch resolving its own ticket;
+//  3. the ticket every commit/reflog/branch-kind entity agrees on (if any
+//     disagree, none of them are trusted);
+//  4. a ticket resolved via a PR number referenced by the branch name, or
+//     by an entity that has no directly-resolvable ticket of its own (so a
+//     leaked, unrelated commit that already resolves its own ticket can't
+//     also drag in another one just because it mentions a PR number).
+//
+// The result is deduplicated, preserving this precedence order, so the
+// first entry is the primary ticket.
+func candidateTicketKeys(branch string, entities []model.Entity, cfg Config, prTicket map[string]model.TicketRef) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(key string) {
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+
+	add(ParseTicketKey(branch, cfg))
+
+	for _, ent := range entities {
+		if !strings.Contains(ent.Kind, "pr") {
+			continue
+		}
+		add(ticketFromEntity(ent, cfg))
+	}
+
+	add(commitConsensusTicket(entities, cfg))
+
+	for _, n := range parsePRNumbers(branch) {
+		if ref, ok := prTicket[n]; ok {
+			add(ref.Key)
+		}
+	}
+	for _, ent := range entities {
+		if ticketFromEntity(ent, cfg) != "" {
+			continue
+		}
+		for _, n := range prNumbersFromEntity(ent) {
+			if ref, ok := prTicket[n]; ok {
+				add(ref.Key)
+			}
+		}
+	}
+	return out
+}
+
 // commitLikeKind reports whether a signal kind is free-form git text where a
 // ticket key, if present, is likely embedded rather than leading. These get
 // the ScanTicketKey fallback during entity mapping.
@@ -186,10 +376,16 @@ func GroupKey(ent model.Entity, cfg Config) string {
 	return fallbackGroupKey(ent)
 }
 
+// ticketFromEntity resolves an entity's ticket key: an explicit
+// Coordinates["ticket"] wins, but only when it actually looks like a ticket
+// key under the configured pattern/projects — a collector-set field can
+// itself be a false match (e.g. a branch named "backport/pr-7373-..." gets
+// tagged "PR-7373" by a generic scan upstream), so an unrecognized value
+// falls back to parsing the title instead of being trusted verbatim.
 func ticketFromEntity(ent model.Entity, cfg Config) string {
 	if ent.Coordinates != nil {
-		if t := ent.Coordinates["ticket"]; t != "" {
-			return strings.ToUpper(t)
+		if t := strings.ToUpper(strings.TrimSpace(ent.Coordinates["ticket"])); t != "" && looksLikeTicketKey(t, cfg) {
+			return t
 		}
 	}
 	return ParseTicketKey(ent.Title, cfg)
@@ -228,6 +424,13 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 	groups := map[string]*model.WorkItem{}
 	order := []string{}
 
+	// Built once from the full, ungrouped entity set so a ticket can be
+	// resolved via a PR reference even when the entity that names the
+	// ticket (e.g. a squash-merge commit) lands in a different work item
+	// than the one referencing its PR number.
+	prTicket := buildPRTicketIndex(entities, cfg)
+	jiraByKey := jiraMetadataByKey(entities)
+
 	for _, ent := range entities {
 		key := GroupKey(ent, cfg)
 		wi, ok := groups[key]
@@ -258,7 +461,7 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 		}
 	}
 
-	attachTicketsToBranchUnits(groups, &order, cfg)
+	attachTicketsToBranchUnits(groups, &order, cfg, prTicket)
 
 	out := make([]model.WorkItem, 0, len(order))
 	for _, key := range order {
@@ -266,7 +469,7 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 		if wi == nil {
 			continue
 		}
-		enrichBranchWorkItem(wi, cfg)
+		enrichBranchWorkItem(wi, cfg, prTicket, jiraByKey)
 		out = append(out, *wi)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -321,7 +524,7 @@ func isJiraEntity(ent model.Entity) bool {
 
 // attachTicketsToBranchUnits moves JIRA entities from standalone ticket-keyed
 // work items onto repo/branch units that reference the same ticket key.
-func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]string, cfg Config) {
+func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]string, cfg Config, prTicket map[string]model.TicketRef) {
 	// ticket key -> jira entities collected from ticket-keyed work items
 	ticketEntities := map[string][]model.Entity{}
 	var ticketKeys []string
@@ -356,7 +559,8 @@ func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]stri
 		if !strings.HasPrefix(wi.Key, "wb:") {
 			continue
 		}
-		keys := referencedTicketKeys(wi.Entities, cfg)
+		_, branch := parseBranchKey(wi.Key)
+		keys := candidateTicketKeys(branch, wi.Entities, cfg, prTicket)
 		for _, t := range keys {
 			referenced[t] = true
 		}
@@ -372,7 +576,8 @@ func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]stri
 			if !strings.HasPrefix(wi.Key, "wb:") {
 				continue
 			}
-			keys := referencedTicketKeys(wi.Entities, cfg)
+			_, branch := parseBranchKey(wi.Key)
+			keys := candidateTicketKeys(branch, wi.Entities, cfg, prTicket)
 			if !containsString(keys, t) {
 				continue
 			}
@@ -400,18 +605,6 @@ func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]stri
 func looksLikeTicketKey(key string, cfg Config) bool {
 	re := ticketRegexp(cfg, false)
 	return re.MatchString(strings.ToLower(key))
-}
-
-func referencedTicketKeys(entities []model.Entity, cfg Config) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, ent := range entities {
-		if t := ticketFromEntity(ent, cfg); t != "" && !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 func containsString(ss []string, want string) bool {
@@ -442,8 +635,9 @@ func filterOrder(order *[]string, drop string) {
 	*order = filtered
 }
 
-func enrichBranchWorkItem(wi *model.WorkItem, cfg Config) {
-	if strings.HasPrefix(wi.Key, "wb:") {
+func enrichBranchWorkItem(wi *model.WorkItem, cfg Config, prTicket, jiraByKey map[string]model.TicketRef) {
+	isBranchUnit := strings.HasPrefix(wi.Key, "wb:")
+	if isBranchUnit {
 		wi.Repo, wi.Branch = parseBranchKey(wi.Key)
 		if wi.Branch != "" && (wi.Title == "" || wi.Title == wi.Key) {
 			wi.Title = wi.Branch
@@ -469,21 +663,42 @@ func enrichBranchWorkItem(wi *model.WorkItem, cfg Config) {
 				lastActivity = t
 			}
 		}
-		if t := ticketFromEntity(ent, cfg); t != "" && !ticketSeen[t] {
-			ticketSeen[t] = true
-			ref := model.TicketRef{Key: t}
-			if isJiraEntity(ent) {
-				ref.Title = ent.Title
-				ref.URL = ent.URL
-				if ent.State != nil {
-					ref.Status = ent.State["status"]
+		// Ticket-anchored work items (key IS the ticket) were already
+		// grouped onto exactly that ticket by GroupKey, so every entity
+		// here legitimately shares it; a plain union is safe. Repo/branch
+		// units get a precedence-ordered resolution below instead, since a
+		// commit merely reachable from the branch (a shared-worktree
+		// `git log --all` artifact) must not be trusted just because it
+		// happens to carry some other, unrelated ticket.
+		if !isBranchUnit {
+			if t := ticketFromEntity(ent, cfg); t != "" && !ticketSeen[t] {
+				ticketSeen[t] = true
+				ref := model.TicketRef{Key: t}
+				if isJiraEntity(ent) {
+					ref.Title = ent.Title
+					ref.URL = ent.URL
+					if ent.State != nil {
+						ref.Status = ent.State["status"]
+					}
 				}
+				wi.Tickets = append(wi.Tickets, ref)
 			}
-			wi.Tickets = append(wi.Tickets, ref)
 		}
 	}
 	if !lastActivity.IsZero() {
 		wi.LastActivity = lastActivity.UTC().Format(time.RFC3339Nano)
+	}
+
+	if isBranchUnit {
+		for _, key := range candidateTicketKeys(wi.Branch, wi.Entities, cfg, prTicket) {
+			ref := model.TicketRef{Key: key}
+			if meta, ok := jiraByKey[key]; ok {
+				ref.Title = meta.Title
+				ref.URL = meta.URL
+				ref.Status = meta.Status
+			}
+			wi.Tickets = append(wi.Tickets, ref)
+		}
 	}
 }
 
