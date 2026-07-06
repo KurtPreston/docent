@@ -318,6 +318,29 @@ a small **local** REST service — the separate [wsm](https://github.com/KurtPre
 project (`wsmd`) — so `docentd` can run remotely (on your dev box) while the windows
 are managed on your workstation.
 
+### Session manager (cursor / wsm / none)
+
+How the dashboard lists and opens editor windows is selected by a
+`session_manager` block in `config.yaml` (mirroring the `ai:` block). There is
+**no default** — the installer picks one at setup time and you can change it:
+
+- **`cursor`** (installer default when the Cursor CLI is on PATH) — lists windows
+  via `cursor --status` and renders each work item's path as a `cursor://` deep
+  link. Clicking it first syncs the work item's color into the repo's
+  `.vscode/settings.json` (via `POST /api/workitems/:key/open`, disable with
+  `cursor.write_color: false`) and then navigates the link to open/focus the
+  window. Exact-window focus is best-effort (Cursor may open a duplicate).
+- **`wsm`** — lists and focuses windows through the local [wsm](https://github.com/KurtPreston/wsm)
+  daemon. Choose this when you need reliable exact-window focus.
+- **unset** — no session column and no clickable links.
+
+```yaml
+session_manager:
+  provider: cursor      # or: wsm
+  cursor:
+    write_color: true   # sync work-item color into .vscode/settings.json (default)
+```
+
 ```
  dev box (grove / docentd)                     workstation (wsm + launcher)
  ─────────────────────────                     ────────────────────────────

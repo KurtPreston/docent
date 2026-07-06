@@ -350,6 +350,38 @@ if ($Mode -eq 'local') {
     }
 }
 
+# --- session manager provider (local docentd only) --------------------------
+# No default: if Cursor's CLI is on PATH we set session_manager.provider: cursor
+# so the dashboard lists Cursor windows and opens/focuses them via cursor://
+# deep links; otherwise it's left unset (no session column). An existing block
+# is left untouched so users can switch to wsm for reliable exact-window focus.
+if ($Mode -eq 'local') {
+    $directives = Join-Path $ConfigDir 'config.yaml'
+    if (Test-Path -LiteralPath $directives) {
+        $txt = Get-Content -LiteralPath $directives -Raw
+        if ($txt -match '(?m)^\s*session_manager:') {
+            Log "session_manager already set in config.yaml (leaving as-is)"
+        }
+        elseif (Get-Command cursor -ErrorAction SilentlyContinue) {
+            Log "detected cursor — setting session_manager.provider: cursor"
+            if (-not $DryRun) {
+                $block = @"
+
+# Session manager auto-detected at install (Cursor CLI found on PATH). Drives the
+# dashboard session column + clickable open/focus links. Switch to ``wsm`` for
+# reliable exact-window focus, or remove this block for no session column.
+session_manager:
+  provider: cursor
+"@
+                Add-Content -LiteralPath $directives -Value $block -Encoding UTF8
+            }
+        }
+        else {
+            Log "no cursor CLI on PATH — leaving session_manager unset (set provider: wsm to use wsm)"
+        }
+    }
+}
+
 # The window manager (wsm) and its VirtualDesktop module prerequisite are
 # installed separately from the wsm repo; nothing to do here.
 

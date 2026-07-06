@@ -215,7 +215,38 @@ EOF
   return 0
 }
 
+# configure_session_manager picks the dashboard's session provider. There is no
+# default: if Cursor's CLI is on PATH (this box's `cursor` forwards to the local
+# Cursor GUI over the Remote-SSH IPC socket) we set provider: cursor so the
+# dashboard shows a session column with clickable open/focus deep links.
+# Otherwise it is left unset (no session column, no links). An existing
+# session_manager block is always left untouched, so users can switch to wsm.
+configure_session_manager() {
+  local cfg="$CONFIG_DIR/config.yaml"
+  [ -f "$cfg" ] || return 0
+  if grep -Eq '^[[:space:]]*session_manager:' "$cfg"; then
+    log "session_manager already set in config.yaml (leaving as-is)"
+    return 0
+  fi
+  if command -v cursor >/dev/null 2>&1; then
+    log "detected cursor — setting session_manager.provider: cursor"
+    if [ "$DRY_RUN" -eq 0 ]; then
+      cat >>"$cfg" <<'EOF'
+
+# Session manager auto-detected at install (Cursor CLI found on PATH). Drives the
+# dashboard session column + clickable open/focus links. Switch to `wsm` for
+# reliable exact-window focus, or remove this block for no session column.
+session_manager:
+  provider: cursor
+EOF
+    fi
+  else
+    log "no cursor on PATH — leaving session_manager unset (no session column)"
+  fi
+}
+
 bootstrap_config
+configure_session_manager
 
 # --- systemd --user service ---------------------------------------------------
 if [ "$INSTALL_SYSTEMD" -eq 1 ]; then
@@ -296,6 +327,10 @@ fi
 
 cat <<'EOF'
 
-Note: the local-wm collector (127.0.0.1:39788) will report a failure in doctor
-on this Linux host — that is expected; the window manager runs on Windows.
+Session manager: docent no longer force-injects a wsm collector. The installer
+sets session_manager.provider: cursor when the Cursor CLI is present (the
+default here), so the dashboard lists Cursor windows via `cursor --status` and
+opens/focuses them with cursor:// deep links. To use wsm instead (reliable
+exact-window focus), set session_manager.provider: wsm in config.yaml; with no
+provider set there is simply no session column.
 EOF
