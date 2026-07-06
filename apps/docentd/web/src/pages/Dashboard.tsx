@@ -373,6 +373,13 @@ export function Dashboard() {
   const provider = data?.provider ?? "";
   const allColumns: Column<DashboardGroup>[] = [
     {
+      key: "repo",
+      header: "Repo",
+      className: "muted",
+      render: (g) => g.repo || "—",
+      sortValue: (g) => g.repo || "",
+    },
+    {
       key: "workItem",
       header: "Work item",
       render: (g) => <WorkItemCell g={g} />,
@@ -399,13 +406,6 @@ export function Dashboard() {
       header: "Status",
       render: (g) => <StatusCell g={g} />,
       sortValue: (g) => g.jiraStatus || g.status || "",
-    },
-    {
-      key: "repo",
-      header: "Repo",
-      className: "muted",
-      render: (g) => g.repo || "—",
-      sortValue: (g) => g.repo || "",
     },
     {
       key: "path",
