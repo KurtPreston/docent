@@ -102,6 +102,45 @@ directives:
 	}
 }
 
+func TestValidateYAML_sessionManagerAccepted(t *testing.T) {
+	cases := []string{
+		`
+session_manager:
+  provider: cursor
+  cursor:
+    command: cursor
+    host: dev-box
+    write_color: false
+`,
+		`
+session_manager:
+  provider: wsm
+  wsm:
+    base_url: http://127.0.0.1:39788
+`,
+		// Absent session_manager is valid.
+		`
+ai:
+  provider: rule-based
+`,
+	}
+	for _, doc := range cases {
+		if err := configschema.ValidateYAML([]byte(strings.TrimSpace(doc))); err != nil {
+			t.Fatalf("%q: %v", doc, configschema.ValidationProblems(err))
+		}
+	}
+}
+
+func TestValidateYAML_sessionManagerBadProviderFails(t *testing.T) {
+	doc := strings.TrimSpace(`
+session_manager:
+  provider: tmux
+`)
+	if err := configschema.ValidateYAML([]byte(doc)); err == nil {
+		t.Fatal("expected schema rejection for unknown session_manager provider")
+	}
+}
+
 func TestValidateYAML_badDirectiveFails(t *testing.T) {
 	yamlDoc := `
 ai:

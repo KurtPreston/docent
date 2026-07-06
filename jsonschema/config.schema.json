@@ -8,6 +8,9 @@
     "ai": {
       "$ref": "#/$defs/ai"
     },
+    "session_manager": {
+      "$ref": "#/$defs/session_manager"
+    },
     "directives": {
       "type": "array",
       "items": {
@@ -227,6 +230,59 @@
           "additionalProperties": false
         }
       ]
+    },
+    "session_manager": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Selects how docent lists and opens editor windows. Omit entirely for no session manager (no session column, no clickable links).",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["cursor", "wsm"],
+          "x-docent-prompt": "Session manager (cursor or wsm)",
+          "x-docent-default": "cursor"
+        },
+        "cursor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string",
+              "x-docent-prompt": "Cursor CLI command",
+              "x-docent-default": "cursor",
+              "x-docent-setup-skip-prompt": true
+            },
+            "host": {
+              "type": "string",
+              "x-docent-prompt": "SSH host alias for remote deep links (defaults to docentd sshHost)",
+              "x-docent-setup-skip-prompt": true
+            },
+            "write_color": {
+              "type": "boolean",
+              "default": true,
+              "x-docent-default": true,
+              "x-docent-setup-skip-prompt": true
+            }
+          }
+        },
+        "wsm": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "base_url": {
+              "type": "string",
+              "x-docent-prompt": "wsm HTTP base URL",
+              "x-docent-default": "http://127.0.0.1:39788",
+              "x-docent-validator": "url"
+            },
+            "token": {
+              "type": "string",
+              "x-docent-secret": true,
+              "x-docent-prompt": "wsm bearer token (optional)"
+            }
+          }
+        }
+      }
     },
     "directiveBase": {
       "type": "object",

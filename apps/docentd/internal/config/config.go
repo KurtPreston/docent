@@ -35,8 +35,10 @@ type DaemonConfig struct {
 	SSHHost        string               `yaml:"sshHost"`               // optional ssh alias for remote editor open (DOCENT_HOST)
 	Directives     []userdata.Directive `yaml:"directives,omitempty"`
 
-	// Loaded from configDir/config.yaml (not docentd.yaml). AI is optional.
+	// Loaded from configDir/config.yaml (not docentd.yaml). AI and
+	// SessionManager are optional.
 	AI             userdata.AIConfig             `yaml:"-"`
+	SessionManager userdata.SessionManagerConfig `yaml:"-"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"-"`
 }
 
@@ -128,6 +130,9 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 	if cfg.AI.Provider == "" {
 		cfg.AI = file.AI
 	}
+	if cfg.SessionManager.Provider == "" {
+		cfg.SessionManager = file.SessionManager
+	}
 	if len(cfg.ExecutionModes) == 0 {
 		cfg.ExecutionModes = file.ExecutionModes
 	}
@@ -139,6 +144,9 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 		cfg.Directives = append(cfg.Directives, extra.Directives...)
 		if cfg.AI.Provider == "" {
 			cfg.AI = extra.AI
+		}
+		if cfg.SessionManager.Provider == "" {
+			cfg.SessionManager = extra.SessionManager
 		}
 		if len(cfg.ExecutionModes) == 0 {
 			cfg.ExecutionModes = extra.ExecutionModes

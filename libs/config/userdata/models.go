@@ -16,6 +16,7 @@ const DefaultDir = "userdata"
 // optional user-declared execution modes.
 type ConfigFile struct {
 	AI             AIConfig                      `yaml:"ai,omitempty"`
+	SessionManager SessionManagerConfig          `yaml:"session_manager,omitempty"`
 	Directives     []Directive                   `yaml:"directives,omitempty"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"execution_modes,omitempty"`
 	// OutputDir overrides where docent-reporter writes generated markdown.
@@ -29,8 +30,8 @@ type Directive struct {
 	Name           string            `yaml:"name"`
 	Collector      string            `yaml:"collector"`
 	Enabled        bool              `yaml:"enabled"`
-	CodeHome       string            `yaml:"code_home,omitempty"`  // local-git: parent dir of immediate child repos when paths empty
-	Paths          []string          `yaml:"paths,omitempty"`      // local-git: explicit repo roots; if empty, use code_home scan
+	CodeHome       string            `yaml:"code_home,omitempty"` // local-git: parent dir of immediate child repos when paths empty
+	Paths          []string          `yaml:"paths,omitempty"`     // local-git: explicit repo roots; if empty, use code_home scan
 	Target         map[string]string `yaml:"target,omitempty"`
 	Config         map[string]string `yaml:"config,omitempty"`
 	CredentialRefs map[string]string `yaml:"credential_refs,omitempty"`
@@ -106,6 +107,45 @@ type AIProviderCursor struct {
 type AIProviderClaude struct {
 	Command string   `yaml:"command,omitempty"`
 	Args    []string `yaml:"args,omitempty"`
+}
+
+// SessionManagerConfig selects how docent lists and opens editor windows for a
+// work item. It mirrors AIConfig's discriminated shape: Provider is the
+// discriminator, and each provider has its own nested block. An empty Provider
+// means no session manager is configured — the dashboard shows no session
+// column and no clickable open/focus links.
+type SessionManagerConfig struct {
+	// Provider is one of "cursor" or "wsm". Empty means no session manager.
+	Provider string               `yaml:"provider,omitempty"`
+	Cursor   SessionManagerCursor `yaml:"cursor,omitempty"`
+	WSM      SessionManagerWSM    `yaml:"wsm,omitempty"`
+}
+
+// SessionManagerCursor configures the Cursor session provider.
+type SessionManagerCursor struct {
+	// Command overrides the Cursor CLI binary (default "cursor").
+	Command string `yaml:"command,omitempty"`
+	// Host is the ssh alias the local Cursor uses to reach this box, used to
+	// build remote deep links. Falls back to docentd's sshHost when empty.
+	Host string `yaml:"host,omitempty"`
+	// WriteColor controls whether opening a work item syncs its color into the
+	// repo's .vscode/settings.json. Nil means the default (true); set false to
+	// disable the color write entirely.
+	WriteColor *bool `yaml:"write_color,omitempty"`
+}
+
+// SessionManagerWSM configures the wsm session provider.
+type SessionManagerWSM struct {
+	// BaseURL overrides the wsm HTTP base URL (default http://127.0.0.1:39788).
+	BaseURL string `yaml:"base_url,omitempty"`
+	// Token is an optional bearer token for the wsm API.
+	Token string `yaml:"token,omitempty"`
+}
+
+// WriteColorEnabled reports whether opening a work item should sync its color
+// into .vscode/settings.json. Defaults to true when unset.
+func (c SessionManagerCursor) WriteColorEnabled() bool {
+	return c.WriteColor == nil || *c.WriteColor
 }
 
 type ValidationError struct {

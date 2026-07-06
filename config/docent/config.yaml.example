@@ -8,6 +8,18 @@
 #     base_url: http://127.0.0.1:11434
 #     model: qwen3
 
+# session_manager selects how the dashboard opens/lists editor windows.
+# Omit it entirely for no session column and no clickable links.
+#   provider: cursor        # or: wsm
+#   cursor:
+#     command: cursor       # Cursor CLI binary
+#     host: my-dev-box      # ssh alias for remote deep links (defaults to sshHost)
+#     write_color: true     # sync work-item color into .vscode/settings.json (default true)
+# session_manager:
+#   provider: wsm
+#   wsm:
+#     base_url: http://127.0.0.1:39788
+
 directives:
   - id: local-git-status
     name: git repo working trees
