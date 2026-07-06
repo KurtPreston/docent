@@ -1159,16 +1159,24 @@ func (e *Engine) CollectUnitNow(ctx context.Context, directiveID string, mode co
 	return true
 }
 
-// Ensure default directives include webhook collector.
-func EnsureDirectives(d []userdata.Directive) []userdata.Directive {
+// EnsureDirectives injects the always-on webhook inbox plus the session
+// collector for the configured session_manager provider. There is no default
+// session provider: when sm.Provider is empty (or unrecognized) no session
+// directive is injected, so the dashboard has no session column and no
+// clickable links. An explicit user-authored directive for the provider always
+// wins over injection.
+func EnsureDirectives(d []userdata.Directive, sm userdata.SessionManagerConfig) []userdata.Directive {
 	hasWebhook := false
 	hasWM := false
+	hasCursor := false
 	for _, dir := range d {
-		if dir.Collector == "webhook" {
+		switch dir.Collector {
+		case "webhook":
 			hasWebhook = true
-		}
-		if dir.Collector == "wsm" {
+		case "wsm":
 			hasWM = true
+		case "cursor":
+			hasCursor = true
 		}
 	}
 	out := append([]userdata.Directive{}, d...)
@@ -1179,14 +1187,41 @@ func EnsureDirectives(d []userdata.Directive) []userdata.Directive {
 			Events: &userdata.ModeConfig{Poll: userdata.PollConfig{OnRequest: true}},
 		})
 	}
-	if !hasWM {
-		out = append(out, userdata.Directive{
-			ID: "local-wm", Name: "Local wsm", Collector: "wsm", Enabled: true,
-			Config: map[string]string{"base_url": "http://127.0.0.1:39788", "machine": "local"},
-			// Live windows are real-time and cheap: collect on load and on
-			// every request.
-			State: &userdata.ModeConfig{Poll: userdata.PollConfig{OnRequest: true, OnLoad: true}},
-		})
+	// Live windows are real-time and cheap: collect on load and on every
+	// request.
+	sessionPoll := &userdata.ModeConfig{Poll: userdata.PollConfig{OnRequest: true, OnLoad: true}}
+	switch normalizeSessionProvider(sm.Provider) {
+	case "cursor":
+		if !hasCursor {
+			cfg := map[string]string{"machine": "local"}
+			if cmd := strings.TrimSpace(sm.Cursor.Command); cmd != "" {
+				cfg["command"] = cmd
+			}
+			if host := strings.TrimSpace(sm.Cursor.Host); host != "" {
+				cfg["host"] = host
+			}
+			out = append(out, userdata.Directive{
+				ID: "local-cursor", Name: "Cursor sessions", Collector: "cursor", Enabled: true,
+				Config: cfg,
+				State:  sessionPoll,
+			})
+		}
+	case "wsm":
+		if !hasWM {
+			base := strings.TrimSpace(sm.WSM.BaseURL)
+			if base == "" {
+				base = "http://127.0.0.1:39788"
+			}
+			out = append(out, userdata.Directive{
+				ID: "local-wm", Name: "Local wsm", Collector: "wsm", Enabled: true,
+				Config: map[string]string{"base_url": base, "machine": "local"},
+				State:  sessionPoll,
+			})
+		}
 	}
 	return out
+}
+
+func normalizeSessionProvider(s string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), "_", "-"))
 }

@@ -290,6 +290,7 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry.Register("google-calendar", GoogleCalendarCollector{Clock: clock, HTTP: nil})
 	registry.Register("slack", SlackCollector{Clock: clock, HTTP: nil})
 	registry.Register("wsm", WSMCollector{Clock: clock})
+	registry.Register("cursor", CursorCollector{Clock: clock})
 	registry.Register("webhook", WebhookCollector{Clock: clock})
 	return registry
 }
