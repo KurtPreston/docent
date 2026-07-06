@@ -3,11 +3,55 @@ import type { ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { RefreshButton } from "../components/Controls";
+import { DataTable } from "../components/DataTable";
+import type { Column } from "../components/DataTable";
 import { fetchWorkItem, launchWorkItem } from "../lib/api";
 import { focusSession } from "../lib/wsm";
 import { timeAgo, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
-import type { WorkItemDetail, DashboardSession, DashboardPR } from "../lib/types";
+import type { WorkItemDetail, DashboardSession, DashboardPR, EntityView, SignalView } from "../lib/types";
+
+const entityColumns: Column<EntityView>[] = [
+  { key: "kind", header: "Kind", className: "mono", render: (e) => e.kind, sortValue: (e) => e.kind },
+  {
+    key: "title",
+    header: "Title",
+    render: (e) =>
+      e.url ? (
+        <a href={e.url} target="_blank" rel="noopener">
+          {e.title}
+        </a>
+      ) : (
+        e.title
+      ),
+    sortValue: (e) => e.title,
+  },
+  { key: "id", header: "ID", className: "mono", render: (e) => e.id, sortValue: (e) => e.id },
+];
+
+const signalColumns: Column<SignalView>[] = [
+  { key: "kind", header: "Kind", className: "mono", render: (s) => s.kind, sortValue: (s) => s.kind },
+  {
+    key: "title",
+    header: "Title",
+    render: (s) =>
+      s.url ? (
+        <a href={s.url} target="_blank" rel="noopener">
+          {s.title || "(untitled)"}
+        </a>
+      ) : (
+        s.title || "(untitled)"
+      ),
+    sortValue: (s) => s.title || "",
+  },
+  {
+    key: "observed",
+    header: "Observed",
+    className: "muted",
+    render: (s) => timeAgo(s.observedAt),
+    sortValue: (s) => (s.observedAt ? Date.parse(s.observedAt) : 0),
+  },
+];
 
 function Section({
   title,
@@ -188,57 +232,16 @@ export function WorkItem() {
       </Section>
 
       <Section title={`Entities (${entities.length})`}>
-        <table className="tbl">
-          <tbody>
-            <tr>
-              {["Kind", "Title", "ID"].map((h) => (
-                <th key={h}>{h}</th>
-              ))}
-            </tr>
-            {entities.map((e, i) => (
-              <tr key={i}>
-                <td className="mono">{e.kind}</td>
-                <td>
-                  {e.url ? (
-                    <a href={e.url} target="_blank" rel="noopener">
-                      {e.title}
-                    </a>
-                  ) : (
-                    e.title
-                  )}
-                </td>
-                <td className="mono">{e.id}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable columns={entityColumns} rows={entities} rowKey={(e) => e.id} empty="No entities." />
       </Section>
 
       <Section title={`Contributing signals (${signals.length})`}>
-        <table className="tbl">
-          <tbody>
-            <tr>
-              {["Kind", "Title", "Observed"].map((h) => (
-                <th key={h}>{h}</th>
-              ))}
-            </tr>
-            {signals.map((s, i) => (
-              <tr key={i}>
-                <td className="mono">{s.kind}</td>
-                <td>
-                  {s.url ? (
-                    <a href={s.url} target="_blank" rel="noopener">
-                      {s.title || "(untitled)"}
-                    </a>
-                  ) : (
-                    s.title || "(untitled)"
-                  )}
-                </td>
-                <td className="muted">{timeAgo(s.observedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={signalColumns}
+          rows={signals}
+          rowKey={(_s, i) => i}
+          empty="No contributing signals."
+        />
       </Section>
     </Layout>
   );
