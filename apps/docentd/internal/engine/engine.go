@@ -149,15 +149,107 @@ type Engine struct {
 
 func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 	e := &Engine{
-		cfg:            cfg,
-		store:          store,
-		reg:            collectors.NewRegistry(time.Now),
-		corrCfg:        correlation.Config{TicketPattern: cfg.TicketPattern},
+		cfg:   cfg,
+		store: store,
+		reg:   collectors.NewRegistry(time.Now),
+		corrCfg: correlation.Config{
+			TicketPattern: cfg.TicketPattern,
+			Projects:      deriveTicketProjects(cfg),
+		},
 		collecting:     map[unitKey]bool{},
 		entityWorkItem: map[string]string{},
 	}
 	e.units = e.buildUnits()
 	return e
+}
+
+// deriveTicketProjects seeds correlation.Config.Projects from the daemon's
+// explicit ticketProjects plus each jira directive's config.followed_projects,
+// so ticket-key matching is restricted to real project keys out of the box
+// whenever a jira directive is configured. rebuild further widens this at
+// runtime with any project key actually observed on collected jira issues
+// (see mergeObservedProjects), covering the zero-config case too.
+func deriveTicketProjects(cfg config.DaemonConfig) []string {
+	seen := map[string]bool{}
+	var projects []string
+	add := func(raw string) {
+		for _, p := range splitProjectList(raw) {
+			p = strings.ToUpper(strings.TrimSpace(p))
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			projects = append(projects, p)
+		}
+	}
+	for _, p := range cfg.TicketProjects {
+		add(p)
+	}
+	for _, d := range cfg.Directives {
+		if d.Collector != "jira" {
+			continue
+		}
+		add(d.Config["followed_projects"])
+	}
+	return projects
+}
+
+// splitProjectList mirrors collectors.parseFollowedList's separators
+// (comma, semicolon, or any whitespace) so followed_projects parses the
+// same way here without importing that unexported helper.
+func splitProjectList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ';', '\n', '\r', '\t', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// mergeObservedProjects returns a copy of cfg whose Projects also includes
+// any JIRA project key observed on collected jira signals (parsed from
+// Fields["key"], e.g. "SALSA-1234" -> "SALSA"). This narrows ticket-key
+// matching to real, known projects even with no ticketProjects configured,
+// as soon as the jira collector has returned any issues. It's a no-op when
+// cfg.TicketPattern is set, since Projects is ignored in that case.
+func mergeObservedProjects(signals []model.Signal, cfg correlation.Config) correlation.Config {
+	if cfg.TicketPattern != "" {
+		return cfg
+	}
+	seen := make(map[string]bool, len(cfg.Projects))
+	projects := make([]string, 0, len(cfg.Projects))
+	for _, p := range cfg.Projects {
+		p = strings.ToUpper(strings.TrimSpace(p))
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		projects = append(projects, p)
+	}
+	for _, s := range signals {
+		if s.Source != "jira" {
+			continue
+		}
+		key := strings.TrimSpace(s.Fields["key"])
+		idx := strings.Index(key, "-")
+		if idx <= 0 {
+			continue
+		}
+		p := strings.ToUpper(key[:idx])
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		projects = append(projects, p)
+	}
+	cfg.Projects = projects
+	return cfg
 }
 
 // buildUnits expands enabled directives into collection units using each
@@ -491,9 +583,10 @@ func (e *Engine) rebuild() {
 	}
 	e.mu.Unlock()
 
-	entities := e.entitiesFrom(signals)
-	workItems := correlation.BuildWorkItems(entities, e.corrCfg)
-	dashboard := e.buildDashboard(workItems)
+	corrCfg := mergeObservedProjects(signals, e.corrCfg)
+	entities := e.entitiesFrom(signals, corrCfg)
+	workItems := correlation.BuildWorkItems(entities, corrCfg)
+	dashboard := e.buildDashboard(workItems, corrCfg)
 	entityWorkItem := make(map[string]string)
 	for _, wi := range workItems {
 		for _, ent := range wi.Entities {
@@ -512,8 +605,8 @@ func (e *Engine) rebuild() {
 // entitiesFrom maps signals to entities, enriches session entities from the
 // registry store, and injects registry-only sessions that still need
 // follow-up (their live window has closed).
-func (e *Engine) entitiesFrom(signals []model.Signal) []model.Entity {
-	entities := correlation.SignalsToEntities(signals, e.corrCfg)
+func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config) []model.Entity {
+	entities := correlation.SignalsToEntities(signals, corrCfg)
 	for i := range entities {
 		ent := &entities[i]
 		if ent.Kind != "session" {
@@ -598,22 +691,22 @@ type groupFacts struct {
 	branchEvidence       bool // a local branch/commit/reflog/session ties work to the ticket
 }
 
-func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
+func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.Config) Dashboard {
 	groups := make([]DashboardGroup, 0, len(workItems))
 	liveCount := 0
 	for _, wi := range workItems {
 		g := DashboardGroup{
-			Key:      wi.Key,
-			Ticket:   wi.Key,
-			Summary:  wi.Title,
-			Repo:     wi.Repo,
-			Branch:   wi.Branch,
-			OpenPath: wi.OpenPath,
+			Key:          wi.Key,
+			Ticket:       wi.Key,
+			Summary:      wi.Title,
+			Repo:         wi.Repo,
+			Branch:       wi.Branch,
+			OpenPath:     wi.OpenPath,
 			LastActivity: wi.LastActivity,
-			Color:    wi.Color,
-			FG:       wi.FG,
-			Sessions: []DashboardSession{},
-			PRs:      []DashboardPR{},
+			Color:        wi.Color,
+			FG:           wi.FG,
+			Sessions:     []DashboardSession{},
+			PRs:          []DashboardPR{},
 		}
 		if strings.HasPrefix(wi.Key, "wb:") {
 			g.Ticket = ""
@@ -664,7 +757,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem) Dashboard {
 					Name:          ent.Title,
 					Host:          ent.Coordinates["host"],
 					Path:          ent.Coordinates["path"],
-					Ticket:        correlation.ParseTicketKey(ent.Title, e.corrCfg),
+					Ticket:        correlation.ParseTicketKey(ent.Title, corrCfg),
 					Color:         ent.State["color"],
 					FG:            ent.State["fg"],
 					Live:          live,

@@ -10,6 +10,7 @@ import (
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
 )
 
@@ -317,7 +318,7 @@ func TestBuildDashboardOrderingAndVisibility(t *testing.T) {
 		wi("SALSA-2", pr(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"})),
 		wi("SALSA-1", sess("SALSA-1", true, "needs-followup")),
 	}
-	dash := e.buildDashboard(items)
+	dash := e.buildDashboard(items, e.corrCfg)
 
 	wantOrder := []string{"SALSA-1", "SALSA-2", "SALSA-3", "SALSA-4", "SALSA-5"}
 	if dash.GroupCount != len(wantOrder) {
@@ -362,7 +363,7 @@ func TestBuildDashboardBranchUnit(t *testing.T) {
 			{Kind: "pr_review_status", Title: "salsa-1 fix", URL: "https://github.com/org/repo/pull/5", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "salsa-1-fix", "ticket": "SALSA-1"}, State: map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"}},
 		},
 	}
-	dash := e.buildDashboard([]model.WorkItem{wi})
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
 	if dash.GroupCount != 1 {
 		t.Fatalf("expected 1 group, got %d", dash.GroupCount)
 	}
@@ -392,7 +393,7 @@ func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
 			{Kind: "pr_review_status", Title: "their PR", URL: "https://github.com/org/repo/pull/9", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "feature-x"}, State: map[string]string{"relation": "review_requested", "is_draft": "false"}},
 		},
 	}
-	dash := e.buildDashboard([]model.WorkItem{wi})
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
 	if dash.GroupCount != 1 {
 		t.Fatalf("expected 1 group, got %d", dash.GroupCount)
 	}
@@ -414,7 +415,7 @@ func TestBuildDashboardOrphanTicket(t *testing.T) {
 			{Kind: "issue", Title: "SALSA-99 Unstarted", Coordinates: map[string]string{"ticket": "SALSA-99"}, State: map[string]string{"status_tier": "assigned", "status": "To Do"}},
 		},
 	}
-	dash := e.buildDashboard([]model.WorkItem{wi})
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
 	if dash.GroupCount != 1 || dash.Groups[0].Key != "SALSA-99" {
 		t.Fatalf("orphan ticket group: %+v", dash.Groups)
 	}
@@ -444,5 +445,67 @@ func TestCollectorsViewReflectsUnits(t *testing.T) {
 	row := cv.Units[0]
 	if row.DirectiveID != "fake" || row.Mode != "events" || row.Interval != "15m0s" || !row.OnRequest {
 		t.Fatalf("unexpected collector row: %+v", row)
+	}
+}
+
+func TestDeriveTicketProjects(t *testing.T) {
+	cfg := config.DaemonConfig{
+		TicketProjects: []string{"salsa"},
+		Directives: []userdata.Directive{
+			{Collector: "jira", Config: map[string]string{"followed_projects": "JASPER, salsa"}},
+			{Collector: "github", Config: map[string]string{"followed_projects": "ignored"}},
+		},
+	}
+	got := deriveTicketProjects(cfg)
+	want := []string{"SALSA", "JASPER"}
+	if len(got) != len(want) {
+		t.Fatalf("deriveTicketProjects = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("deriveTicketProjects[%d] = %q, want %q (%v)", i, got[i], w, got)
+		}
+	}
+}
+
+func TestMergeObservedProjects(t *testing.T) {
+	base := correlation.Config{Projects: []string{"SALSA"}}
+	signals := []model.Signal{
+		{Source: "jira", Fields: map[string]string{"key": "JASPER-3300"}},
+		{Source: "jira", Fields: map[string]string{"key": "SALSA-1"}},
+		{Source: "local-git", Fields: map[string]string{"key": "NOTJIRA-1"}},
+	}
+	merged := mergeObservedProjects(signals, base)
+	if len(merged.Projects) != 2 {
+		t.Fatalf("merged projects = %v, want 2 entries", merged.Projects)
+	}
+	seen := map[string]bool{}
+	for _, p := range merged.Projects {
+		seen[p] = true
+	}
+	if !seen["SALSA"] || !seen["JASPER"] {
+		t.Errorf("merged projects = %v, want SALSA and JASPER", merged.Projects)
+	}
+
+	// An explicit TicketPattern must short-circuit merging (Projects is
+	// ignored by ticketRegexp in that case).
+	overridden := correlation.Config{TicketPattern: `^([A-Z]+-\d+)`}
+	if got := mergeObservedProjects(signals, overridden); len(got.Projects) != 0 {
+		t.Errorf("mergeObservedProjects should no-op when TicketPattern is set, got %v", got.Projects)
+	}
+}
+
+func TestEngineNewDerivesProjectsFromJiraDirective(t *testing.T) {
+	store, err := registry.NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(config.DaemonConfig{
+		Directives: []userdata.Directive{
+			{Collector: "jira", Enabled: true, Config: map[string]string{"followed_projects": "SALSA"}},
+		},
+	}, store)
+	if len(e.corrCfg.Projects) != 1 || e.corrCfg.Projects[0] != "SALSA" {
+		t.Errorf("corrCfg.Projects = %v, want [SALSA]", e.corrCfg.Projects)
 	}
 }

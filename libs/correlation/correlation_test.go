@@ -73,6 +73,69 @@ func TestBuildWorkItems_multiTicketPrimary(t *testing.T) {
 	}
 }
 
+func TestParseTicketKey_projectRestricted(t *testing.T) {
+	cfg := Config{Projects: []string{"salsa"}}
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"SALSA-12684", "SALSA-12684"},
+		{"[SALSA-12455] enable sound repeat loops", "SALSA-12455"},
+		{"salsa-1-fix", "SALSA-1"},
+		// Generic hyphenated tokens that used to false-match must not match
+		// once matching is restricted to configured projects.
+		{"PR-7373", ""},
+		{"backport/pr-7373-to-release-2026.4.2", ""},
+		{"release-2026", ""},
+		// An unconfigured project key must not match either.
+		{"JASPER-1", ""},
+	}
+	for _, tc := range tests {
+		if got := ParseTicketKey(tc.in, cfg); got != tc.want {
+			t.Errorf("ParseTicketKey(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestScanTicketKey_projectRestricted(t *testing.T) {
+	cfg := Config{Projects: []string{"SALSA", "JASPER"}}
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"[CONFLICTS] Backport PR #7373", ""},
+		{"d786ad77b1 [SALSA-12455] enable sound repeat loops (#7373)", "SALSA-12455"},
+		{"[JASPER-3300] some other project", "JASPER-3300"},
+		{"[PR-7373] fix conflict", ""},
+	}
+	for _, tc := range tests {
+		if got := ScanTicketKey(tc.in, cfg); got != tc.want {
+			t.Errorf("ScanTicketKey(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestTicketKey_genericFallbackUnaffected(t *testing.T) {
+	// With no Projects and no TicketPattern configured, behavior must stay
+	// exactly as before (generic [a-z]+-\d+ core).
+	cfg := Config{}
+	if got := ParseTicketKey("salsa-12345-foo-bar", cfg); got != "SALSA-12345" {
+		t.Errorf("ParseTicketKey = %q, want SALSA-12345", got)
+	}
+	if got := ScanTicketKey("Fix SALSA-123 crash on load", cfg); got != "SALSA-123" {
+		t.Errorf("ScanTicketKey = %q, want SALSA-123", got)
+	}
+}
+
+func TestTicketKey_explicitPatternOverridesProjects(t *testing.T) {
+	// An explicit TicketPattern fully overrides Projects, matching
+	// pre-existing behavior for a custom pattern.
+	cfg := Config{TicketPattern: `^([A-Z]+-\d+)`, Projects: []string{"SALSA"}}
+	if got := ParseTicketKey("JASPER-9", cfg); got != "JASPER-9" {
+		t.Errorf("ParseTicketKey = %q, want JASPER-9 (explicit pattern should win over Projects)", got)
+	}
+}
+
 func TestScanTicketKey(t *testing.T) {
 	cfg := Config{}
 	tests := []struct {

@@ -11,13 +11,28 @@ import (
 
 // Config controls anchor resolution and grouping.
 type Config struct {
-	// TicketPattern is a regex whose first capture group is the ticket key (upper-cased).
-	// Default: ^([a-z]+-\d+)
+	// TicketPattern is a regex whose first capture group is the ticket key
+	// (upper-cased). When set, it fully overrides Projects and the built-in
+	// default and is used exactly as supplied (existing behavior).
+	// Default when unset: ^([a-z]+-\d+)
 	TicketPattern string
+
+	// Projects restricts ticket-key matching to these JIRA project keys
+	// (e.g. "SALSA", "JASPER"), so generic hyphenated tokens that aren't
+	// really tickets — like "PR-7373" or "release-2026" — don't
+	// false-match. Case-insensitive. Ignored when TicketPattern is set;
+	// when empty (and TicketPattern is also empty), matching falls back to
+	// the fully generic DefaultTicketPattern.
+	Projects []string
 }
 
-// DefaultTicketPattern matches JIRA-style keys like salsa-12345.
+// DefaultTicketPattern matches JIRA-style keys like salsa-12345. Used only
+// when neither TicketPattern nor Projects is configured.
 const DefaultTicketPattern = `^([a-z]+-\d+)`
+
+// defaultTicketCore is the unanchored, ungrouped core of DefaultTicketPattern,
+// reused when building the bracket-tolerant anchored pattern below.
+const defaultTicketCore = `[a-z]+-\d+`
 
 // ParseTicketKey extracts a ticket key from a name/title, or "" when none.
 // It anchors the configured pattern (default `^([a-z]+-\d+)`) to the start
@@ -48,14 +63,42 @@ func ScanTicketKey(name string, cfg Config) string {
 }
 
 // ticketRegexp compiles the configured ticket pattern (case-insensitive).
-// When scan is false the pattern is used as-is (the default is start-
-// anchored); when scan is true a leading "^" is replaced by a word boundary
-// so the key can be matched anywhere in the string.
+// An explicit cfg.TicketPattern fully overrides matching and is used as-is
+// (existing behavior: start-anchored, with "^" swapped for a word boundary
+// when scan is true). Otherwise the pattern is built from cfg.Projects (or
+// the fully generic default when Projects is empty), and the anchored form
+// additionally tolerates a leading "[" so "[TICKET] subject"-style titles
+// still parse when the ticket leads the string.
 func ticketRegexp(cfg Config, scan bool) *regexp.Regexp {
-	pattern := cfg.TicketPattern
-	if pattern == "" {
-		pattern = DefaultTicketPattern
+	if cfg.TicketPattern != "" {
+		return compileTicketPattern(cfg.TicketPattern, scan)
 	}
+	core := projectTicketCore(cfg.Projects)
+	if core == "" {
+		core = defaultTicketCore
+	}
+	pattern := `\b(` + core + `)`
+	if !scan {
+		pattern = `^\[?\s*(` + core + `)`
+	}
+	re, err := regexp.Compile("(?i)" + pattern)
+	if err != nil {
+		// core is built from QuoteMeta'd project keys plus a fixed literal
+		// suffix, so this should not happen in practice; fall back to the
+		// fully generic core just in case.
+		fallback := `\b(` + defaultTicketCore + `)`
+		if !scan {
+			fallback = `^\[?\s*(` + defaultTicketCore + `)`
+		}
+		re = regexp.MustCompile("(?i)" + fallback)
+	}
+	return re
+}
+
+// compileTicketPattern preserves the pre-existing behavior for a fully
+// custom, user-supplied TicketPattern: used exactly as-is when anchored, or
+// with a leading "^" swapped for a word boundary when scanning.
+func compileTicketPattern(pattern string, scan bool) *regexp.Regexp {
 	if scan {
 		pattern = `\b` + strings.TrimPrefix(pattern, "^")
 	}
@@ -68,6 +111,27 @@ func ticketRegexp(cfg Config, scan bool) *regexp.Regexp {
 		re = regexp.MustCompile("(?i)" + fallback)
 	}
 	return re
+}
+
+// projectTicketCore builds an ungrouped, unanchored ticket-key core
+// restricted to the given project keys, e.g. ["SALSA","JASPER"] ->
+// "(?:SALSA|JASPER)-\d+". Returns "" when projects has no usable entries.
+func projectTicketCore(projects []string) string {
+	seen := map[string]bool{}
+	var quoted []string
+	for _, p := range projects {
+		p = strings.ToUpper(strings.TrimSpace(p))
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		quoted = append(quoted, regexp.QuoteMeta(p))
+	}
+	if len(quoted) == 0 {
+		return ""
+	}
+	sort.Strings(quoted)
+	return `(?:` + strings.Join(quoted, "|") + `)-\d+`
 }
 
 // commitLikeKind reports whether a signal kind is free-form git text where a

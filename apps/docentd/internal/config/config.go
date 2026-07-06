@@ -13,19 +13,27 @@ import (
 
 // DaemonConfig is docentd.yaml plus the unified app config from configDir/config.yaml.
 type DaemonConfig struct {
-	Port          int                  `yaml:"port"`
-	Token         string               `yaml:"token"`
-	RefreshSec    int                  `yaml:"refreshSec"`
-	TicketPattern string               `yaml:"ticketPattern"`
-	RegistryPath  string               `yaml:"registryPath"`
-	ConfigDir     string               `yaml:"configDir"`             // ~/.config/docent — config.yaml + .env
-	BindHost      string               `yaml:"bindHost"`              // listen interface; default 0.0.0.0 when token set, else 127.0.0.1
-	UserdataDir   string               `yaml:"userdataDir,omitempty"` // deprecated alias for configDir
-	ExtraConfig   string               `yaml:"extraConfig,omitempty"` // optional extra config file merged in
-	WSMURL        string               `yaml:"wsmUrl"`                // local wsm URL injected into dashboard
-	OnClickScript string               `yaml:"onClickScript"`         // hook run when a work-item is launched from the dashboard
-	SSHHost       string               `yaml:"sshHost"`               // optional ssh alias for remote editor open (DOCENT_HOST)
-	Directives    []userdata.Directive `yaml:"directives,omitempty"`
+	Port          int    `yaml:"port"`
+	Token         string `yaml:"token"`
+	RefreshSec    int    `yaml:"refreshSec"`
+	TicketPattern string `yaml:"ticketPattern"`
+	// TicketProjects restricts ticket-key matching (branch names, PR/commit
+	// titles, etc.) to these JIRA project keys, e.g. ["SALSA", "JASPER"],
+	// so generic hyphenated tokens like "PR-7373" or "release-2026" don't
+	// false-match as tickets. Ignored when TicketPattern is set. The engine
+	// also auto-adds any project key observed on collected jira issues, so
+	// this is optional even for jira-configured setups; it mainly helps
+	// when no jira directive is configured at all.
+	TicketProjects []string             `yaml:"ticketProjects,omitempty"`
+	RegistryPath   string               `yaml:"registryPath"`
+	ConfigDir      string               `yaml:"configDir"`             // ~/.config/docent — config.yaml + .env
+	BindHost       string               `yaml:"bindHost"`              // listen interface; default 0.0.0.0 when token set, else 127.0.0.1
+	UserdataDir    string               `yaml:"userdataDir,omitempty"` // deprecated alias for configDir
+	ExtraConfig    string               `yaml:"extraConfig,omitempty"` // optional extra config file merged in
+	WSMURL         string               `yaml:"wsmUrl"`                // local wsm URL injected into dashboard
+	OnClickScript  string               `yaml:"onClickScript"`         // hook run when a work-item is launched from the dashboard
+	SSHHost        string               `yaml:"sshHost"`               // optional ssh alias for remote editor open (DOCENT_HOST)
+	Directives     []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI is optional.
 	AI             userdata.AIConfig             `yaml:"-"`

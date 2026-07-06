@@ -401,6 +401,15 @@ The dashboard/daemon reads `docentd.yaml` (separate from the reporter's
 [docentd dashboard (binding + auth)](#docentd-dashboard-binding--auth) above). See
 [`config/docent/docentd.yaml.example`](config/docent/docentd.yaml.example).
 
+`ticketProjects` (optional list, e.g. `[SALSA, JASPER]`) restricts ticket-key
+matching — branch names, PR/commit titles, JIRA issue keys — to those project
+keys, so generic hyphenated tokens like `PR-7373` or `release-2026` can't
+false-match as tickets. The engine also auto-widens matching with any project
+key observed on collected jira issues (and each jira directive's
+`config.followed_projects`), so `ticketProjects` mainly matters when no jira
+directive is configured at all. `ticketPattern` fully overrides matching with
+a custom regex (first capture group is the key) instead.
+
 ## Installation
 
 Per-OS installers build the relevant binaries, write config into
