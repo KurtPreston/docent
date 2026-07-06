@@ -15,24 +15,36 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/sessionmanager"
 )
 
 // Dashboard matches the legacy docent /sessions payload for the web UI.
 type Dashboard struct {
-	GeneratedAt  string           `json:"generatedAt"`
-	Backend      string           `json:"backend"`
-	SessionCount int              `json:"sessionCount"`
-	GroupCount   int              `json:"groupCount"`
-	Groups       []DashboardGroup `json:"groups"`
+	GeneratedAt  string `json:"generatedAt"`
+	Backend      string `json:"backend"`
+	SessionCount int    `json:"sessionCount"`
+	GroupCount   int    `json:"groupCount"`
+	// Provider is the configured session_manager provider ("cursor", "wsm",
+	// or "" when none). The web app uses it to decide whether to render the
+	// session column and which action a session/path click triggers.
+	Provider string `json:"provider,omitempty"`
+	// SSHHost is docentd's ssh alias (DOCENT_HOST), used by providers that
+	// build remote deep links.
+	SSHHost string           `json:"sshHost,omitempty"`
+	Groups  []DashboardGroup `json:"groups"`
 }
 
 type DashboardGroup struct {
-	Key            string             `json:"key"`
-	Ticket         string             `json:"ticket,omitempty"`
-	Summary        string             `json:"summary,omitempty"`
-	Repo           string             `json:"repo,omitempty"`
-	Branch         string             `json:"branch,omitempty"`
-	OpenPath       string             `json:"openPath,omitempty"`
+	Key      string `json:"key"`
+	Ticket   string `json:"ticket,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	OpenPath string `json:"openPath,omitempty"`
+	// DeepLink is the provider-supplied clickable link that opens/focuses this
+	// work item's window (e.g. a cursor:// URI). Empty when the provider has no
+	// deep link (e.g. wsm) or the work item has no path.
+	DeepLink       string             `json:"deepLink,omitempty"`
 	LastActivity   string             `json:"lastActivity,omitempty"`
 	JiraStatus     string             `json:"jiraStatus,omitempty"`
 	JiraURL        string             `json:"jiraUrl,omitempty"`
@@ -136,6 +148,11 @@ type Engine struct {
 	reg     *collectors.Registry
 	corrCfg correlation.Config
 
+	// sessionMgr is the configured session provider (nil when none). sessionLinker
+	// is set when that provider can produce clickable deep links (cursor, not wsm).
+	sessionMgr    sessionmanager.SessionManager
+	sessionLinker sessionmanager.DeepLinker
+
 	mu             sync.Mutex
 	units          []*unit
 	collecting     map[unitKey]bool
@@ -159,8 +176,25 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		collecting:     map[unitKey]bool{},
 		entityWorkItem: map[string]string{},
 	}
+	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
+	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
 	e.units = e.buildUnits()
 	return e
+}
+
+// providerKey returns the normalized session_manager provider ("cursor",
+// "wsm", or "" when none).
+func (e *Engine) providerKey() string {
+	return normalizeSessionProvider(e.cfg.SessionManager.Provider)
+}
+
+// deepLinkFor returns the provider deep link for a work-item path, or "" when
+// the provider has no deep link or the path is empty.
+func (e *Engine) deepLinkFor(openPath string) string {
+	if e.sessionLinker == nil || openPath == "" {
+		return ""
+	}
+	return e.sessionLinker.DeepLink(openPath, e.cfg.SSHHost)
 }
 
 // deriveTicketProjects seeds correlation.Config.Projects from the daemon's
@@ -702,6 +736,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			Repo:         wi.Repo,
 			Branch:       wi.Branch,
 			OpenPath:     wi.OpenPath,
+			DeepLink:     e.deepLinkFor(wi.OpenPath),
 			LastActivity: wi.LastActivity,
 			Color:        wi.Color,
 			FG:           wi.FG,
@@ -840,6 +875,8 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 		Backend:      "go",
 		SessionCount: liveCount,
 		GroupCount:   len(groups),
+		Provider:     e.providerKey(),
+		SSHHost:      e.cfg.SSHHost,
 		Groups:       groups,
 	}
 }
@@ -968,6 +1005,7 @@ type WorkItemDetail struct {
 	Repo         string             `json:"repo,omitempty"`
 	Branch       string             `json:"branch,omitempty"`
 	OpenPath     string             `json:"openPath,omitempty"`
+	DeepLink     string             `json:"deepLink,omitempty"`
 	LastActivity string             `json:"lastActivity,omitempty"`
 	JiraURL      string             `json:"jiraUrl,omitempty"`
 	Status       string             `json:"jiraStatus,omitempty"`
@@ -1081,6 +1119,7 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 		Repo:         wi.Repo,
 		Branch:       wi.Branch,
 		OpenPath:     wi.OpenPath,
+		DeepLink:     e.deepLinkFor(wi.OpenPath),
 		LastActivity: wi.LastActivity,
 		Color:        wi.Color,
 		FG:           wi.FG,
@@ -1132,6 +1171,45 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 		}
 	}
 	return detail, true
+}
+
+// OpenResult is the payload for POST /api/workitems/{key}/open.
+type OpenResult struct {
+	OK          bool   `json:"ok"`
+	Provider    string `json:"provider,omitempty"`
+	DeepLink    string `json:"deepLink,omitempty"`
+	ColorSynced bool   `json:"colorSynced"`
+	Message     string `json:"message,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// OpenWorkItem prepares a work item to be opened in the editor. For the cursor
+// provider with color-writing enabled (the default), it syncs the work item's
+// current color into its repo's .vscode/settings.json so the title-bar color is
+// in sync before the client navigates the deep link. The write runs on the
+// docentd box (which holds the repo files); actually opening/focusing the window
+// is the client's job via the returned deep link. ok=false when key is unknown.
+func (e *Engine) OpenWorkItem(key string) (OpenResult, bool) {
+	detail, ok := e.WorkItem(key)
+	if !ok {
+		return OpenResult{}, false
+	}
+	res := OpenResult{OK: true, Provider: e.providerKey(), DeepLink: detail.DeepLink}
+	if e.providerKey() == "cursor" && e.cfg.SessionManager.Cursor.WriteColorEnabled() && detail.OpenPath != "" {
+		color, fg := detail.Color, detail.FG
+		if color == "" {
+			color = model.ColorForName(detail.Key)
+			fg = model.ForegroundForHex(color)
+		}
+		if err := model.SyncVSCodeColor(detail.OpenPath, color, fg); err != nil {
+			res.OK = false
+			res.Error = err.Error()
+			return res, true
+		}
+		res.ColorSynced = true
+		res.Message = "synced color"
+	}
+	return res, true
 }
 
 // CollectUnitNow forces an immediate collection of the (directive, mode) unit,

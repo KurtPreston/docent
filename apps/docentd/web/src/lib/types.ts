@@ -39,6 +39,7 @@ export type DashboardGroup = {
   repo?: string;
   branch?: string;
   openPath?: string;
+  deepLink?: string;
   lastActivity?: string;
   jiraStatus?: string;
   jiraUrl?: string;
@@ -58,6 +59,8 @@ export type Dashboard = {
   backend: string;
   sessionCount: number;
   groupCount: number;
+  provider?: string;
+  sshHost?: string;
   groups: DashboardGroup[];
 };
 
@@ -163,6 +166,7 @@ export type WorkItemDetail = {
   repo?: string;
   branch?: string;
   openPath?: string;
+  deepLink?: string;
   lastActivity?: string;
   jiraUrl?: string;
   jiraStatus?: string;

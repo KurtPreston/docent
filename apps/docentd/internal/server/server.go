@@ -107,6 +107,10 @@ func (s *Server) workItemDetail(w http.ResponseWriter, r *http.Request) {
 		s.workItemLaunch(w, r, strings.TrimSuffix(rest, "/launch"))
 		return
 	}
+	if strings.HasSuffix(rest, "/open") {
+		s.workItemOpen(w, r, strings.TrimSuffix(rest, "/open"))
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -144,6 +148,32 @@ func (s *Server) workItemLaunch(w http.ResponseWriter, r *http.Request, key stri
 	status := http.StatusOK
 	if !result.OK {
 		status = http.StatusBadRequest
+	}
+	writeJSON(w, status, result)
+}
+
+// workItemOpen prepares a work item to be opened in the editor: for the cursor
+// provider (with color-writing enabled) it syncs the work item's color into its
+// .vscode/settings.json, then returns the provider deep link for the client to
+// navigate. Path: /api/workitems/{key}/open.
+func (s *Server) workItemOpen(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key = strings.Trim(key, "/")
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "work item key required"})
+		return
+	}
+	result, ok := s.engine.OpenWorkItem(key)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "work item not found"})
+		return
+	}
+	status := http.StatusOK
+	if !result.OK {
+		status = http.StatusInternalServerError
 	}
 	writeJSON(w, status, result)
 }

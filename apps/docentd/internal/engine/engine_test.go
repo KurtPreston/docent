@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -429,6 +430,106 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func newCursorTestEngine(t *testing.T, sshHost string, writeColor *bool) *Engine {
+	t.Helper()
+	store, err := registry.NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DaemonConfig{
+		SSHHost: sshHost,
+		SessionManager: userdata.SessionManagerConfig{
+			Provider: "cursor",
+			Cursor:   userdata.SessionManagerCursor{WriteColor: writeColor},
+		},
+	}
+	return New(cfg, store)
+}
+
+func TestBuildDashboardCursorDeepLink(t *testing.T) {
+	e := newCursorTestEngine(t, "devbox", nil)
+	wi := model.WorkItem{
+		Key:      "wb:org/repo@feature-x",
+		Title:    "feature-x",
+		Repo:     "org/repo",
+		Branch:   "feature-x",
+		OpenPath: "/code/repo",
+		Entities: []model.Entity{
+			{Kind: "session", Title: "feature-x", State: map[string]string{"live": "true"}, Coordinates: map[string]string{}},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	if dash.Provider != "cursor" || dash.SSHHost != "devbox" {
+		t.Fatalf("dashboard provider/sshHost = %q/%q", dash.Provider, dash.SSHHost)
+	}
+	if dash.GroupCount != 1 {
+		t.Fatalf("group count = %d", dash.GroupCount)
+	}
+	want := "cursor://vscode-remote/ssh-remote+devbox/code/repo"
+	if dash.Groups[0].DeepLink != want {
+		t.Errorf("deepLink = %q, want %q", dash.Groups[0].DeepLink, want)
+	}
+}
+
+func TestOpenWorkItemSyncsColor(t *testing.T) {
+	e := newCursorTestEngine(t, "devbox", nil)
+	dir := t.TempDir()
+	wi := model.WorkItem{
+		Key:      "wb:org/repo@feature-x",
+		Title:    "feature-x",
+		Repo:     "org/repo",
+		Branch:   "feature-x",
+		OpenPath: dir,
+		Color:    "#123456",
+		FG:       "#ffffff",
+		Entities: []model.Entity{
+			{Kind: "session", Title: "feature-x", State: map[string]string{"live": "true"}, Coordinates: map[string]string{}},
+		},
+	}
+	// Seed the engine's snapshot so WorkItem(key) resolves.
+	e.mu.Lock()
+	e.lastWorkItems = []model.WorkItem{wi}
+	e.lastDashboard = e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	e.mu.Unlock()
+
+	res, ok := e.OpenWorkItem("wb:org/repo@feature-x")
+	if !ok || !res.OK {
+		t.Fatalf("OpenWorkItem = %+v ok=%v", res, ok)
+	}
+	if !res.ColorSynced {
+		t.Error("expected color synced for cursor provider")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".vscode", "settings.json")); err != nil {
+		t.Fatalf("settings.json not written: %v", err)
+	}
+	if res.DeepLink == "" {
+		t.Error("expected a deep link in open result")
+	}
+}
+
+func TestOpenWorkItemWriteColorDisabled(t *testing.T) {
+	no := false
+	e := newCursorTestEngine(t, "devbox", &no)
+	dir := t.TempDir()
+	wi := model.WorkItem{Key: "SALSA-1", Title: "t", OpenPath: dir, Color: "#123456", FG: "#ffffff",
+		Entities: []model.Entity{{Kind: "session", Title: "salsa-1", State: map[string]string{"live": "true"}, Coordinates: map[string]string{}}}}
+	e.mu.Lock()
+	e.lastWorkItems = []model.WorkItem{wi}
+	e.lastDashboard = e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	e.mu.Unlock()
+
+	res, ok := e.OpenWorkItem("SALSA-1")
+	if !ok || !res.OK {
+		t.Fatalf("OpenWorkItem = %+v ok=%v", res, ok)
+	}
+	if res.ColorSynced {
+		t.Error("write_color=false should skip the color sync")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".vscode", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("settings.json should not be written when write_color=false (err=%v)", err)
+	}
 }
 
 func TestCollectorsViewReflectsUnits(t *testing.T) {
