@@ -1,60 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
 import { Layout } from "../components/Layout";
 import { RefreshButton } from "../components/Controls";
+import { DataTable } from "../components/DataTable";
+import type { Column } from "../components/DataTable";
 import { fetchCollectors, collectUnit } from "../lib/api";
 import { timeAgoSigned, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type { CollectorsView, UnitView } from "../lib/types";
 
-const COLUMNS = [
-  "Directive",
-  "Collector",
-  "Mode",
-  "Interval",
-  "On request",
-  "On load",
-  "Last run",
-  "Next due",
-  "Items",
-  "Error",
-  "",
-];
-
-function UnitRow({ u, onCollected }: { u: UnitView; onCollected: () => void }) {
+function CollectCell({ u, onCollected }: { u: UnitView; onCollected: () => void }) {
   const [busy, setBusy] = useState(false);
   return (
-    <tr>
-      <td>{u.directiveId}</td>
-      <td className="mono">{u.collector}</td>
-      <td>
-        <span className={"badge " + u.mode}>{u.mode}</span>
-      </td>
-      <td className="muted">{u.interval || "—"}</td>
-      <td className="muted">{u.onRequest ? "yes" : "—"}</td>
-      <td className="muted">{u.onLoad ? "yes" : "—"}</td>
-      <td className="muted">{timeAgoSigned(u.lastRun)}</td>
-      <td className="muted">{u.nextDue ? timeAgoSigned(u.nextDue) : "—"}</td>
-      <td>{u.itemCount}</td>
-      <td className="err">{u.lastErr || ""}</td>
-      <td>
-        <button
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await collectUnit(u.directiveId, u.mode);
-            } catch (e) {
-              toast("collect error: " + errMsg(e), true);
-            } finally {
-              setBusy(false);
-              onCollected();
-            }
-          }}
-        >
-          {busy ? "collecting…" : "collect"}
-        </button>
-      </td>
-    </tr>
+    <button
+      disabled={busy}
+      onClick={async (e) => {
+        e.stopPropagation();
+        setBusy(true);
+        try {
+          await collectUnit(u.directiveId, u.mode);
+        } catch (e) {
+          toast("collect error: " + errMsg(e), true);
+        } finally {
+          setBusy(false);
+          onCollected();
+        }
+      }}
+    >
+      {busy ? "collecting…" : "collect"}
+    </button>
   );
 }
 
@@ -84,6 +57,72 @@ export function Collectors() {
     </span>
   ) : null;
 
+  const columns: Column<UnitView>[] = [
+    { key: "directive", header: "Directive", render: (u) => u.directiveId, sortValue: (u) => u.directiveId },
+    {
+      key: "collector",
+      header: "Collector",
+      className: "mono",
+      render: (u) => u.collector,
+      sortValue: (u) => u.collector,
+    },
+    {
+      key: "mode",
+      header: "Mode",
+      render: (u) => <span className={"badge " + u.mode}>{u.mode}</span>,
+      sortValue: (u) => u.mode,
+    },
+    {
+      key: "interval",
+      header: "Interval",
+      className: "muted",
+      render: (u) => u.interval || "—",
+      sortValue: (u) => u.interval || "",
+    },
+    {
+      key: "onRequest",
+      header: "On request",
+      className: "muted",
+      render: (u) => (u.onRequest ? "yes" : "—"),
+      sortValue: (u) => (u.onRequest ? 1 : 0),
+    },
+    {
+      key: "onLoad",
+      header: "On load",
+      className: "muted",
+      render: (u) => (u.onLoad ? "yes" : "—"),
+      sortValue: (u) => (u.onLoad ? 1 : 0),
+    },
+    {
+      key: "lastRun",
+      header: "Last run",
+      className: "muted",
+      render: (u) => timeAgoSigned(u.lastRun),
+      sortValue: (u) => (u.lastRun ? Date.parse(u.lastRun) : 0),
+    },
+    {
+      key: "nextDue",
+      header: "Next due",
+      className: "muted",
+      render: (u) => (u.nextDue ? timeAgoSigned(u.nextDue) : "—"),
+      sortValue: (u) => (u.nextDue ? Date.parse(u.nextDue) : 0),
+    },
+    { key: "items", header: "Items", render: (u) => u.itemCount, sortValue: (u) => u.itemCount },
+    {
+      key: "error",
+      header: "Error",
+      className: "err",
+      render: (u) => u.lastErr || "",
+      filterText: (u) => u.lastErr || "",
+    },
+    {
+      key: "collect",
+      header: "",
+      render: (u) => <CollectCell u={u} onCollected={() => void load()} />,
+      sortable: false,
+    },
+  ];
+
   return (
     <Layout mainClass="wrap" stats={stats} controls={<RefreshButton onClick={() => void load()} />}>
       <div className="section">
@@ -94,22 +133,14 @@ export function Collectors() {
             <span className="muted">snapshot {timeAgoSigned(data.generatedAt)}</span>
           ) : null}
         </div>
-        {units.length === 0 ? (
-          <div className="wrap muted">No collection units configured.</div>
-        ) : (
-          <table className="tbl">
-            <tbody>
-              <tr>
-                {COLUMNS.map((h, i) => (
-                  <th key={i}>{h}</th>
-                ))}
-              </tr>
-              {units.map((u, i) => (
-                <UnitRow key={i} u={u} onCollected={() => void load()} />
-              ))}
-            </tbody>
-          </table>
-        )}
+        <DataTable
+          columns={columns}
+          rows={units}
+          rowKey={(u, i) => u.directiveId + "/" + u.mode + i}
+          filterable
+          filterPlaceholder="Filter units…"
+          empty="No collection units configured."
+        />
       </div>
     </Layout>
   );
