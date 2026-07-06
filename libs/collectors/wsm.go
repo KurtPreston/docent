@@ -37,7 +37,6 @@ func (c WSMCollector) CollectState(ctx context.Context, directive userdata.Direc
 	if err != nil {
 		return nil, err
 	}
-	now := c.clock()()
 	items := make([]StatusItem, 0, len(windows))
 	for _, win := range windows {
 		leaf, host := wmclient.ParseCursorTitle(win.Title)
@@ -54,13 +53,18 @@ func (c WSMCollector) CollectState(ctx context.Context, directive userdata.Direc
 		} else if win.Host != "" {
 			fields["host"] = win.Host
 		}
+		// A live-window listing is a state ("this Cursor window is open"),
+		// not an activity event, so we deliberately leave ObservedAt unset.
+		// Real session activity time comes from the hook timestamps in the
+		// session registry, which the engine stamps onto the entity during
+		// correlation. Stamping poll time here would make every live window
+		// perpetually report activity "just now".
 		items = append(items, StatusItem{
 			DirectiveID: directive.ID,
 			Source:      "wsm",
 			Kind:        "session",
 			Title:       leaf,
 			Summary:     win.Title,
-			ObservedAt:  now,
 			StableID:    fmt.Sprintf("session:%s:%s", machine, win.ID),
 			Fields:      fields,
 			IsSelf:      true,

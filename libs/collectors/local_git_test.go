@@ -1,6 +1,26 @@
 package collectors
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestParseReflogTime(t *testing.T) {
+	got, ok := parseReflogTime("HEAD@{2026-07-06 10:51:08 -0500}")
+	if !ok {
+		t.Fatalf("expected a parseable reflog time")
+	}
+	want := time.Date(2026, 7, 6, 10, 51, 8, 0, time.FixedZone("", -5*3600))
+	if !got.Equal(want) {
+		t.Errorf("parseReflogTime = %v, want %v", got, want)
+	}
+
+	for _, gd := range []string{"HEAD@{2}", "salsa-123@{0}", "", "HEAD@{not a date}"} {
+		if _, ok := parseReflogTime(gd); ok {
+			t.Errorf("parseReflogTime(%q) unexpectedly ok", gd)
+		}
+	}
+}
 
 func TestLocalGitTicket(t *testing.T) {
 	tests := []struct {

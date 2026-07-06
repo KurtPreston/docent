@@ -106,10 +106,11 @@ func (c GiteaCollector) CollectState(ctx context.Context, directive userdata.Dir
 			return nil, err
 		}
 		for _, row := range rows {
-			obs, perr := parseGiteaTime(row.Updated)
-			if perr != nil {
-				obs = c.Clock()
-			}
+			// parseGiteaTime returns a zero time on failure; keep that rather
+			// than stamping poll time so an unparseable `updated` doesn't
+			// masquerade as fresh activity (correlation ignores zero
+			// observedAt).
+			obs, _ := parseGiteaTime(row.Updated)
 			items = append(items, buildGiteaIssueItem(directive, apiBase, owner, q, row, obs))
 		}
 	}

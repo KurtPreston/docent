@@ -500,7 +500,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 // {"--author", user} or {"--review-requested", user}.
 func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directive userdata.Directive, opts *CollectOpts, relationArgs ...string) ([]ghSearchActivityRow, error) {
 	args := append([]string{"search", "prs"}, relationArgs...)
-	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,repository")
+	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,repository,updatedAt")
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
@@ -541,6 +541,14 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		fields["review_decision"] = decision
 		fields["ready"] = strconv.FormatBool(ready)
 	}
+	// Prefer the PR's real last-updated time so an open PR reports when it was
+	// actually touched (opened / pushed / commented / reviewed) rather than the
+	// poll time. Fall back to poll time only when GitHub omits a parseable
+	// updatedAt.
+	obs := now
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(row.UpdatedAt)); err == nil {
+		obs = t
+	}
 	return StatusItem{
 		DirectiveID: directive.ID,
 		Repository:  repo,
@@ -550,7 +558,7 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s", relation, row.IsDraft, checks, decision),
 		URL:         row.URL,
 		Severity:    "info",
-		ObservedAt:  now.UTC(),
+		ObservedAt:  obs.UTC(),
 		Author:      user,
 		IsSelf:      true,
 		Fields:      fields,

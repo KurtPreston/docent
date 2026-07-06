@@ -112,10 +112,10 @@ func (c JiraCollector) CollectState(ctx context.Context, directive userdata.Dire
 	email := strings.TrimSpace(directive.Config["email"])
 	items := make([]StatusItem, 0, len(parsed.Issues))
 	for _, iss := range parsed.Issues {
-		obs, perr := jiraParseUpdated(iss.Fields.Updated)
-		if perr != nil {
-			obs = c.Clock()
-		}
+		// jiraParseUpdated returns a zero time on failure; keep that rather
+		// than stamping poll time so an unparseable `updated` doesn't
+		// masquerade as fresh activity (correlation ignores zero observedAt).
+		obs, _ := jiraParseUpdated(iss.Fields.Updated)
 		items = append(items, buildJiraItem(directive, base, iss, "issue", obs, jiraIsSelf(iss, scope, email)))
 	}
 	return items, nil

@@ -528,7 +528,16 @@ func (e *Engine) entitiesFrom(signals []model.Signal) []model.Entity {
 				ent.Coordinates["host"] = rec.Host
 			}
 			ent.State["attention"] = registry.SessionStatus(rec)
-			ent.State["lastActivity"] = registry.LatestActivity(rec)
+			la := registry.LatestActivity(rec)
+			ent.State["lastActivity"] = la
+			// Drive the work-item "last activity" from real hook timestamps
+			// (last prompt / agent-stop / shell-done / focus / open), not the
+			// wsm poll time — the wsm collector deliberately leaves observedAt
+			// unset. correlation aggregates observedAt across a work item's
+			// entities into its LastActivity.
+			if la != "" {
+				ent.State["observedAt"] = la
+			}
 		}
 		if ent.State["color"] == "" {
 			c := model.ColorForName(name)
@@ -551,12 +560,16 @@ func (e *Engine) entitiesFrom(signals []model.Signal) []model.Entity {
 		if found {
 			continue
 		}
+		la := registry.LatestActivity(rec)
 		ent := model.Entity{
 			ID:          "session:" + name,
 			Kind:        "session",
 			Title:       name,
-			State:       map[string]string{"attention": "needs-followup", "live": "false", "lastActivity": registry.LatestActivity(rec)},
+			State:       map[string]string{"attention": "needs-followup", "live": "false", "lastActivity": la},
 			Coordinates: map[string]string{},
+		}
+		if la != "" {
+			ent.State["observedAt"] = la
 		}
 		if rec.Host != "" {
 			ent.Coordinates["host"] = rec.Host

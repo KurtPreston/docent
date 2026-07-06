@@ -98,6 +98,13 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			if repoTicket != "" {
 				summary = fmt.Sprintf("local branch %s -> %s", branch, repoTicket)
 			}
+			// A branch is a state signal we re-observe on every poll, so stamp
+			// it with the tip commit's date (the real "last activity on this
+			// branch") instead of the poll time. Otherwise every checked-out
+			// branch would perpetually report activity "just now" and dominate
+			// the dashboard's last-activity ordering. Zero (unresolved) means
+			// the branch contributes no activity time at all.
+			branchObserved := localGitHeadCommitTime(ctx, abs, opts, directive.ID)
 			out = append(out, StatusItem{
 				DirectiveID: directive.ID,
 				Repository:  repoLabel,
@@ -106,7 +113,7 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				Title:       branch,
 				Summary:     summary,
 				Severity:    "info",
-				ObservedAt:  now.UTC(),
+				ObservedAt:  branchObserved.UTC(),
 				StableID:    "branch:" + repoLabel + ":" + branch,
 				IsSelf:      true,
 				Fields:      fields,
@@ -167,10 +174,19 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			if len(parts) < 3 {
 				continue
 			}
-			hash := strings.TrimSpace(parts[0])
-			gd := strings.TrimSpace(parts[1])
-			gs := strings.TrimSpace(parts[2])
-			obs, ok := commitTimes[hash]
+		hash := strings.TrimSpace(parts[0])
+		gd := strings.TrimSpace(parts[1])
+		gs := strings.TrimSpace(parts[2])
+		// A reflog row records an action the user took locally (checkout,
+		// commit, reset, ...). Its activity time is when that action
+		// happened — carried in the `%gd` selector because we ask for
+		// --date=iso — not the referenced commit's author/committer date,
+		// which can be far older (e.g. checking out a months-old branch).
+		// Fall back to the commit date only when the selector lacks a
+		// parseable timestamp.
+		obs, ok := parseReflogTime(gd)
+		if !ok {
+			obs, ok = commitTimes[hash]
 			if !ok {
 				ci, err := gitOutput(ctx, abs, opts, directive.ID, "show", "-s", "--format=%cI", hash)
 				if err != nil {
@@ -184,9 +200,10 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				}
 				commitTimes[hash] = obs
 			}
-			if obs.Before(since) || obs.After(now) {
-				continue
-			}
+		}
+		if obs.Before(since) || obs.After(now) {
+			continue
+		}
 			short := hash
 			if len(hash) > 7 {
 				short = hash[:7]
@@ -390,6 +407,44 @@ func localGitReflogBranch(gd, gs string) string {
 		return ""
 	}
 	return strings.TrimSpace(rest[i+len(" to "):])
+}
+
+// localGitHeadCommitTime returns the committer date of the checked-out tip
+// commit. It backs the "last activity" timestamp for a branch state signal so
+// a branch never reports poll time; callers treat a zero result as "unknown"
+// (no activity contribution). Cheap: one `git log -1` per repo per collection.
+func localGitHeadCommitTime(ctx context.Context, abs string, opts *CollectOpts, directiveID string) time.Time {
+	out, err := gitOutput(ctx, abs, opts, directiveID, "log", "-1", "--format=%cI", "HEAD")
+	if err != nil {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(out))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// parseReflogTime extracts the reflog entry timestamp from a `%gd` selector
+// captured with --date=iso, e.g. "HEAD@{2026-07-06 10:51:08 -0500}". This is
+// when the reflog action happened — the true activity time — as opposed to the
+// referenced commit's date. Returns ok=false when no timestamp is present.
+func parseReflogTime(gd string) (time.Time, bool) {
+	i := strings.Index(gd, "@{")
+	if i < 0 {
+		return time.Time{}, false
+	}
+	rest := gd[i+2:]
+	j := strings.LastIndex(rest, "}")
+	if j < 0 {
+		return time.Time{}, false
+	}
+	inner := strings.TrimSpace(rest[:j])
+	t, err := time.Parse("2006-01-02 15:04:05 -0700", inner)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // localGitCurrentBranch returns the checked-out branch name for a repo (or
