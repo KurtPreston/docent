@@ -44,6 +44,31 @@ func TestBuildWorkItems_ticketGrouping(t *testing.T) {
 	}
 }
 
+func TestBuildWorkItems_reflogOnlyDropped(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "reflog:1", Kind: "reflog", Title: "checkout: moving from main to salsa-9-x", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x"}},
+	}
+	if items := BuildWorkItems(entities, cfg); len(items) != 0 {
+		t.Fatalf("reflog-only entities should create no work item, got %d: %+v", len(items), items)
+	}
+}
+
+func TestBuildWorkItems_reflogWithEvidenceKept(t *testing.T) {
+	cfg := Config{}
+	entities := []model.Entity{
+		{ID: "reflog:1", Kind: "reflog", Title: "checkout: moving from main to salsa-9-x", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x"}},
+		{ID: "commit:1", Kind: "commit", Title: "salsa-9 do the thing", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("reflog + commit should create 1 work item, got %d: %+v", len(items), items)
+	}
+	if items[0].Key != "wb:org/repo@salsa-9-x" {
+		t.Errorf("key = %q, want wb:org/repo@salsa-9-x", items[0].Key)
+	}
+}
+
 func TestBuildWorkItems_noTicketRepoFallback(t *testing.T) {
 	cfg := Config{}
 	entities := []model.Entity{

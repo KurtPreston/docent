@@ -233,6 +233,21 @@ func jiraMetadataByKey(entities []model.Entity) map[string]model.TicketRef {
 	return index
 }
 
+// reflogOnlyWorkItem reports whether a work item's only evidence is git reflog
+// entries. Such a unit was anchored purely by a branch being visited in the
+// reflog, which isn't enough to treat it as real work.
+func reflogOnlyWorkItem(wi *model.WorkItem) bool {
+	if wi == nil || len(wi.Entities) == 0 {
+		return false
+	}
+	for _, ent := range wi.Entities {
+		if ent.Kind != "reflog" {
+			return false
+		}
+	}
+	return true
+}
+
 // commitLikeEntityKind reports whether an entity kind directly carries git
 // history/state text (as opposed to a PR/session/jira entity), for the
 // branch-ticket consensus rule below.
@@ -467,6 +482,15 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 	for _, key := range order {
 		wi := groups[key]
 		if wi == nil {
+			continue
+		}
+		// A reflog line only records that a branch was visited (e.g.
+		// "checkout: moving from main to salsa-42-x"), not that it's being
+		// worked on. On its own that's not enough to justify a work item, so
+		// drop units whose sole evidence is reflog entries. Reflogs still
+		// count when combined with other evidence (a live branch/commit,
+		// session, PR, or ticket) in the same unit.
+		if reflogOnlyWorkItem(wi) {
 			continue
 		}
 		enrichBranchWorkItem(wi, cfg, prTicket, jiraByKey)
