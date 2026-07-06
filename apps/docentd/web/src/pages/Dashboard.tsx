@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { RefreshButton, AutoToggle } from "../components/Controls";
+import { DataTable } from "../components/DataTable";
+import type { Column } from "../components/DataTable";
 import { fetchDashboard, launchWorkItem } from "../lib/api";
 import { focusSession } from "../lib/wsm";
 import { timeAgo, errMsg } from "../lib/format";
@@ -114,15 +116,20 @@ function TicketLinks({
   );
 }
 
-function SessionRow({ s, onReload }: { s: DashboardSession; onReload: () => void }) {
+// Compact single-line rendering of a session, used inside the dashboard's
+// Sessions cell (one shown by default, rest revealed via "+N more").
+function SessionMini({ s, onReload }: { s: DashboardSession; onReload: () => void }) {
   const clickable = s.live;
   return (
-    <div
-      className={"row session" + (clickable ? " clickable" : "")}
+    <span
+      className={"mini session" + (clickable ? " clickable" : "")}
       title={clickable ? "Focus this window" : undefined}
       onClick={
         clickable
-          ? () => void focusSession(s.name, s.host).then(() => window.setTimeout(onReload, 400))
+          ? (e) => {
+              e.stopPropagation();
+              void focusSession(s.name, s.host).then(() => window.setTimeout(onReload, 400));
+            }
           : undefined
       }
     >
@@ -132,7 +139,6 @@ function SessionRow({ s, onReload }: { s: DashboardSession; onReload: () => void
         {s.name}
       </span>
       {s.host ? <span className="chip">{s.host}</span> : null}
-      <span className="spacer" />
       {s.needsFollowup ? (
         <span className="pill followup">needs follow-up</span>
       ) : s.status === "working" ? (
@@ -140,88 +146,123 @@ function SessionRow({ s, onReload }: { s: DashboardSession; onReload: () => void
       ) : (
         <span className="pill status">{s.live ? "idle" : "closed"}</span>
       )}
-      {s.lastActivity ? <span className="meta">{timeAgo(s.lastActivity)}</span> : null}
-    </div>
+    </span>
   );
 }
 
-function PrRow({ pr }: { pr: DashboardPR }) {
+function PrMini({ pr }: { pr: DashboardPR }) {
   return (
-    <a className="row pr clickable" href={pr.url || "#"} target="_blank" rel="noopener">
+    <a
+      className="mini pr clickable"
+      href={pr.url || "#"}
+      target="_blank"
+      rel="noopener"
+      onClick={(e) => e.stopPropagation()}
+    >
       <span className="num">#{pr.prNumber}</span>
       <span className="name">{pr.title || "(untitled PR)"}</span>
-      {pr.repo ? <span className="chip">{pr.repo}</span> : null}
-      <span className="spacer" />
       {pr.draft ? <span className="pill draft">draft</span> : null}
       <span className={"pill state " + (pr.state || "").toLowerCase()}>{pr.state || "open"}</span>
     </a>
   );
 }
 
-function Group({
-  g,
-  onOpen,
-  onReload,
+// Shows the first session/PR inline; a "+N more" toggle expands the cell to
+// stack the rest in place (no navigation, no sub-rows).
+function ExpandableCell<T>({
+  items,
+  renderItem,
+  itemKey,
 }: {
-  g: DashboardGroup;
-  onOpen: (key: string) => void;
-  onReload: () => void;
+  items: T[];
+  renderItem: (item: T) => ReactNode;
+  itemKey: (item: T, i: number) => string | number;
 }) {
-  // React's CSSProperties type doesn't include CSS custom properties, so cast.
-  const style = g.color ? ({ "--g-color": g.color } as CSSProperties) : undefined;
+  const [expanded, setExpanded] = useState(false);
+  if (items.length === 0) return <span className="muted">—</span>;
+  const shown = expanded ? items : items.slice(0, 1);
   return (
-    <div className={"group" + (g.needsFollowup ? " followup" : "")} style={style}>
-      <div
-        className="group-head clickable"
-        title="Open work-item details"
-        onClick={() => onOpen(g.key || g.ticket || "")}
-      >
-        <span className="swatch" />
-        {g.branch ? (
-          <>
-            <span className="branch">{g.branch}</span>
-            {g.repo ? <span className="chip">{g.repo}</span> : null}
-            <TicketLinks tickets={g.tickets} jiraUrl={g.jiraUrl} primaryTicket={g.ticket} />
-          </>
-        ) : g.ticket ? (
-          g.jiraUrl ? (
-            <a
-              className="ticket link"
-              href={g.jiraUrl}
-              target="_blank"
-              rel="noopener"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {g.ticket}
-            </a>
-          ) : (
-            <span className="ticket">{g.ticket}</span>
-          )
-        ) : (
-          <span className="ticket untracked">untracked</span>
-        )}
-        {!g.branch && g.summary ? <span className="summary">{g.summary}</span> : null}
-        {g.openPath ? <span className="chip path">{g.openPath}</span> : null}
-        {g.jiraStatus ? <span className="pill status">{g.jiraStatus}</span> : null}
-        {g.lastActivity ? <span className="meta">{timeAgo(g.lastActivity)}</span> : null}
-        {g.status ? <span className={"pill st-" + g.status}>{STATUS_LABELS[g.status] || g.status}</span> : null}
-        {g.actionRequired ? (
-          <span className="action-dot" title="Action required by you" />
-        ) : g.needsFollowup ? (
-          <span className="followup-dot" />
-        ) : null}
-        <LaunchButton workKey={g.key || g.ticket || ""} />
-      </div>
-      <div className="rows">
-        {(g.sessions ?? []).map((s, i) => (
-          <SessionRow key={"s" + i} s={s} onReload={onReload} />
-        ))}
-        {(g.prs ?? []).map((pr, i) => (
-          <PrRow key={"p" + i} pr={pr} />
-        ))}
-      </div>
+    <div className="cell-stack">
+      {shown.map((item, i) => (
+        <div key={itemKey(item, i)}>{renderItem(item)}</div>
+      ))}
+      {items.length > 1 ? (
+        <button
+          type="button"
+          className="more-toggle"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+        >
+          {expanded ? "show less" : `+${items.length - 1} more`}
+        </button>
+      ) : null}
     </div>
   );
+}
+
+function WorkItemCell({ g }: { g: DashboardGroup }) {
+  const style = g.color ? ({ "--g-color": g.color } as CSSProperties) : undefined;
+  return (
+    <span className="wi-cell" style={style}>
+      <span className="swatch" />
+      {g.branch ? (
+        <>
+          <span className="branch">{g.branch}</span>
+          <TicketLinks tickets={g.tickets} jiraUrl={g.jiraUrl} primaryTicket={g.ticket} />
+        </>
+      ) : g.ticket ? (
+        g.jiraUrl ? (
+          <a
+            className="ticket link"
+            href={g.jiraUrl}
+            target="_blank"
+            rel="noopener"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {g.ticket}
+          </a>
+        ) : (
+          <span className="ticket">{g.ticket}</span>
+        )
+      ) : (
+        <span className="ticket untracked">untracked</span>
+      )}
+      {g.openPath ? <span className="chip path">{g.openPath}</span> : null}
+    </span>
+  );
+}
+
+function StatusCell({ g }: { g: DashboardGroup }) {
+  if (!g.jiraStatus && !g.status) return <span className="muted">—</span>;
+  return (
+    <span className="status-cell">
+      {g.jiraStatus ? <span className="pill status">{g.jiraStatus}</span> : null}
+      {g.status ? (
+        <span className={"pill st-" + g.status}>{STATUS_LABELS[g.status] || g.status}</span>
+      ) : null}
+    </span>
+  );
+}
+
+function ActionCell({ g }: { g: DashboardGroup }) {
+  if (g.actionRequired) return <span className="action-dot" title="Action required by you" />;
+  if (g.needsFollowup) return <span className="followup-dot" title="Needs follow-up" />;
+  return <span className="muted">—</span>;
+}
+
+function workItemFilterText(g: DashboardGroup): string {
+  return [
+    g.branch,
+    g.ticket,
+    g.repo,
+    g.summary,
+    g.openPath,
+    ...(g.tickets ?? []).map((t) => t.key + " " + (t.title ?? "")),
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function Dashboard() {
@@ -289,19 +330,109 @@ export function Dashboard() {
     </>
   );
 
+  const columns: Column<DashboardGroup>[] = [
+    {
+      key: "workItem",
+      header: "Work item",
+      render: (g) => <WorkItemCell g={g} />,
+      sortValue: (g) => g.branch || g.ticket || "",
+      filterText: workItemFilterText,
+    },
+    {
+      key: "repo",
+      header: "Repo",
+      className: "muted",
+      render: (g) => g.repo || "—",
+      sortValue: (g) => g.repo || "",
+    },
+    {
+      key: "summary",
+      header: "Summary",
+      className: "summary-col",
+      render: (g) => g.summary || "—",
+      sortValue: (g) => g.summary || "",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (g) => <StatusCell g={g} />,
+      sortValue: (g) => g.jiraStatus || g.status || "",
+    },
+    {
+      key: "sessions",
+      header: "Sessions",
+      render: (g) => (
+        <ExpandableCell
+          items={g.sessions ?? []}
+          itemKey={(s, i) => s.name + i}
+          renderItem={(s) => <SessionMini s={s} onReload={() => void load()} />}
+        />
+      ),
+      sortValue: (g) => {
+        const sessions = g.sessions ?? [];
+        const live = sessions.filter((s) => s.live).length;
+        return live * 1000 + sessions.length;
+      },
+      filterText: (g) => (g.sessions ?? []).map((s) => s.name).join(" "),
+    },
+    {
+      key: "prs",
+      header: "PRs",
+      render: (g) => (
+        <ExpandableCell
+          items={g.prs ?? []}
+          itemKey={(pr, i) => pr.prNumber || i}
+          renderItem={(pr) => <PrMini pr={pr} />}
+        />
+      ),
+      sortValue: (g) => (g.prs ?? []).length,
+      filterText: (g) => (g.prs ?? []).map((pr) => pr.title || "").join(" "),
+    },
+    {
+      key: "lastActivity",
+      header: "Last activity",
+      className: "muted",
+      render: (g) => timeAgo(g.lastActivity) || "—",
+      sortValue: (g) => (g.lastActivity ? Date.parse(g.lastActivity) : 0),
+    },
+    {
+      key: "action",
+      header: "",
+      render: (g) => <ActionCell g={g} />,
+      sortValue: (g) => (g.actionRequired ? 2 : g.needsFollowup ? 1 : 0),
+    },
+    {
+      key: "open",
+      header: "",
+      render: (g) => <LaunchButton workKey={g.key || g.ticket || ""} />,
+      sortable: false,
+    },
+  ];
+
   return (
-    <Layout mainClass="board" stats={stats} controls={controls}>
+    <Layout mainClass="wrap" stats={stats} controls={controls}>
       {groups.length === 0 ? (
         <div className="empty">{errText ?? "No sessions, tickets, or PRs yet."}</div>
       ) : (
-        groups.map((g) => (
-          <Group
-            key={g.key}
-            g={g}
-            onOpen={(key) => navigate("/workitem?key=" + encodeURIComponent(key))}
-            onReload={() => void load()}
+        <div className="section">
+          <div className="section-head">
+            <span className="title">Work items</span>
+            <span className="grow" />
+            {data?.generatedAt ? (
+              <span className="muted">snapshot {timeAgo(data.generatedAt)}</span>
+            ) : null}
+          </div>
+          <DataTable
+            columns={columns}
+            rows={groups}
+            rowKey={(g) => g.key}
+            rowClassName={(g) => (g.needsFollowup ? "followup" : "")}
+            onRowClick={(g) => navigate("/workitem?key=" + encodeURIComponent(g.key || g.ticket || ""))}
+            initialSort={{ key: "lastActivity", dir: "desc" }}
+            filterable
+            filterPlaceholder="Filter work items…"
           />
-        ))
+        </div>
       )}
     </Layout>
   );
