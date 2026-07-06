@@ -92,6 +92,7 @@ body {
 .section-head .grow { flex: 1; }
 .section-head button { background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .section-head button:hover { border-color: var(--accent); }
+.table-scroll { overflow-x: auto; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.tbl th { text-align: left; color: var(--text-dim); font-weight: 560; padding: 8px 14px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 table.tbl td { padding: 8px 14px; border-top: 1px solid var(--border); vertical-align: top; }
@@ -125,6 +126,39 @@ table.tbl tr.followup td:first-child { border-left: 3px solid var(--amber); }
 .status-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+
+/* External-link buttons (JIRA tickets / GitHub PRs) shown in table cells. */
+.jira-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.link-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%; min-width: 0;
+  background: var(--bg-elev-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 9px;
+  color: var(--text); text-decoration: none;
+  font-size: 11.5px; line-height: 1.7; vertical-align: middle;
+}
+.link-btn:hover { border-color: var(--accent); }
+.link-btn.static { cursor: default; }
+.link-btn.static:hover { border-color: var(--border); }
+.link-btn .lb-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 20rem; }
+.link-btn .lb-num { color: var(--accent); font-weight: 600; margin-right: 4px; }
+.link-btn .lb-state {
+  flex: 0 0 auto; font-size: 9px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-faint); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px;
+}
+.link-btn .lb-state.open { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.link-btn .lb-state.draft { color: var(--text-dim); }
+.link-btn .lb-state.merged { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.link-btn .lb-state.closed { color: var(--red); }
+.svc-icon { width: 12px; height: 12px; flex: 0 0 auto; }
+.svc-icon path { fill: currentColor; }
+.svc-icon.github { color: var(--text-dim); }
+.link-btn:hover .svc-icon.github { color: var(--text); }
+.svc-icon.jira path { fill: #4d90fe; }
+
+/* Left-truncated local filesystem path (keeps the meaningful tail visible). */
+.path-cell { display: block; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.path-cell .path-inner { unicode-bidi: plaintext; }
 .mini { display: flex; align-items: center; gap: 6px; max-width: 100%; color: inherit; text-decoration: none; }
 .mini.clickable { cursor: pointer; }
 .mini.clickable:hover { color: var(--accent); }

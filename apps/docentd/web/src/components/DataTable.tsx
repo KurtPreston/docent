@@ -97,6 +97,7 @@ export function DataTable<T>({
       {sorted.length === 0 ? (
         <div className="wrap muted">{empty ?? "No rows."}</div>
       ) : (
+        <div className="table-scroll">
         <table className="tbl">
           <tbody>
             <tr>
@@ -134,6 +135,7 @@ export function DataTable<T>({
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </>
   );

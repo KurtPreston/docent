@@ -5,6 +5,7 @@ import { Layout } from "../components/Layout";
 import { RefreshButton, AutoToggle } from "../components/Controls";
 import { DataTable } from "../components/DataTable";
 import type { Column } from "../components/DataTable";
+import { LinkButton } from "../components/LinkButton";
 import { fetchDashboard, launchWorkItem } from "../lib/api";
 import { focusSession } from "../lib/wsm";
 import { timeAgo, errMsg } from "../lib/format";
@@ -53,65 +54,54 @@ function LaunchButton({ workKey }: { workKey: string }) {
   );
 }
 
-function TicketLinks({
-  tickets,
-  jiraUrl,
-  primaryTicket,
-}: {
-  tickets?: DashboardTicket[];
-  jiraUrl?: string;
-  primaryTicket?: string;
-}) {
-  const list = tickets ?? [];
-  if (list.length === 0) {
-    return (
-      <span className="ticket-links">
-        {primaryTicket ? (
-          jiraUrl ? (
-            <a
-              className="ticket link"
-              href={jiraUrl}
-              target="_blank"
-              rel="noopener"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {primaryTicket}
-            </a>
-          ) : (
-            <span className="ticket">{primaryTicket}</span>
-          )
-        ) : (
-          <span className="ticket untracked">no ticket</span>
-        )}
-      </span>
-    );
-  }
+// ticketList normalizes a group's JIRA tickets: wb: branch items carry an
+// explicit tickets[] list, while ticket-primary items only carry the single
+// ticket/jiraUrl/jiraStatus fields.
+function ticketList(g: DashboardGroup): DashboardTicket[] {
+  if (g.tickets && g.tickets.length) return g.tickets;
+  if (g.ticket) return [{ key: g.ticket, url: g.jiraUrl, status: g.jiraStatus }];
+  return [];
+}
+
+// summaryText prefers the JIRA ticket summary (stripping the leading ticket
+// key, which now lives in its own column) and drops the branch-name fallback so
+// the Summary column doesn't just echo the Work item column.
+const LEADING_TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+[\s:·—–-]+/;
+
+function summaryText(g: DashboardGroup): string {
+  const s = (g.summary ?? "").trim();
+  if (!s || s === g.branch) return "";
+  return s.replace(LEADING_TICKET_KEY, "").trim();
+}
+
+function JiraCell({ g }: { g: DashboardGroup }) {
+  const list = ticketList(g);
+  if (list.length === 0) return <span className="muted">—</span>;
   return (
-    <span className="ticket-links">
+    <div className="jira-cell">
       {list.map((tk, i) => {
-        const label = tk.key || tk.title || "ticket";
+        const title = [tk.title || tk.key, tk.status ? "· " + tk.status : ""]
+          .filter(Boolean)
+          .join(" ");
         return (
-          <span key={i}>
-            {i > 0 ? " " : null}
-            {tk.url ? (
-              <a
-                className="ticket link"
-                href={tk.url}
-                target="_blank"
-                rel="noopener"
-                title={tk.status}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {label}
-              </a>
-            ) : (
-              <span className="ticket" title={tk.status}>
-                {label}
-              </span>
-            )}
-          </span>
+          <LinkButton
+            key={i}
+            service="jira"
+            href={tk.url}
+            label={tk.key || "ticket"}
+            title={title || undefined}
+          />
         );
       })}
+    </div>
+  );
+}
+
+function PathCell({ path }: { path?: string }) {
+  if (!path) return <span className="muted">—</span>;
+  return (
+    <span className="path-cell mono" title={path}>
+      <span className="path-inner">{path}</span>
     </span>
   );
 }
@@ -151,19 +141,24 @@ function SessionMini({ s, onReload }: { s: DashboardSession; onReload: () => voi
 }
 
 function PrMini({ pr }: { pr: DashboardPR }) {
+  const state = (pr.state || "open").toLowerCase();
+  const badge = pr.draft ? "draft" : state;
+  const title = [pr.title || "pull request", state, pr.draft ? "draft" : ""]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <a
-      className="mini pr clickable"
-      href={pr.url || "#"}
-      target="_blank"
-      rel="noopener"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <span className="num">#{pr.prNumber}</span>
-      <span className="name">{pr.title || "(untitled PR)"}</span>
-      {pr.draft ? <span className="pill draft">draft</span> : null}
-      <span className={"pill state " + (pr.state || "").toLowerCase()}>{pr.state || "open"}</span>
-    </a>
+    <LinkButton
+      service="github"
+      href={pr.url || undefined}
+      title={title}
+      label={
+        <>
+          {pr.prNumber ? <span className="lb-num">#{pr.prNumber}</span> : null}
+          {pr.title || "(untitled PR)"}
+        </>
+      }
+      trailing={<span className={"lb-state " + badge}>{badge}</span>}
+    />
   );
 }
 
@@ -204,32 +199,17 @@ function ExpandableCell<T>({
 
 function WorkItemCell({ g }: { g: DashboardGroup }) {
   const style = g.color ? ({ "--g-color": g.color } as CSSProperties) : undefined;
+  // Identity only: branch when present, else a live session name, else the
+  // ticket key. JIRA links and local paths live in their own columns now.
+  const name = g.branch || g.sessions?.[0]?.name || g.ticket;
   return (
     <span className="wi-cell" style={style}>
       <span className="swatch" />
-      {g.branch ? (
-        <>
-          <span className="branch">{g.branch}</span>
-          <TicketLinks tickets={g.tickets} jiraUrl={g.jiraUrl} primaryTicket={g.ticket} />
-        </>
-      ) : g.ticket ? (
-        g.jiraUrl ? (
-          <a
-            className="ticket link"
-            href={g.jiraUrl}
-            target="_blank"
-            rel="noopener"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {g.ticket}
-          </a>
-        ) : (
-          <span className="ticket">{g.ticket}</span>
-        )
+      {name ? (
+        <span className={g.branch ? "branch" : "ticket"}>{name}</span>
       ) : (
         <span className="ticket untracked">untracked</span>
       )}
-      {g.openPath ? <span className="chip path">{g.openPath}</span> : null}
     </span>
   );
 }
@@ -253,15 +233,14 @@ function ActionCell({ g }: { g: DashboardGroup }) {
 }
 
 function workItemFilterText(g: DashboardGroup): string {
-  return [
-    g.branch,
-    g.ticket,
-    g.repo,
-    g.summary,
-    g.openPath,
-    ...(g.tickets ?? []).map((t) => t.key + " " + (t.title ?? "")),
-  ]
+  return [g.branch, g.ticket, ...(g.sessions ?? []).map((s) => s.name)]
     .filter(Boolean)
+    .join(" ");
+}
+
+function jiraFilterText(g: DashboardGroup): string {
+  return ticketList(g)
+    .map((t) => t.key + " " + (t.title ?? ""))
     .join(" ");
 }
 
@@ -339,6 +318,27 @@ export function Dashboard() {
       filterText: workItemFilterText,
     },
     {
+      key: "jira",
+      header: "JIRA",
+      render: (g) => <JiraCell g={g} />,
+      sortValue: (g) => ticketList(g)[0]?.key || "",
+      filterText: jiraFilterText,
+    },
+    {
+      key: "summary",
+      header: "Summary",
+      className: "summary-col",
+      render: (g) => summaryText(g) || <span className="muted">—</span>,
+      sortValue: (g) => summaryText(g),
+      filterText: (g) => g.summary || "",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (g) => <StatusCell g={g} />,
+      sortValue: (g) => g.jiraStatus || g.status || "",
+    },
+    {
       key: "repo",
       header: "Repo",
       className: "muted",
@@ -346,17 +346,11 @@ export function Dashboard() {
       sortValue: (g) => g.repo || "",
     },
     {
-      key: "summary",
-      header: "Summary",
-      className: "summary-col",
-      render: (g) => g.summary || "—",
-      sortValue: (g) => g.summary || "",
-    },
-    {
-      key: "status",
-      header: "Status",
-      render: (g) => <StatusCell g={g} />,
-      sortValue: (g) => g.jiraStatus || g.status || "",
+      key: "path",
+      header: "Path",
+      render: (g) => <PathCell path={g.openPath} />,
+      sortValue: (g) => g.openPath || "",
+      filterText: (g) => g.openPath || "",
     },
     {
       key: "sessions",
