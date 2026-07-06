@@ -7,7 +7,7 @@ import { DataTable } from "../components/DataTable";
 import type { Column } from "../components/DataTable";
 import { LinkButton } from "../components/LinkButton";
 import { fetchCollectors, fetchDashboard, launchWorkItem } from "../lib/api";
-import { focusSession } from "../lib/wsm";
+import { activate } from "../lib/sessions";
 import { timeAgo, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type {
@@ -98,8 +98,25 @@ function JiraCell({ g }: { g: DashboardGroup }) {
   );
 }
 
-function PathCell({ path }: { path?: string }) {
+// PathCell shows the work item's repo path. When onOpen is provided (i.e. the
+// provider supplied a deep link), the path becomes the clickable open/focus
+// action anchor.
+function PathCell({ path, onOpen }: { path?: string; onOpen?: () => void }) {
   if (!path) return <span className="muted">—</span>;
+  if (onOpen) {
+    return (
+      <span
+        className="path-cell mono clickable"
+        title={"Open " + path}
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen();
+        }}
+      >
+        <span className="path-inner">{path}</span>
+      </span>
+    );
+  }
   return (
     <span className="path-cell mono" title={path}>
       <span className="path-inner">{path}</span>
@@ -108,18 +125,27 @@ function PathCell({ path }: { path?: string }) {
 }
 
 // Compact single-line rendering of a session, used inside the dashboard's
-// Sessions cell (one shown by default, rest revealed via "+N more").
-function SessionMini({ s, onReload }: { s: DashboardSession; onReload: () => void }) {
-  const clickable = s.live;
+// Sessions cell (one shown by default, rest revealed via "+N more"). onActivate,
+// when set, makes a live session clickable (focus for wsm, open for cursor).
+function SessionMini({
+  s,
+  onActivate,
+  activateTitle,
+}: {
+  s: DashboardSession;
+  onActivate?: () => void;
+  activateTitle?: string;
+}) {
+  const clickable = s.live && !!onActivate;
   return (
     <span
       className={"mini session" + (clickable ? " clickable" : "")}
-      title={clickable ? "Focus this window" : undefined}
+      title={clickable ? activateTitle : undefined}
       onClick={
         clickable
           ? (e) => {
               e.stopPropagation();
-              void focusSession(s.name, s.host).then(() => window.setTimeout(onReload, 400));
+              onActivate?.();
             }
           : undefined
       }
@@ -245,20 +271,28 @@ function jiraFilterText(g: DashboardGroup): string {
     .join(" ");
 }
 
-// Which columns to show is driven by the docent config: a column only appears
-// when its backing collector is configured. `collectors` is null until the
-// /api/collectors fetch resolves, in which case we optimistically show every
-// column (matching the pre-gating behavior) rather than flashing them away.
-type ColumnGating = { jira: boolean; github: boolean; wsm: boolean };
+// Which columns to show is driven by the docent config: a collector-backed
+// column only appears when its backing collector is configured. `collectors` is
+// null until the /api/collectors fetch resolves, in which case we optimistically
+// show every column (matching the pre-gating behavior) rather than flashing them
+// away. The session column is instead gated on the active session_manager
+// provider (see sessionHeaderFor / the columns filter).
+type ColumnGating = { jira: boolean; github: boolean };
 
 function columnGating(collectors: CollectorsView | null): ColumnGating {
-  if (!collectors) return { jira: true, github: true, wsm: true };
+  if (!collectors) return { jira: true, github: true };
   const configured = new Set(collectors.units.map((u) => u.collector));
   return {
     jira: configured.has("jira"),
     github: configured.has("github") || configured.has("github-enterprise"),
-    wsm: configured.has("wsm"),
   };
+}
+
+// sessionHeaderFor names the single session column after the active provider.
+function sessionHeaderFor(provider: string): string {
+  if (provider === "cursor") return "Cursor Sessions";
+  if (provider === "wsm") return "WSM Sessions";
+  return "Sessions";
 }
 
 export function Dashboard() {
@@ -336,6 +370,7 @@ export function Dashboard() {
   );
 
   const gating = columnGating(collectors);
+  const provider = data?.provider ?? "";
   const allColumns: Column<DashboardGroup>[] = [
     {
       key: "workItem",
@@ -375,18 +410,38 @@ export function Dashboard() {
     {
       key: "path",
       header: "Path",
-      render: (g) => <PathCell path={g.openPath} />,
+      render: (g) => (
+        <PathCell
+          path={g.openPath}
+          onOpen={g.deepLink ? () => void activate(provider, g) : undefined}
+        />
+      ),
       sortValue: (g) => g.openPath || "",
       filterText: (g) => g.openPath || "",
     },
     {
       key: "sessions",
-      header: "WSM Sessions",
+      header: sessionHeaderFor(provider),
       render: (g) => (
         <ExpandableCell
           items={g.sessions ?? []}
           itemKey={(s, i) => s.name + i}
-          renderItem={(s) => <SessionMini s={s} onReload={() => void load()} />}
+          renderItem={(s) => (
+            <SessionMini
+              s={s}
+              activateTitle={provider === "cursor" ? "Open in Cursor" : "Focus this window"}
+              onActivate={
+                provider === "cursor"
+                  ? g.deepLink
+                    ? () => void activate(provider, g)
+                    : undefined
+                  : () =>
+                      void activate(provider, g, { name: s.name, host: s.host }).then(() =>
+                        window.setTimeout(() => void load(), 400),
+                      )
+              }
+            />
+          )}
         />
       ),
       sortValue: (g) => {
@@ -431,11 +486,13 @@ export function Dashboard() {
   ];
 
   // Gate collector-backed columns on the docent config: JIRA needs a jira
-  // collector, PRs need a github collector, and sessions need a wsm collector.
+  // collector and PRs need a github collector. The session column shows only
+  // when a session_manager provider is configured (empty provider ⇒ no column,
+  // no clickable links).
   const columns = allColumns.filter((c) => {
     if (c.key === "jira") return gating.jira;
     if (c.key === "prs") return gating.github;
-    if (c.key === "sessions") return gating.wsm;
+    if (c.key === "sessions") return provider !== "";
     return true;
   });
 

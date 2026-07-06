@@ -167,6 +167,7 @@ export type WorkItemDetail = {
   branch?: string;
   openPath?: string;
   deepLink?: string;
+  provider?: string;
   lastActivity?: string;
   jiraUrl?: string;
   jiraStatus?: string;

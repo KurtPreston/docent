@@ -6,7 +6,7 @@ import { RefreshButton } from "../components/Controls";
 import { DataTable } from "../components/DataTable";
 import type { Column } from "../components/DataTable";
 import { fetchWorkItem, launchWorkItem } from "../lib/api";
-import { focusSession } from "../lib/wsm";
+import { activate } from "../lib/sessions";
 import { timeAgo, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type { WorkItemDetail, DashboardSession, DashboardPR, EntityView, SignalView } from "../lib/types";
@@ -88,12 +88,13 @@ function KV({ k, v, link }: { k: string; v: string; link?: string }) {
   );
 }
 
-function SessionRow({ s }: { s: DashboardSession }) {
+function SessionRow({ s, onActivate, activateTitle }: { s: DashboardSession; onActivate?: () => void; activateTitle?: string }) {
+  const clickable = s.live && !!onActivate;
   return (
     <div
-      className={"row session" + (s.live ? " clickable" : "")}
-      title={s.live ? "Focus this window" : undefined}
-      onClick={s.live ? () => void focusSession(s.name, s.host) : undefined}
+      className={"row session" + (clickable ? " clickable" : "")}
+      title={clickable ? activateTitle : undefined}
+      onClick={clickable ? () => onActivate?.() : undefined}
     >
       <span className={"live" + (s.live ? " on" : "")} />
       <span className="name">{s.name}</span>
@@ -216,7 +217,20 @@ export function WorkItem() {
       <Section title={`Sessions (${sessions.length})`}>
         <div className="rows">
           {sessions.map((s, i) => (
-            <SessionRow key={i} s={s} />
+            <SessionRow
+              key={i}
+              s={s}
+              activateTitle={d.provider === "cursor" ? "Open in Cursor" : "Focus this window"}
+              onActivate={
+                d.provider === "cursor"
+                  ? d.deepLink
+                    ? () => void activate(d.provider, { key: d.key, deepLink: d.deepLink })
+                    : undefined
+                  : d.provider === "wsm"
+                    ? () => void activate(d.provider, { key: d.key }, { name: s.name, host: s.host })
+                    : undefined
+              }
+            />
           ))}
           {sessions.length === 0 ? <div className="wrap muted">No sessions.</div> : null}
         </div>

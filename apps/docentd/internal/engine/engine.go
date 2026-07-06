@@ -1006,6 +1006,7 @@ type WorkItemDetail struct {
 	Branch       string             `json:"branch,omitempty"`
 	OpenPath     string             `json:"openPath,omitempty"`
 	DeepLink     string             `json:"deepLink,omitempty"`
+	Provider     string             `json:"provider,omitempty"`
 	LastActivity string             `json:"lastActivity,omitempty"`
 	JiraURL      string             `json:"jiraUrl,omitempty"`
 	Status       string             `json:"jiraStatus,omitempty"`
@@ -1120,6 +1121,7 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 		Branch:       wi.Branch,
 		OpenPath:     wi.OpenPath,
 		DeepLink:     e.deepLinkFor(wi.OpenPath),
+		Provider:     e.providerKey(),
 		LastActivity: wi.LastActivity,
 		Color:        wi.Color,
 		FG:           wi.FG,
