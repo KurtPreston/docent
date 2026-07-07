@@ -294,7 +294,10 @@ function CursorOpenButton({ provider, g }: { provider: string; g: DashboardGroup
         void activate(provider, g);
       }}
     >
-      open in Cursor
+      Open
+      <svg className="svc-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z" />
+      </svg>
     </button>
   );
 }
@@ -421,31 +424,36 @@ export function Dashboard() {
     {
       key: "sessions",
       header: sessionHeaderFor(provider),
-      render: (g) => (
-        <div className="cell-stack">
-          {provider === "cursor" && g.deepLink ? (
-            <CursorOpenButton provider={provider} g={g} />
-          ) : null}
-          <ExpandableCell
-            items={g.sessions ?? []}
-            itemKey={(s, i) => s.name + i}
-            renderItem={(s) => (
-              <SessionMini
-                s={s}
-                activateTitle="Focus this window"
-                onActivate={
-                  provider === "cursor"
-                    ? undefined
-                    : () =>
-                        void activate(provider, g, { name: s.name, host: s.host }).then(() =>
-                          window.setTimeout(() => void load(), 400),
-                        )
-                }
+      render: (g) => {
+        const hasOpenButton = provider === "cursor" && !!g.deepLink;
+        const sessions = g.sessions ?? [];
+        return (
+          <div className="cell-stack">
+            {hasOpenButton ? <CursorOpenButton provider={provider} g={g} /> : null}
+            {/* Skip the empty "—" placeholder when the Open button already fills the cell. */}
+            {sessions.length > 0 || !hasOpenButton ? (
+              <ExpandableCell
+                items={sessions}
+                itemKey={(s, i) => s.name + i}
+                renderItem={(s) => (
+                  <SessionMini
+                    s={s}
+                    activateTitle="Focus this window"
+                    onActivate={
+                      provider === "cursor"
+                        ? undefined
+                        : () =>
+                            void activate(provider, g, { name: s.name, host: s.host }).then(() =>
+                              window.setTimeout(() => void load(), 400),
+                            )
+                    }
+                  />
+                )}
               />
-            )}
-          />
-        </div>
-      ),
+            ) : null}
+          </div>
+        );
+      },
       sortValue: (g) => {
         const sessions = g.sessions ?? [];
         const live = sessions.filter((s) => s.live).length;

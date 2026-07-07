@@ -193,6 +193,7 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .more-toggle:hover { color: var(--accent); text-decoration: underline; }
 .cursor-open-btn {
   align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 5px;
   background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 999px;
   color: var(--text-dim); padding: 1px 9px; font-size: 11px; line-height: 1.7; cursor: pointer;
 }
