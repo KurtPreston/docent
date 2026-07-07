@@ -140,6 +140,7 @@ export function Collectors() {
           filterable
           filterPlaceholder="Filter units…"
           empty="No collection units configured."
+          storageKey="collectors"
         />
       </div>
     </Layout>

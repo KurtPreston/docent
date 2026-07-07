@@ -246,7 +246,7 @@ export function WorkItem() {
       </Section>
 
       <Section title={`Entities (${entities.length})`}>
-        <DataTable columns={entityColumns} rows={entities} rowKey={(e) => e.id} empty="No entities." />
+        <DataTable columns={entityColumns} rows={entities} rowKey={(e) => e.id} empty="No entities." storageKey="workitem.entities" />
       </Section>
 
       <Section title={`Contributing signals (${signals.length})`}>
@@ -255,6 +255,7 @@ export function WorkItem() {
           rows={signals}
           rowKey={(_s, i) => i}
           empty="No contributing signals."
+          storageKey="workitem.signals"
         />
       </Section>
     </Layout>

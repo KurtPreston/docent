@@ -77,6 +77,7 @@ function Unit({ u }: { u: SignalUnit }) {
         filterable
         filterPlaceholder="Filter signals…"
         empty="No signals."
+        storageKey="signals"
       />
     </div>
   );

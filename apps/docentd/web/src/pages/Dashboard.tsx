@@ -520,6 +520,7 @@ export function Dashboard() {
             initialSort={{ key: "lastActivity", dir: "desc" }}
             filterable
             filterPlaceholder="Filter work items…"
+            storageKey="dashboard"
           />
         </div>
       )}
