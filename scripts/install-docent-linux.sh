@@ -28,7 +28,9 @@ ENABLE_LINGER=0
 DRY_RUN=0
 GO="${DOCENT_GO:-}"
 NODE="${DOCENT_NODE:-node}"
-NPM="${DOCENT_NPM:-npm}"
+# NPM is derived from $NODE's toolchain at build time (see build_frontend) unless
+# the user pins DOCENT_NPM, so we never pair a modern node with an ancient npm.
+NPM="${DOCENT_NPM:-}"
 
 usage() {
   cat <<'EOF'
@@ -59,7 +61,7 @@ Environment:
   DOCENT_PORT        Same as --port
   DOCENT_GO          Path to a Go >= 1.22 toolchain (auto-detected otherwise)
   DOCENT_NODE        Node binary for the dashboard build (default: node; needs >= 18)
-  DOCENT_NPM         npm binary (default: npm)
+  DOCENT_NPM         npm binary (default: npm from $DOCENT_NODE's toolchain; needs >= 7)
 EOF
 }
 
@@ -115,20 +117,43 @@ choose_go() {
 # --- Node toolchain (the dashboard is a Vite/React build, embedded via -tags embed) --
 node_major() { "$1" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
 build_frontend() {
+  local NPM_BIN
   if [ "$DRY_RUN" -eq 0 ]; then
     command -v "$NODE" >/dev/null 2>&1 || { echo "need Node >= 18 on PATH to build the dashboard (set DOCENT_NODE, or e.g. 'nvm use 20')" >&2; exit 1; }
-    command -v "$NPM" >/dev/null 2>&1 || { echo "need npm on PATH to build the dashboard (set DOCENT_NPM)" >&2; exit 1; }
-    local nmajor; nmajor="$(node_major "$NODE")"
+    local node_bin nmajor
+    node_bin="$(command -v "$NODE")"
+    nmajor="$(node_major "$NODE")"
     if [ -z "$nmajor" ] || [ "$nmajor" -lt 18 ]; then
       echo "need Node >= 18 to build the dashboard (found $("$NODE" -v 2>/dev/null || echo none)); set DOCENT_NODE or run 'nvm use 20'" >&2
       exit 1
     fi
-    log "building dashboard with Node $("$NODE" -v)"
+
+    # Resolve npm from the SAME toolchain as $NODE. npm 6 (bundled with Node 14,
+    # a common nvm default) can't parse this repo's lockfileVersion 3
+    # package-lock.json and dies with "Cannot read property 'react' of undefined".
+    if [ -n "$NPM" ]; then
+      NPM_BIN="$(command -v "$NPM" 2>/dev/null || printf '%s' "$NPM")"
+    else
+      NPM_BIN="$(dirname "$node_bin")/npm"
+      [ -x "$NPM_BIN" ] || NPM_BIN="$(command -v npm 2>/dev/null || true)"
+    fi
+    [ -n "$NPM_BIN" ] && [ -e "$NPM_BIN" ] || { echo "could not find npm for $NODE (set DOCENT_NPM)" >&2; exit 1; }
+
+    # Run npm THROUGH $NODE so npm's `#!/usr/bin/env node` shebang can't pick up a
+    # different (e.g. older) node earlier on PATH.
+    local npmmajor
+    npmmajor="$("$NODE" "$NPM_BIN" -v 2>/dev/null | sed -E 's/^([0-9]+).*/\1/')"
+    if [ -z "$npmmajor" ] || [ "$npmmajor" -lt 7 ]; then
+      echo "need npm >= 7 to build the dashboard (package-lock.json is lockfileVersion 3); found npm $("$NODE" "$NPM_BIN" -v 2>/dev/null || echo none) for $("$NODE" -v). Use Node >= 18's npm (e.g. 'nvm use 20') or set DOCENT_NPM." >&2
+      exit 1
+    fi
+    log "building dashboard with Node $("$NODE" -v) / npm $("$NODE" "$NPM_BIN" -v)"
   else
-    log "building dashboard (requires Node >= 18)"
+    NPM_BIN="${NPM:-npm}"
+    log "building dashboard (requires Node >= 18 with npm >= 7)"
   fi
-  run "$NPM" --prefix "$WEB_ROOT" ci
-  run "$NPM" --prefix "$WEB_ROOT" run build
+  run "$NODE" "$NPM_BIN" --prefix "$WEB_ROOT" ci
+  run "$NODE" "$NPM_BIN" --prefix "$WEB_ROOT" run build
 }
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
