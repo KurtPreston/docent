@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -489,6 +490,136 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func TestDanglingTicketKeys(t *testing.T) {
+	cfg := correlation.Config{Projects: []string{"SALSA"}}
+	items := []model.WorkItem{
+		{Key: "wb:o/r@SALSA-1", Tickets: []model.TicketRef{{Key: "SALSA-1"}}},                        // dangling
+		{Key: "wb:o/r@SALSA-2", Tickets: []model.TicketRef{{Key: "SALSA-2", Title: "SALSA-2 done"}}}, // has metadata
+		{Key: "SALSA-3", Tickets: []model.TicketRef{{Key: "SALSA-3"}}},                               // dangling
+		{Key: "wb:o/r@foo", Tickets: []model.TicketRef{{Key: "PR-7"}}},                               // not a JIRA project key
+		{Key: "wb:o/r@dup", Tickets: []model.TicketRef{{Key: "SALSA-1"}}},                            // duplicate of SALSA-1
+	}
+	got := danglingTicketKeys(items, cfg)
+	want := []string{"SALSA-1", "SALSA-3"}
+	if len(got) != len(want) {
+		t.Fatalf("danglingTicketKeys = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("danglingTicketKeys[%d] = %q, want %q (%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// fakeResolver implements collectors.ReferenceResolver, returning a canned set
+// of signals and recording the refs it was asked to resolve.
+type fakeResolver struct {
+	mu     sync.Mutex
+	calls  [][]string
+	result []collectors.StatusItem
+}
+
+func (f *fakeResolver) ResolveRefs(_ context.Context, _ userdata.Directive, _ *collectors.CollectOpts, refs []string) ([]collectors.StatusItem, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, append([]string(nil), refs...))
+	f.mu.Unlock()
+	return f.result, nil
+}
+
+func (f *fakeResolver) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+func TestAnnotationBackfillsBranchSummary(t *testing.T) {
+	store, err := registry.NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(config.DaemonConfig{
+		TicketProjects: []string{"salsa"},
+		Directives: []userdata.Directive{
+			{ID: "jira", Collector: "jira", Enabled: true, Config: map[string]string{"base_url": "https://jira.example.com/"}},
+		},
+	}, store)
+
+	fake := &fakeResolver{result: []collectors.StatusItem{{
+		Source:     "jira",
+		Kind:       "issue",
+		Title:      "SALSA-12430 Publish type_generator for external use",
+		URL:        "https://jira.example.com/browse/SALSA-12430",
+		ObservedAt: time.Now(),
+		Fields:     map[string]string{"key": "SALSA-12430", "status": "Code Review"},
+	}}}
+	e.reg.Register("jira", fake)
+
+	// A branch unit anchored purely by an authored PR that references
+	// SALSA-12430; no JIRA entity was collected, so the summary is missing.
+	u := &unit{
+		key:       unitKey{Directive: "gh", Mode: collectors.ModeState},
+		directive: userdata.Directive{ID: "gh", Collector: "github-enterprise"},
+		collector: "github-enterprise",
+		mode:      collectors.ModeState,
+		signals: []model.Signal{{
+			StableID:   "pr:7190",
+			Source:     "github-enterprise",
+			Kind:       "pr_review_status",
+			Title:      "[SALSA-12430] Publishing @tango/type-generator from monorepo",
+			URL:        "https://git.drwholdings.com/Chip/salsa/pull/7190",
+			ObservedAt: time.Now(),
+			Fields:     map[string]string{"repo": "Chip/salsa", "head_branch": "SALSA-12430", "relation": "authored", "is_draft": "false"},
+		}},
+	}
+	e.units = []*unit{u}
+
+	const wantSummary = "SALSA-12430 Publish type_generator for external use"
+
+	// First rebuild finds the dangling key and kicks the async fetch, which
+	// caches the result and triggers a follow-up rebuild.
+	e.rebuild()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var g DashboardGroup
+	for time.Now().Before(deadline) {
+		snap := e.Snapshot()
+		if len(snap.Groups) == 1 {
+			g = snap.Groups[0]
+			if g.Summary == wantSummary {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if g.Key != "wb:Chip/salsa@SALSA-12430" {
+		t.Fatalf("group key = %q, want the branch unit", g.Key)
+	}
+	if g.Summary != wantSummary {
+		t.Fatalf("summary not backfilled: %q, want %q", g.Summary, wantSummary)
+	}
+	if len(g.Tickets) == 0 || g.Tickets[0].Status != "Code Review" {
+		t.Errorf("ticket status not backfilled: %+v", g.Tickets)
+	}
+	if fake.callCount() == 0 {
+		t.Error("expected ResolveRefs to be called")
+	}
+}
+
+func TestAnnotationSkipsWhenNoJiraDirective(t *testing.T) {
+	// With no JIRA directive configured, a dangling key must not panic or
+	// attempt a fetch; the row simply stays without a summary.
+	e := newTestEngine(t)
+	fake := &fakeResolver{}
+	e.reg.Register("jira", fake)
+	e.maybeAnnotate([]string{"SALSA-1"})
+	// Give any (erroneously spawned) goroutine a chance to run.
+	time.Sleep(50 * time.Millisecond)
+	if fake.callCount() != 0 {
+		t.Errorf("ResolveRefs should not be called without a jira directive, got %d calls", fake.callCount())
+	}
 }
 
 func newCursorTestEngine(t *testing.T, sshHost string, writeColor *bool) *Engine {

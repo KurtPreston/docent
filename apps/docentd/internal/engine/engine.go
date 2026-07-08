@@ -140,6 +140,24 @@ type unit struct {
 	watermark time.Time
 }
 
+// Annotation-pass tuning. Referenced-but-uncollected tickets are backfilled
+// on a TTL so a rebuild (which fires after every collection) doesn't re-hit
+// JIRA constantly. Negative results (nothing returned / fetch error) are
+// cached for a shorter window so a transient failure recovers quickly.
+const (
+	annotationPositiveTTL  = 10 * time.Minute
+	annotationNegativeTTL  = 2 * time.Minute
+	annotationFetchTimeout = 20 * time.Second
+)
+
+// annotationEntry is one cached annotation-pass result. A nil Signal is a
+// negative cache entry (the key was fetched but JIRA returned nothing, or the
+// fetch failed); FetchedAt drives TTL expiry.
+type annotationEntry struct {
+	Signal    *model.Signal
+	FetchedAt time.Time
+}
+
 // Engine collects sources on a per-unit schedule and builds the dashboard
 // model plus the retained signal -> entity -> work-item links.
 type Engine struct {
@@ -167,7 +185,15 @@ type Engine struct {
 	entityWorkItem map[string]string
 	generatedAt    time.Time
 
+	// annotations caches synthetic JIRA signals for tickets that were
+	// referenced (by a PR/branch/commit) but never collected because they
+	// fell outside the scope JQL. Keyed by upper-cased ticket key; a nil
+	// Signal is a negative entry. Guarded by mu; unioned into the signal set
+	// on each rebuild.
+	annotations map[string]annotationEntry
+
 	refreshing sync.Mutex // single-flight guard for on-request collection
+	annotating sync.Mutex // single-flight guard for the annotation fetch
 }
 
 func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
@@ -181,6 +207,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		},
 		collecting:     map[unitKey]bool{},
 		entityWorkItem: map[string]string{},
+		annotations:    map[string]annotationEntry{},
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
@@ -657,11 +684,17 @@ func (e *Engine) rebuild() {
 	for _, u := range e.units {
 		signals = append(signals, u.signals...)
 	}
+	signals = append(signals, e.freshAnnotationSignalsLocked()...)
 	e.mu.Unlock()
 
 	corrCfg := mergeObservedProjects(signals, e.corrCfg)
 	entities := e.entitiesFrom(signals, corrCfg)
 	workItems := correlation.BuildWorkItems(entities, corrCfg)
+	// Annotation pass: backfill JIRA data for tickets that were referenced
+	// (by a PR/branch/commit) but never collected. This is async and
+	// TTL-cached; results land in e.annotations and trigger a follow-up
+	// rebuild, so this rebuild proceeds with whatever is cached now.
+	e.maybeAnnotate(danglingTicketKeys(workItems, corrCfg))
 	dashboard := e.buildDashboard(workItems, corrCfg)
 	entityWorkItem := make(map[string]string)
 	for _, wi := range workItems {
@@ -676,6 +709,148 @@ func (e *Engine) rebuild() {
 	e.entityWorkItem = entityWorkItem
 	e.generatedAt = time.Now()
 	e.mu.Unlock()
+}
+
+// freshAnnotationSignalsLocked returns the non-expired positive annotation
+// signals to union into the signal set. The caller must hold e.mu.
+func (e *Engine) freshAnnotationSignalsLocked() []model.Signal {
+	now := time.Now()
+	out := make([]model.Signal, 0, len(e.annotations))
+	for _, ent := range e.annotations {
+		if ent.Signal == nil {
+			continue
+		}
+		if now.Sub(ent.FetchedAt) > annotationPositiveTTL {
+			continue
+		}
+		out = append(out, *ent.Signal)
+	}
+	return out
+}
+
+// danglingTicketKeys returns the distinct ticket keys that a work item
+// references but for which no JIRA metadata was collected (TicketRef.Title is
+// empty). Only keys that parse as known JIRA project keys are returned, so a
+// non-JIRA reference (e.g. a "PR-1234" false match) is never handed to the
+// JIRA resolver.
+func danglingTicketKeys(workItems []model.WorkItem, cfg correlation.Config) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, wi := range workItems {
+		for _, tr := range wi.Tickets {
+			if tr.Title != "" {
+				continue
+			}
+			key := correlation.ParseTicketKey(tr.Key, cfg)
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// maybeAnnotate kicks a background batched fetch for any dangling ticket keys
+// that aren't already cached-and-fresh. It is single-flighted: while one fetch
+// is in flight, subsequent calls no-op and rely on the next rebuild to retry.
+func (e *Engine) maybeAnnotate(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	now := time.Now()
+	e.mu.Lock()
+	var todo []string
+	for _, k := range keys {
+		if ent, ok := e.annotations[k]; ok && annotationEntryFresh(ent, now) {
+			continue
+		}
+		todo = append(todo, k)
+	}
+	e.mu.Unlock()
+	if len(todo) == 0 {
+		return
+	}
+	dir, ok := e.jiraAnnotationDirective()
+	if !ok {
+		return
+	}
+	if !e.annotating.TryLock() {
+		return
+	}
+	go func() {
+		defer e.annotating.Unlock()
+		e.runAnnotation(dir, todo)
+	}()
+}
+
+// annotationEntryFresh reports whether a cached entry is still within its TTL
+// (positive and negative entries age out on different schedules).
+func annotationEntryFresh(ent annotationEntry, now time.Time) bool {
+	ttl := annotationPositiveTTL
+	if ent.Signal == nil {
+		ttl = annotationNegativeTTL
+	}
+	return now.Sub(ent.FetchedAt) <= ttl
+}
+
+// runAnnotation performs the batched fetch, updates the cache (positive for
+// keys JIRA returned, negative for the rest), and triggers a follow-up rebuild
+// so the freshly fetched summaries appear. A fetch failure degrades
+// gracefully: keys are cached negative and the row keeps its key + browse URL.
+func (e *Engine) runAnnotation(dir userdata.Directive, keys []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), annotationFetchTimeout)
+	defer cancel()
+	opts := &collectors.CollectOpts{UserdataDir: e.cfg.ConfigDir}
+	items, err := e.reg.ResolveRefs(ctx, dir, opts, keys)
+	if err != nil {
+		log.Printf("docentd: annotation fetch for %v failed: %v", keys, err)
+	}
+	byKey := make(map[string]model.Signal, len(items))
+	for i := range items {
+		if k := annotationKeyFromSignal(items[i]); k != "" {
+			byKey[k] = items[i]
+		}
+	}
+	now := time.Now()
+	e.mu.Lock()
+	for _, k := range keys {
+		if sig, ok := byKey[k]; ok {
+			s := sig
+			e.annotations[k] = annotationEntry{Signal: &s, FetchedAt: now}
+		} else {
+			e.annotations[k] = annotationEntry{FetchedAt: now}
+		}
+	}
+	e.mu.Unlock()
+	e.rebuild()
+}
+
+// annotationKeyFromSignal extracts the upper-cased JIRA key a synthetic
+// annotation signal carries (buildJiraItem stamps Fields["key"]).
+func annotationKeyFromSignal(s model.Signal) string {
+	if s.Fields == nil {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(s.Fields["key"]))
+}
+
+// jiraAnnotationDirective returns the base JIRA directive to resolve tickets
+// through (the first enabled jira directive with a base_url). It deliberately
+// uses the un-expanded directive so no status_tier is stamped on the fetched
+// issues. Multi-instance routing by project key is a future refinement.
+func (e *Engine) jiraAnnotationDirective() (userdata.Directive, bool) {
+	for _, d := range e.cfg.Directives {
+		if d.Collector != "jira" || !d.Enabled {
+			continue
+		}
+		if strings.TrimSpace(d.Config["base_url"]) == "" {
+			continue
+		}
+		return d, true
+	}
+	return userdata.Directive{}, false
 }
 
 // entitiesFrom maps signals to entities, enriches session entities from the
