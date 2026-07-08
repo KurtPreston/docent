@@ -245,6 +245,17 @@ type StateCollector interface {
 	CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error)
 }
 
+// ReferenceResolver is optionally implemented by collectors that can backfill a
+// specific set of referenced items in one batched call, bypassing the
+// directive's scope/tier query. The annotation pass uses this to resolve
+// referenced-but-uncollected items (e.g. a JIRA ticket a PR mentions that fell
+// outside the collector's scope JQL). refs are collector-specific identifiers
+// (JIRA issue keys, etc.); the returned signals are ordinary StatusItems that
+// flow back through correlation like any other collected signal.
+type ReferenceResolver interface {
+	ResolveRefs(ctx context.Context, directive userdata.Directive, opts *CollectOpts, refs []string) ([]StatusItem, error)
+}
+
 // ValidationIssue describes a single problem with a directive's configuration
 // or runtime environment that would prevent (or degrade) collection. Validators
 // return zero or more issues; an empty slice means the directive looks ready.
@@ -336,6 +347,22 @@ func (r *Registry) CollectUnit(ctx context.Context, d userdata.Directive, mode M
 		}
 		return ec.CollectEvents(ctx, d, opts)
 	}
+}
+
+// ResolveRefs dispatches to the directive collector's ReferenceResolver
+// capability to batch-fetch specific referenced items, bypassing the
+// directive's scope query. It is a hard error if the collector doesn't
+// implement ReferenceResolver.
+func (r *Registry) ResolveRefs(ctx context.Context, d userdata.Directive, opts *CollectOpts, refs []string) ([]StatusItem, error) {
+	c, ok := r.collectors[d.Collector]
+	if !ok {
+		return nil, fmt.Errorf("directive %s uses unknown collector %q", d.ID, d.Collector)
+	}
+	rr, ok := c.(ReferenceResolver)
+	if !ok {
+		return nil, fmt.Errorf("collector %q does not support reference resolution", d.Collector)
+	}
+	return rr.ResolveRefs(ctx, d, opts, refs)
 }
 
 func (r *Registry) Names() []string {

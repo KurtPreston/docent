@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,17 @@ type JiraCollector struct {
 	Clock func() time.Time
 	HTTP  *http.Client
 }
+
+const (
+	// jiraDefaultMaxResults caps a single JQL search page. The scope/tier
+	// collection paths request this many; the by-key annotation path sizes
+	// each request to its batch instead.
+	jiraDefaultMaxResults = 50
+	// jiraKeyBatchSize bounds how many issue keys go into one
+	// `issuekey in (...)` search so a large backfill doesn't exceed the
+	// result cap.
+	jiraKeyBatchSize = 50
+)
 
 func (c JiraCollector) client() *http.Client {
 	if c.HTTP != nil {
@@ -73,7 +85,7 @@ func (c JiraCollector) CollectEvents(ctx context.Context, directive userdata.Dir
 	scope := opts.EffectiveScope()
 	followedProjects := parseFollowedList(directive.Config["followed_projects"])
 	jql := buildJiraActivityJQL(strings.TrimSpace(directive.Config["query"]), since, scope, followedProjects)
-	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql)
+	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql, jiraDefaultMaxResults)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +117,7 @@ func (c JiraCollector) CollectState(ctx context.Context, directive userdata.Dire
 	} else {
 		jql = buildJiraStateJQL(strings.TrimSpace(directive.Config["query"]), scope, followedProjects)
 	}
-	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql)
+	parsed, base, err := c.runJiraSearch(ctx, directive, opts, jql, jiraDefaultMaxResults)
 	if err != nil {
 		return nil, err
 	}
@@ -121,11 +133,48 @@ func (c JiraCollector) CollectState(ctx context.Context, directive userdata.Dire
 	return items, nil
 }
 
+// ResolveRefs batch-fetches specific JIRA issues by key, bypassing the
+// directive's scope/tier query. It is the annotation-pass entry point for
+// backfilling tickets that were referenced (by a PR, branch, or commit) but
+// fell outside the collector's normal JQL scope. Keys are chunked so a large
+// backlog still fits within a single search's result cap, and issues map to
+// display-only `issue` signals (IsSelf=false, and — since the base directive
+// carries no status_tier — no status_tier field) so they populate summary /
+// status / URL without driving the dashboard's started/assigned action facts.
+// On a mid-batch error the issues fetched so far are still returned alongside
+// the error, so the caller can cache partial results.
+func (c JiraCollector) ResolveRefs(ctx context.Context, directive userdata.Directive, opts *CollectOpts, refs []string) ([]StatusItem, error) {
+	keys := normalizeJiraKeys(refs)
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	var items []StatusItem
+	for start := 0; start < len(keys); start += jiraKeyBatchSize {
+		end := start + jiraKeyBatchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batch := keys[start:end]
+		parsed, base, err := c.runJiraSearch(ctx, directive, opts, buildJiraKeyJQL(batch), len(batch))
+		if err != nil {
+			return items, err
+		}
+		for _, iss := range parsed.Issues {
+			obs, _ := jiraParseUpdated(iss.Fields.Updated)
+			items = append(items, buildJiraItem(directive, base, iss, "issue", obs, false))
+		}
+	}
+	return items, nil
+}
+
 // runJiraSearch resolves credentials, executes the JQL search, and returns the
 // parsed result plus the trimmed base URL. Auth prefers a Personal Access
 // Token (Bearer); it falls back to email + API token (Basic) for legacy
 // Atlassian Cloud configs.
-func (c JiraCollector) runJiraSearch(ctx context.Context, directive userdata.Directive, opts *CollectOpts, jql string) (jiraSearchResult, string, error) {
+func (c JiraCollector) runJiraSearch(ctx context.Context, directive userdata.Directive, opts *CollectOpts, jql string, maxResults int) (jiraSearchResult, string, error) {
+	if maxResults <= 0 {
+		maxResults = jiraDefaultMaxResults
+	}
 	var parsed jiraSearchResult
 	base := strings.TrimSpace(directive.Config["base_url"])
 	if base == "" {
@@ -163,7 +212,7 @@ func (c JiraCollector) runJiraSearch(ctx context.Context, directive userdata.Dir
 	api := strings.TrimRight(base, "/") + "/rest/api/2/search"
 	q := url.Values{}
 	q.Set("jql", jql)
-	q.Set("maxResults", "50")
+	q.Set("maxResults", strconv.Itoa(maxResults))
 	q.Set("fields", "summary,status,priority,updated,assignee,reporter")
 	reqURL := api + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -408,6 +457,33 @@ func buildJiraTierJQL(userQuery string) string {
 		return q
 	}
 	return q + ` ORDER BY updated DESC`
+}
+
+// buildJiraKeyJQL builds a JQL that fetches exactly the given issue keys,
+// ordered by recency. Issue keys are alphanumeric with a hyphen, so they are
+// safe unquoted inside the `in` clause. An empty set yields "" so the search
+// returns nothing rather than every issue.
+func buildJiraKeyJQL(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("issuekey in (%s) ORDER BY updated DESC", strings.Join(keys, ", "))
+}
+
+// normalizeJiraKeys upper-cases, trims, de-duplicates, and drops empty refs so
+// the by-key JQL is stable and free of redundant lookups.
+func normalizeJiraKeys(refs []string) []string {
+	seen := make(map[string]bool, len(refs))
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		k := strings.ToUpper(strings.TrimSpace(r))
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
 }
 
 func buildJiraScopeClause(scope Scope, followedProjects []string) string {
