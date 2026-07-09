@@ -19,7 +19,10 @@ manager (wsm) has its own installer in the wsm repo.
 On first run it asks whether docentd runs on THIS machine (local) or on a REMOTE
 host. Local builds docentd.exe, runs docent-setup, and registers a docentd task.
 Remote only verifies the remote /health is reachable and points the launcher +
-dashboard at it.
+dashboard at it. On a re-run it first offers to reuse the config from the last
+install (the local/remote choice, plus the remote URL/token saved in
+ConfigDir\.env), so updating never forces you to re-pick the deployment or
+retype credentials; pass -RemoteUrl / -Token to override.
 
 Re-running is safe and idempotent: before (re)registering each task it stops the
 task and kills the running program tree, so a re-run always restarts the
@@ -145,10 +148,25 @@ function Test-NodeOk {
     return $false
 }
 
+# --- previously-saved remote config ------------------------------------------
+# Remote installs persist the docentd URL/token in configDir\.env, so a re-run
+# can reuse them instead of forcing you to retype the URL and token.
+function Get-SavedRemoteConfig {
+    param([string]$EnvFile)
+    $result = [pscustomobject]@{ Url = ''; Token = '' }
+    if (-not (Test-Path -LiteralPath $EnvFile)) { return $result }
+    foreach ($line in @(Get-Content -LiteralPath $EnvFile)) {
+        if ($line -match '^\s*DOCENT_URL=(.*)$') { $result.Url = $Matches[1].Trim() }
+        elseif ($line -match '^\s*DOCENT_TOKEN=(.*)$') { $result.Token = $Matches[1].Trim() }
+    }
+    return $result
+}
+
 # --- resolve docentd location ------------------------------------------------
 $Mode = $null
 $Sessions = $null
 $UseTunnel = $false
+$keptExisting = $false
 
 if ($RemoteUrl) {
     $Mode = 'remote'
@@ -158,19 +176,53 @@ elseif ($DryRun) {
     $Mode = 'local'
 }
 else {
-    Write-Host ""
-    Write-Host "Where does docentd run?"
-    Write-Host "  1) This machine (build + register docentd locally) [default]"
-    Write-Host "  2) Remote host  (only install the launcher here)"
-    $choice = Read-Host "Choice [1]"
-    if ($choice -in '2', 'remote', 'Remote') { $Mode = 'remote' } else { $Mode = 'local' }
+    # Before asking anything, offer to reuse a previous install's config. This
+    # restores the prior local/remote choice (and the remote URL/token) so an
+    # update never forces you to re-pick the deployment or retype credentials.
+    $saved = Get-SavedRemoteConfig -EnvFile (Join-Path $ConfigDir '.env')
+    $haveLocal = Test-Path -LiteralPath $ConfigPath
+    if ($saved.Url -or $haveLocal) {
+        Write-Host ""
+        if ($saved.Url) {
+            Write-Host "Found existing docent config (remote docentd):"
+            Write-Host ("  URL    {0}" -f $saved.Url)
+            Write-Host ("  token  {0}" -f $(if ($saved.Token) { 'set' } else { '(none)' }))
+        }
+        else {
+            Write-Host "Found existing docent config (local docentd)."
+        }
+        $keep = Read-Host "Reuse this config? [Y/n]"
+        if ($keep -notin 'n', 'N', 'no', 'No') {
+            if ($saved.Url) {
+                $Mode = 'remote'
+                $RemoteUrl = $saved.Url.TrimEnd('/')
+                if (-not $Token) { $Token = $saved.Token }
+                $keptExisting = $true
+            }
+            else {
+                $Mode = 'local'
+            }
+        }
+    }
+
+    if (-not $Mode) {
+        Write-Host ""
+        Write-Host "Where does docentd run?"
+        Write-Host "  1) This machine (build + register docentd locally) [default]"
+        Write-Host "  2) Remote host  (only install the launcher here)"
+        $choice = Read-Host "Choice [1]"
+        if ($choice -in '2', 'remote', 'Remote') { $Mode = 'remote' } else { $Mode = 'local' }
+    }
 }
 
 if ($Mode -eq 'remote') {
     if (-not $RemoteUrl) {
         $RemoteUrl = (Read-Host "Remote docentd base URL (e.g. http://desktop:39787)").TrimEnd('/')
         if (-not $RemoteUrl) { throw "remote docentd URL is required" }
-        if (-not $Token) { $Token = Read-Host "Bearer token for $RemoteUrl (blank if none)" }
+    }
+    $RemoteUrl = $RemoteUrl.TrimEnd('/')
+    if (-not $Token -and -not $keptExisting) {
+        $Token = Read-Host "Bearer token for $RemoteUrl (blank if none)"
     }
 
     # Remote mode reaches docentd through a local SSH forward (docent-tunnel) by
