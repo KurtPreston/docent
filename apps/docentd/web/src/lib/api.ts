@@ -1,3 +1,4 @@
+import type { JSONSchema } from "monaco-yaml";
 import { docentFetch } from "./auth";
 import { toast } from "./toast";
 import { errMsg } from "./format";
@@ -92,6 +93,16 @@ export const saveConfigFile = (id: ConfigFileID, content: string): Promise<Confi
 
 export const validateConfigFile = (id: ConfigFileID, content: string): Promise<ConfigSaveResult> =>
   putConfig("/api/config/" + encodeURIComponent(id) + "/validate", content);
+
+// fetchConfigSchema returns the JSON Schema for a config file's contents (for
+// the Monaco editor's inline validation/completion), or null when the file
+// has no schema yet (docentd.yaml, until a later phase).
+export async function fetchConfigSchema(id: ConfigFileID): Promise<JSONSchema | null> {
+  const r = await docentFetch("/api/config/" + encodeURIComponent(id) + "/schema", { cache: "no-store" });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return (await r.json()) as JSONSchema;
+}
 
 // collectUnit force-collects one (directive, mode) unit now, ignoring its poll
 // interval. Throws on failure so the caller can toast and refresh.

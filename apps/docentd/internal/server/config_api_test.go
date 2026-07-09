@@ -143,6 +143,27 @@ func TestConfigAPI_daemonConfigAcceptsKnownFields(t *testing.T) {
 	}
 }
 
+func TestConfigAPI_schemaServedForConfigOnly(t *testing.T) {
+	h, _, _ := newConfigTestServer(t)
+
+	rr := doJSON(t, h, http.MethodGet, "/api/config/config/schema", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/config/config/schema: got %d body=%s", rr.Code, rr.Body.String())
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &schema); err != nil {
+		t.Fatalf("schema is not valid JSON: %v", err)
+	}
+	if len(schema) == 0 {
+		t.Fatal("schema body is empty")
+	}
+
+	rr = doJSON(t, h, http.MethodGet, "/api/config/docentd/schema", "", "")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/config/docentd/schema: got %d want 404 (no schema yet)", rr.Code)
+	}
+}
+
 func TestConfigAPI_unknownIDIs404(t *testing.T) {
 	h, _, _ := newConfigTestServer(t)
 	rr := doJSON(t, h, http.MethodPut, "/api/config/nope", "", putConfigBody(t, ""))

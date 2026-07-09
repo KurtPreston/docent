@@ -79,6 +79,11 @@ func (s *Server) configItemAPI(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/config/"), "/")
 	parts := strings.Split(rest, "/")
 
+	if len(parts) == 2 && parts[1] == "schema" {
+		s.configSchemaAPI(w, r, parts[0])
+		return
+	}
+
 	validateOnly := false
 	switch {
 	case len(parts) == 2 && parts[1] == "validate":
@@ -86,7 +91,7 @@ func (s *Server) configItemAPI(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 1 && parts[0] != "":
 		// save path
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "expected /api/config/{id} or /api/config/{id}/validate"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "expected /api/config/{id}, /api/config/{id}/validate, or /api/config/{id}/schema"})
 		return
 	}
 
@@ -137,6 +142,24 @@ func (s *Server) configItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// configSchemaAPI handles GET /api/config/{id}/schema: the JSON Schema for a
+// config file's contents, consumed by the dashboard's Monaco editor for
+// inline validation/completion (via monaco-yaml). Only config.yaml has a
+// schema today; docentd.yaml has none yet, so this 404s for "docentd".
+func (s *Server) configSchemaAPI(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if id != "config" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no schema available for this config file"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/schema+json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(configschema.SchemaBytes)
 }
 
 // validateConfigContent validates raw YAML for a config file id, returning a

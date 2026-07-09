@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
+import type { JSONSchema } from "monaco-yaml";
 import { Layout } from "../components/Layout";
-import { fetchConfigFiles, saveConfigFile } from "../lib/api";
+import { ConfigEditor } from "../components/ConfigEditor";
+import { fetchConfigFiles, fetchConfigSchema, saveConfigFile } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type { ConfigFileID, ConfigFileView } from "../lib/types";
 
-// Settings edits docentd's two YAML config files as plain text: the daemon
-// re-reads them from disk only at startup, so this page writes verbatim
-// content (preserving comments) and relies on server-side validation rather
-// than any client-side schema awareness. A richer editor (Monaco) and a
-// schema-driven form view come in later phases.
+// Settings edits docentd's two YAML config files with a Monaco editor: the
+// daemon re-reads them from disk only at startup, so this page writes
+// verbatim content (preserving comments) and relies on server-side
+// validation for correctness. When a file has a JSON Schema (config.yaml
+// today; docentd.yaml in a later phase), the editor gets inline
+// validation/completion for it via monaco-yaml. A schema-driven form view
+// comes in a later phase too.
 export function Settings() {
   const [files, setFiles] = useState<ConfigFileView[] | null>(null);
   const [activeId, setActiveId] = useState<ConfigFileID>("config");
@@ -17,6 +21,7 @@ export function Settings() {
   const [problems, setProblems] = useState<Record<string, string[]>>({});
   const [justSaved, setJustSaved] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
+  const [schemas, setSchemas] = useState<Record<string, JSONSchema | null>>({});
 
   useEffect(() => {
     document.title = "docent · settings";
@@ -42,6 +47,16 @@ export function Settings() {
   }, [load]);
 
   const active = files?.find((f) => f.id === activeId);
+
+  // Lazily fetch (and cache) each file's JSON Schema the first time it's
+  // viewed; fetchConfigSchema resolves to null when the file has none.
+  useEffect(() => {
+    if (!active || active.id in schemas) return;
+    const id = active.id;
+    void fetchConfigSchema(id)
+      .then((schema) => setSchemas((prev) => ({ ...prev, [id]: schema })))
+      .catch(() => setSchemas((prev) => ({ ...prev, [id]: null })));
+  }, [active, schemas]);
   const draft = drafts[activeId] ?? "";
   const dirty = active !== undefined && draft !== active.content;
   const activeProblems = problems[activeId] ?? [];
@@ -101,13 +116,17 @@ export function Settings() {
 
         {active ? (
           <div className="config-editor-wrap">
-            <textarea
-              className="config-editor"
-              value={draft}
-              onChange={(e) => editDraft(active.id, e.target.value)}
-              spellCheck={false}
-              placeholder={active.exists ? undefined : "This file doesn't exist yet — saving will create it."}
-            />
+            {!active.exists ? (
+              <div className="muted config-new-notice">This file doesn't exist yet — saving will create it.</div>
+            ) : null}
+            <div className="config-editor-frame">
+              <ConfigEditor
+                id={active.id}
+                value={draft}
+                onChange={(v) => editDraft(active.id, v)}
+                schema={schemas[active.id] ?? undefined}
+              />
+            </div>
             {activeProblems.length > 0 ? (
               <ul className="config-problems">
                 {activeProblems.map((p, i) => (

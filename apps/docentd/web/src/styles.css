@@ -253,9 +253,8 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .report-result .report-meta { font-size: 12px; }
 .report-result .err { padding: 16px; color: var(--red); white-space: pre-wrap; }
 
-/* /settings page: per-file tabs + raw YAML editor (textarea for now; a
-   Monaco-backed editor and schema-driven form replace/augment this in later
-   phases). */
+/* /settings page: per-file tabs + a Monaco-backed YAML editor (a
+   schema-driven form view augments this in a later phase). */
 .settings-tabs { display: flex; gap: 6px; }
 .settings-tab {
   background: none; border: 1px solid transparent; border-radius: 8px;
@@ -264,15 +263,10 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .settings-tab:hover { color: var(--text); background: var(--bg-elev-2); }
 .settings-tab.active { color: var(--text); border-color: var(--border); background: var(--bg-elev-2); }
 .config-editor-wrap { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.config-editor {
-  width: 100%; min-height: 480px; resize: vertical;
-  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text); padding: 12px 14px; font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5;
-  tab-size: 2;
+.config-new-notice { font-size: 12.5px; }
+.config-editor-frame {
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
 }
-.config-editor:focus { outline: none; border-color: var(--accent); }
-.config-editor::placeholder { color: var(--text-faint); }
 .config-problems {
   margin: 0; padding: 10px 14px; list-style: none;
   background: color-mix(in srgb, var(--red) 10%, var(--bg-elev-2));
