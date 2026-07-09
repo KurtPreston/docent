@@ -9,6 +9,9 @@ import type {
   ReportMeta,
   ReportJob,
   ReportRequest,
+  ConfigFileID,
+  ConfigFileView,
+  ConfigSaveResult,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -64,6 +67,31 @@ export async function startReport(req: ReportRequest): Promise<string> {
 
 export const fetchReportJob = (id: string): Promise<ReportJob> =>
   getJSON<ReportJob>("/api/report/" + encodeURIComponent(id));
+
+// Settings API: fetch every editable docent config file, then validate/save
+// one at a time. saveConfigFile and validateConfigFile never throw on
+// validation failure — the returned ConfigSaveResult carries ok/problems so
+// the Settings page can render inline errors instead of a toast.
+
+export const fetchConfigFiles = (): Promise<ConfigFileView[]> =>
+  getJSON<{ files: ConfigFileView[] }>("/api/config").then((r) => r.files);
+
+async function putConfig(url: string, content: string): Promise<ConfigSaveResult> {
+  const r = await docentFetch(url, {
+    method: url.endsWith("/validate") ? "POST" : "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  const d = (await r.json().catch(() => ({}))) as ConfigSaveResult;
+  if (r.ok) return { ok: true };
+  return { ok: false, problems: d.problems, error: d.error };
+}
+
+export const saveConfigFile = (id: ConfigFileID, content: string): Promise<ConfigSaveResult> =>
+  putConfig("/api/config/" + encodeURIComponent(id), content);
+
+export const validateConfigFile = (id: ConfigFileID, content: string): Promise<ConfigSaveResult> =>
+  putConfig("/api/config/" + encodeURIComponent(id) + "/validate", content);
 
 // collectUnit force-collects one (directive, mode) unit now, ignoring its poll
 // interval. Throws on failure so the caller can toast and refresh.

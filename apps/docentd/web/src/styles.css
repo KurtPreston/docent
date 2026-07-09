@@ -253,6 +253,42 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .report-result .report-meta { font-size: 12px; }
 .report-result .err { padding: 16px; color: var(--red); white-space: pre-wrap; }
 
+/* /settings page: per-file tabs + raw YAML editor (textarea for now; a
+   Monaco-backed editor and schema-driven form replace/augment this in later
+   phases). */
+.settings-tabs { display: flex; gap: 6px; }
+.settings-tab {
+  background: none; border: 1px solid transparent; border-radius: 8px;
+  color: var(--text-dim); padding: 4px 10px; font-size: 12.5px; cursor: pointer;
+}
+.settings-tab:hover { color: var(--text); background: var(--bg-elev-2); }
+.settings-tab.active { color: var(--text); border-color: var(--border); background: var(--bg-elev-2); }
+.config-editor-wrap { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.config-editor {
+  width: 100%; min-height: 480px; resize: vertical;
+  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 12px 14px; font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5;
+  tab-size: 2;
+}
+.config-editor:focus { outline: none; border-color: var(--accent); }
+.config-editor::placeholder { color: var(--text-faint); }
+.config-problems {
+  margin: 0; padding: 10px 14px; list-style: none;
+  background: color-mix(in srgb, var(--red) 10%, var(--bg-elev-2));
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
+  border-radius: 8px; color: var(--red); font-size: 12.5px;
+}
+.config-problems li { padding: 2px 0; }
+.config-actions { display: flex; align-items: center; gap: 12px; }
+.config-actions button {
+  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 7px 16px; cursor: pointer; font-size: 13px;
+}
+.config-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.config-actions button:disabled { opacity: .55; cursor: default; }
+.config-actions button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e14; font-weight: 600; }
+
 .markdown-body { padding: 4px 18px 18px; color: var(--text); }
 .markdown-body > :first-child { margin-top: 8px; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 { line-height: 1.25; margin: 18px 0 8px; }

@@ -50,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/signals", s.requireAuth(s.signalsAPI))
 	mux.HandleFunc("/api/collectors", s.requireAuth(s.collectorsAPI))
 	mux.HandleFunc("/api/units/", s.requireAuth(s.collectUnit))
+	mux.HandleFunc("/api/config", s.requireAuth(s.configAPI))
+	mux.HandleFunc("/api/config/", s.requireAuth(s.configItemAPI))
 	mux.HandleFunc("/api/report", s.requireAuth(s.reportStart))
 	mux.HandleFunc("/api/report/", s.requireAuth(s.reportSub))
 	mux.HandleFunc("/ingest", s.requireAuth(s.ingest))

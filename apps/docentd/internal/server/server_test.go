@@ -80,6 +80,7 @@ func TestAuth_requiredWhenTokenSet(t *testing.T) {
 		{http.MethodPost, "/api/workitems/SALSA-1/launch"},
 		{http.MethodGet, "/api/signals"},
 		{http.MethodGet, "/api/collectors"},
+		{http.MethodGet, "/api/config"},
 		{http.MethodPost, "/api/report"},
 		{http.MethodGet, "/api/report/meta"},
 	}

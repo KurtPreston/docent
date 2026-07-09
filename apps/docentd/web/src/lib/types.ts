@@ -158,6 +158,24 @@ export type ReportRequest = {
   prompt?: string;
 };
 
+// Settings page: mirrors the docentd /api/config payloads.
+
+export type ConfigFileID = "config" | "docentd";
+
+export type ConfigFileView = {
+  id: ConfigFileID;
+  label: string;
+  path: string;
+  content: string;
+  exists: boolean;
+};
+
+export type ConfigSaveResult = {
+  ok: boolean;
+  problems?: string[];
+  error?: string;
+};
+
 export type WorkItemDetail = {
   key: string;
   title?: string;
