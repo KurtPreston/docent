@@ -12,6 +12,10 @@ LOG_DIR="$HOME/Library/Logs"
 DOCENT_SERVICE_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 CONFIG_DIR="${DOCENT_CONFIG_DIR:-$HOME/.config/docent}"
 CONFIG_PATH="$CONFIG_DIR/docentd.yaml"
+# Installer-owned record of the last remote install (real endpoint + tunnel
+# choice), so a re-run can reuse it. The runtime .env keeps DOCENT_URL pointed at
+# the tunnel loopback, so the real host can't be recovered from it.
+REMOTE_STATE="$CONFIG_DIR/remote.conf"
 LEGACY_CONFIG_DIR="$ROOT/userdata"
 WEB_ROOT="$ROOT/apps/docentd/web"
 DOCENT_PORT=39787
@@ -31,6 +35,13 @@ SSH_IDENTITY="${DOCENT_TUNNEL_IDENTITY:-}"
 NODE="${DOCENT_NODE:-node}"
 NPM="${DOCENT_NPM:-npm}"
 
+# Populated by read_saved_remote_state from $REMOTE_STATE (last remote install).
+SAVED_URL=""
+SAVED_TOKEN=""
+SAVED_USE_TUNNEL=""
+SAVED_SSH_HOST=""
+SAVED_SSH_IDENTITY=""
+
 usage() {
   cat <<'EOF'
 Usage: install-docent-macos.sh [options]
@@ -44,7 +55,10 @@ On first run, asks whether docentd runs on this Mac (local) or remotely.
 Local installs build the dashboard (Vite/React) + docentd (dashboard embedded
 into the binary via -tags embed), run docent-setup when needed, and register
 its LaunchAgent. Remote installs point hooks/launcher at the remote docentd
-URL you provide (nothing is built locally).
+URL you provide (nothing is built locally). On a re-run it first offers to reuse
+the previous install's config (the local/remote choice, plus the remote
+URL/token/tunnel host), so updating never forces you to re-pick the deployment
+or retype credentials; DOCENTD_URL still overrides.
 
 Options:
   --hooks           Install Cursor hooks even if Cursor.app is not found
@@ -140,6 +154,61 @@ resolve_install_hooks() {
   esac
 }
 
+# read_saved_remote_state loads the last remote install's endpoint/tunnel choice
+# from $REMOTE_STATE (written by write_remote_config) into SAVED_* globals.
+read_saved_remote_state() {
+  [ -f "$REMOTE_STATE" ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      \#*|"") continue ;;
+    esac
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in
+      DOCENTD_URL) SAVED_URL="$val" ;;
+      DOCENTD_TOKEN) SAVED_TOKEN="$val" ;;
+      USE_TUNNEL) SAVED_USE_TUNNEL="$val" ;;
+      SSH_HOST) SAVED_SSH_HOST="$val" ;;
+      SSH_IDENTITY) SAVED_SSH_IDENTITY="$val" ;;
+    esac
+  done <"$REMOTE_STATE"
+}
+
+# offer_reuse_config offers to reuse a previous install before asking anything,
+# restoring the prior local/remote choice (and the remote URL/token/tunnel host).
+# Sets DOCENTD_MODE when the config is reused; leaves it unset otherwise.
+offer_reuse_config() {
+  local ans
+  read_saved_remote_state
+  if [ -n "$SAVED_URL" ]; then
+    echo ""
+    echo "Found existing docent config (remote docentd):"
+    echo "  URL    $SAVED_URL"
+    if [ -n "$SAVED_TOKEN" ]; then echo "  token  set"; else echo "  token  (none)"; fi
+    if [ "$SAVED_USE_TUNNEL" = 1 ] && [ -n "$SAVED_SSH_HOST" ]; then echo "  tunnel via $SAVED_SSH_HOST"; fi
+    printf "Reuse this config? [Y/n]: "
+    read -r ans
+    case "${ans:-Y}" in
+      n|N|no|No) return 0 ;;
+    esac
+    DOCENTD_MODE=remote
+    DOCENTD_URL="$SAVED_URL"
+    [ -n "$DOCENTD_TOKEN" ] || DOCENTD_TOKEN="$SAVED_TOKEN"
+    if [ "$SAVED_USE_TUNNEL" = 0 ]; then USE_TUNNEL=0; else USE_TUNNEL=1; fi
+    [ -n "$SSH_HOST" ] || SSH_HOST="$SAVED_SSH_HOST"
+    [ -n "$SSH_IDENTITY" ] || SSH_IDENTITY="$SAVED_SSH_IDENTITY"
+  elif [ -f "$CONFIG_PATH" ]; then
+    echo ""
+    echo "Found existing docent config (local docentd)."
+    printf "Reuse this config? [Y/n]: "
+    read -r ans
+    case "${ans:-Y}" in
+      n|N|no|No) return 0 ;;
+    esac
+    DOCENTD_MODE=local
+  fi
+}
+
 resolve_docentd_location() {
   if [ -n "$DOCENTD_URL" ]; then
     DOCENTD_MODE=remote
@@ -149,6 +218,8 @@ resolve_docentd_location() {
     DOCENTD_MODE=local
     return 0
   fi
+  offer_reuse_config
+  [ -n "$DOCENTD_MODE" ] && return 0
   echo ""
   echo "Where does docentd run?"
   echo "  1) This Mac (build + launchd docentd locally) [default]"
@@ -223,6 +294,7 @@ write_remote_config() {
   if [ "$DRY_RUN" -eq 1 ]; then
     run printf '%s\n' "write DOCENT_URL=$sessions_url / DOCENT_TOKEN to $env_file"
     run printf '%s\n' "write $CONFIG_DIR/launcher.lua (url=$sessions_url)"
+    run printf '%s\n' "write $REMOTE_STATE (real endpoint $DOCENTD_URL for reuse)"
     return 0
   fi
   touch "$env_file"
@@ -246,6 +318,19 @@ return {
   wsmPort = $WSM_PORT,
 }
 EOF
+
+  # Installer-only record of the *real* endpoint + tunnel choice so the next run
+  # can reuse it (the .env DOCENT_URL above is the tunnel loopback, not the host).
+  ( umask 177
+    cat >"$REMOTE_STATE" <<EOF
+# Written by install-docent-macos.sh so a re-run can reuse this config.
+DOCENTD_URL=$DOCENTD_URL
+DOCENTD_TOKEN=$DOCENTD_TOKEN
+USE_TUNNEL=$USE_TUNNEL
+SSH_HOST=$SSH_HOST
+SSH_IDENTITY=$SSH_IDENTITY
+EOF
+  )
 }
 
 run_docent_setup_if_needed() {
