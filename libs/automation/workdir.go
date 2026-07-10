@@ -1,0 +1,188 @@
+package automation
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/KurtPreston/docent/libs/config/docentconfig"
+)
+
+// WorkdirMode selects how an agent action provisions its working directory.
+const (
+	WorkdirWorktree = "worktree"  // docent-owned bare clone + branch worktree
+	WorkdirOpenPath = "open_path" // developer's existing checkout
+)
+
+// WorkdirRequest describes a directory to provision for an agent job.
+type WorkdirRequest struct {
+	Mode      string // worktree | open_path
+	Repo      string // owner/repo
+	Branch    string
+	RemoteURL string // git remote URL for cloning
+	OpenPath  string // developer's checkout (for open_path, or object reference)
+	StateDir  string // override state root; empty → docentconfig.StateDir()
+}
+
+// WorkdirResult is a provisioned working directory.
+type WorkdirResult struct {
+	Path       string
+	ClonePath  string // bare clone path when Mode=worktree
+	Cleanup    func() error
+	RemoveTree bool // if true, Cleanup removes the worktree
+}
+
+// ProvisionWorkdir creates or reuses a working directory for an agent job.
+func ProvisionWorkdir(ctx context.Context, req WorkdirRequest) (WorkdirResult, error) {
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" {
+		mode = WorkdirWorktree
+	}
+	switch mode {
+	case WorkdirOpenPath:
+		path := strings.TrimSpace(req.OpenPath)
+		if path == "" {
+			return WorkdirResult{}, fmt.Errorf("workdir open_path requires OpenPath")
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			return WorkdirResult{}, fmt.Errorf("open_path %q is not a directory: %w", path, err)
+		}
+		return WorkdirResult{Path: path, Cleanup: func() error { return nil }}, nil
+	case WorkdirWorktree:
+		return provisionWorktree(ctx, req)
+	default:
+		return WorkdirResult{}, fmt.Errorf("unknown workdir mode %q", mode)
+	}
+}
+
+func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, error) {
+	branch := strings.TrimSpace(req.Branch)
+	if branch == "" {
+		return WorkdirResult{}, fmt.Errorf("workdir worktree requires Branch")
+	}
+	remote := strings.TrimSpace(req.RemoteURL)
+	if remote == "" {
+		return WorkdirResult{}, fmt.Errorf("workdir worktree requires RemoteURL")
+	}
+	state := strings.TrimSpace(req.StateDir)
+	if state == "" {
+		state = docentconfig.StateDir()
+	}
+	repoKey := sanitizePath(req.Repo)
+	if repoKey == "" {
+		repoKey = sanitizePath(filepath.Base(strings.TrimSuffix(remote, ".git")))
+	}
+	clonePath := filepath.Join(state, "repos", repoKey+".git")
+	wtPath := filepath.Join(state, "worktrees", repoKey, sanitizePath(branch))
+
+	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
+		return WorkdirResult{}, err
+	}
+	if err := ensureBareClone(ctx, clonePath, remote, req.OpenPath); err != nil {
+		return WorkdirResult{}, err
+	}
+	if err := runGit(ctx, clonePath, "fetch", "origin", branch); err != nil {
+		// Try fetching all if the specific branch ref fails.
+		if err2 := runGit(ctx, clonePath, "fetch", "origin"); err2 != nil {
+			return WorkdirResult{}, fmt.Errorf("git fetch: %v (also: %v)", err, err2)
+		}
+	}
+
+	if _, err := os.Stat(wtPath); err == nil {
+		// Reuse existing worktree; reset to origin/branch.
+		_ = runGit(ctx, wtPath, "fetch", "origin", branch)
+		_ = runGit(ctx, wtPath, "checkout", branch)
+		_ = runGit(ctx, wtPath, "reset", "--hard", "origin/"+branch)
+		return WorkdirResult{
+			Path:      wtPath,
+			ClonePath: clonePath,
+			Cleanup:   func() error { return nil },
+		}, nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
+		return WorkdirResult{}, err
+	}
+	// Prefer tracking origin/branch; fall back to creating from FETCH_HEAD.
+	if err := runGit(ctx, clonePath, "worktree", "add", "--force", wtPath, branch); err != nil {
+		if err2 := runGit(ctx, clonePath, "worktree", "add", "--force", "-b", branch, wtPath, "origin/"+branch); err2 != nil {
+			return WorkdirResult{}, fmt.Errorf("git worktree add: %v (also: %v)", err, err2)
+		}
+	}
+	return WorkdirResult{
+		Path:       wtPath,
+		ClonePath:  clonePath,
+		RemoveTree: true,
+		Cleanup: func() error {
+			_ = runGit(context.Background(), clonePath, "worktree", "remove", "--force", wtPath)
+			_ = os.RemoveAll(wtPath)
+			return nil
+		},
+	}, nil
+}
+
+func ensureBareClone(ctx context.Context, clonePath, remote, reference string) error {
+	if _, err := os.Stat(filepath.Join(clonePath, "HEAD")); err == nil {
+		return nil
+	}
+	_ = os.RemoveAll(clonePath)
+	args := []string{"clone", "--bare", "--filter=blob:none"}
+	if ref := strings.TrimSpace(reference); ref != "" {
+		if _, err := os.Stat(ref); err == nil {
+			args = append(args, "--reference", ref)
+		}
+	}
+	args = append(args, remote, clonePath)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git clone --bare: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func runGit(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func sanitizePath(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		case r == '/' || r == ':' || r == ' ':
+			b.WriteByte('-')
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// ResolveRemoteURL tries to get origin URL from an existing checkout.
+func ResolveRemoteURL(ctx context.Context, openPath string) (string, error) {
+	if strings.TrimSpace(openPath) == "" {
+		return "", fmt.Errorf("empty open path")
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", openPath, "remote", "get-url", "origin")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git remote get-url: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}

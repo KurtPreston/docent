@@ -132,6 +132,23 @@ func (e *Engine) wireAutomationConnectors() {
 			return e.reg.PostMessage(ctx, dir, opts, channel, body)
 		}),
 	})
+	// Agent actions are enqueued to the durable queue for apps/docent-automations.
+	e.automations.Registry.Register("agent", automation.QueuingAgentRunner{})
+	// Also register an in-process agent runner under "agent-inline" for tests /
+	// environments without the worker.
+	e.automations.Registry.Register("agent-inline", automation.AgentRunner{
+		DefaultProvider: e.cfg.AI.Provider,
+		CursorCommand:   e.cfg.AI.Cursor.Command,
+		ClaudeCommand:   e.cfg.AI.Claude.Command,
+		ResolveRemote:   automation.ResolveRemoteURL,
+		Commenter: automation.IssueCommenterFunc(func(ctx context.Context, issueKey, body string) error {
+			dir, ok := firstDirective(e.cfg.Directives, "jira")
+			if !ok {
+				return fmt.Errorf("no enabled jira directive configured")
+			}
+			return e.reg.PostComment(ctx, dir, opts, issueKey, body)
+		}),
+	})
 }
 
 func firstDirective(dirs []userdata.Directive, collector string) (userdata.Directive, bool) {

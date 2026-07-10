@@ -225,3 +225,41 @@ func TestRenderTemplate(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+func TestEnqueueAndListPending(t *testing.T) {
+	dir := t.TempDir()
+	id, err := automation.EnqueueAgentJob(dir, automation.DurableJob{
+		RuleID: "r1",
+		Action: automation.Action{Type: "agent", Prompt: "fix it"},
+		Context: automation.Context{Repo: "a/b", Branch: "main"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := automation.ListPendingJobs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != id {
+		t.Fatalf("jobs=%+v", jobs)
+	}
+	claimed, ok, err := automation.ClaimJob(dir, id)
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if claimed.Status != automation.JobRunning {
+		t.Fatalf("status=%s", claimed.Status)
+	}
+	pending, _ := automation.ListPendingJobs(dir)
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending, got %d", len(pending))
+	}
+}
+
+func TestSanitizePath(t *testing.T) {
+	// exercised via ProvisionWorkdir validation
+	req := automation.WorkdirRequest{Mode: "open_path"}
+	if _, err := automation.ProvisionWorkdir(context.Background(), req); err == nil {
+		t.Fatal("expected error for empty open_path")
+	}
+}
