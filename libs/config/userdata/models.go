@@ -7,18 +7,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
 )
 
 const DefaultDir = "userdata"
 
 // ConfigFile is the single userdata configuration file: AI + directives +
-// optional user-declared execution modes.
+// optional user-declared execution modes and automations.
 type ConfigFile struct {
 	AI             AIConfig                      `yaml:"ai,omitempty"`
 	SessionManager SessionManagerConfig          `yaml:"session_manager,omitempty"`
 	Directives     []Directive                   `yaml:"directives,omitempty"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"execution_modes,omitempty"`
+	Automations    []automation.Rule             `yaml:"automations,omitempty"`
 	// OutputDir overrides where docent-reporter writes generated markdown.
 	// Supports a leading ~ for the home directory. When empty, the reporter
 	// falls back to its --out-dir flag, then ~/docent.
@@ -169,6 +171,14 @@ func (f ConfigFile) Validate() error {
 		}
 		problems = append(problems, validateModeConfig(path+".state", d.State)...)
 		problems = append(problems, validateModeConfig(path+".events", d.Events)...)
+	}
+	if err := automation.ValidateRules(f.Automations); err != nil {
+		var ve automation.ValidationError
+		if errors.As(err, &ve) {
+			problems = append(problems, ve.Problems...)
+		} else {
+			problems = append(problems, err.Error())
+		}
 	}
 	return validationResult(problems)
 }

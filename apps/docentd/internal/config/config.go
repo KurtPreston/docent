@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/config/configschema"
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
@@ -45,6 +46,8 @@ type DaemonConfig struct {
 	AI             userdata.AIConfig             `yaml:"-"`
 	SessionManager userdata.SessionManagerConfig `yaml:"-"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"-"`
+	Automations    []automation.Rule             `yaml:"-"`
+	OutputDir      string                        `yaml:"-"`
 }
 
 func Load(path string) (DaemonConfig, error) {
@@ -142,6 +145,12 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 	if len(cfg.ExecutionModes) == 0 {
 		cfg.ExecutionModes = file.ExecutionModes
 	}
+	if len(cfg.Automations) == 0 {
+		cfg.Automations = file.Automations
+	}
+	if cfg.OutputDir == "" {
+		cfg.OutputDir = file.OutputDir
+	}
 	if cfg.ExtraConfig != "" {
 		extra, err := loadConfigFile(cfg.ExtraConfig)
 		if err != nil {
@@ -156,6 +165,12 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 		}
 		if len(cfg.ExecutionModes) == 0 {
 			cfg.ExecutionModes = extra.ExecutionModes
+		}
+		if len(cfg.Automations) == 0 {
+			cfg.Automations = extra.Automations
+		}
+		if cfg.OutputDir == "" {
+			cfg.OutputDir = extra.OutputDir
 		}
 	}
 	return nil

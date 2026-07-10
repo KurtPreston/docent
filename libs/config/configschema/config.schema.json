@@ -23,12 +23,143 @@
         "$ref": "#/$defs/executionMode"
       }
     },
+    "automations": {
+      "type": "array",
+      "description": "IFTTT-style rules that react to signals, state transitions, or a schedule.",
+      "items": {
+        "$ref": "#/$defs/automationRule"
+      }
+    },
     "output_dir": {
       "type": "string",
       "description": "Directory where docent-reporter writes generated markdown. Supports a leading ~ for the home directory. Defaults to ~/docent."
     }
   },
   "$defs": {
+    "automationRule": {
+      "type": "object",
+      "required": ["id", "enabled", "trigger", "actions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "trigger": { "$ref": "#/$defs/automationTrigger" },
+        "conditions": { "$ref": "#/$defs/automationConditions" },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/automationAction" }
+        }
+      }
+    },
+    "automationTrigger": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["signal", "transition", "schedule"]
+        },
+        "source": { "type": "string" },
+        "kind": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "match": { "$ref": "#/$defs/automationMatch" },
+        "when": { "$ref": "#/$defs/automationWhen" },
+        "cron": {
+          "type": "string",
+          "description": "5-field cron expression (min hour dom month dow)"
+        },
+        "at": {
+          "type": "string",
+          "description": "Daily time-of-day HH:MM (local)",
+          "pattern": "^([01]?[0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "weekday": {
+          "type": "string",
+          "description": "Optional weekday name restricting 'at' (e.g. friday)"
+        }
+      }
+    },
+    "automationMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string", "description": "Regex matched against Title + Summary" },
+        "ticket_key": {
+          "type": "boolean",
+          "description": "Extract a known JIRA ticket key from the signal text"
+        },
+        "fields": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "automationWhen": {
+      "type": "object",
+      "required": ["field"],
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" }
+      }
+    },
+    "automationConditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "self": { "type": "boolean" },
+        "repos": { "type": "array", "items": { "type": "string" } },
+        "dedupe_key": { "type": "string" },
+        "cooldown": {
+          "type": "string",
+          "description": "Duration suppressing re-fires (e.g. 30m)"
+        }
+      }
+    },
+    "automationAction": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["webhook", "shell", "jira-comment", "slack-post", "agent", "report", "open"]
+        },
+        "url": { "type": "string" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": { "type": "string" },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "type": "string" },
+        "issue": { "type": "string" },
+        "channel": { "type": "string" },
+        "provider": { "type": "string" },
+        "workdir": { "type": "string", "enum": ["worktree", "open_path"] },
+        "prompt": { "type": "string" },
+        "post": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "mode": { "type": "string" },
+        "deliver": { "type": "string", "enum": ["file", "slack", "webhook"] },
+        "out_path": { "type": "string" },
+        "days": { "type": "integer", "minimum": 1 }
+      }
+    },
     "executionMode": {
       "type": "object",
       "required": ["id"],

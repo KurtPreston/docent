@@ -11,6 +11,7 @@ import (
 
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
@@ -192,6 +193,15 @@ type Engine struct {
 	// on each rebuild.
 	annotations map[string]annotationEntry
 
+	// automations evaluates rules after per-unit collection. Nil when no
+	// rules are configured.
+	automations *automation.Dispatcher
+
+	// entitySnapshots holds the previous entity state per unit key, used for
+	// transition detection. Keyed by unitKey string (directive/mode). Guarded
+	// by mu; updated only from collectUnit after a successful collect.
+	entitySnapshots map[string]map[string]model.Entity
+
 	refreshing sync.Mutex // single-flight guard for on-request collection
 	annotating sync.Mutex // single-flight guard for the annotation fetch
 }
@@ -205,14 +215,18 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 			TicketPattern: cfg.TicketPattern,
 			Projects:      deriveTicketProjects(cfg),
 		},
-		collecting:     map[unitKey]bool{},
-		entityWorkItem: map[string]string{},
-		annotations:    map[string]annotationEntry{},
+		collecting:      map[unitKey]bool{},
+		entityWorkItem:  map[string]string{},
+		annotations:     map[string]annotationEntry{},
+		entitySnapshots: map[string]map[string]model.Entity{},
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
 	e.jiraBaseURL = jiraBaseURL(cfg)
 	e.units = e.buildUnits()
+	if len(cfg.Automations) > 0 {
+		e.automations = automation.NewDispatcher(cfg.Automations)
+	}
 	return e
 }
 
@@ -574,6 +588,8 @@ func (e *Engine) RefreshOnRequest(ctx context.Context) Dashboard {
 // collectUnit runs one unit and merges the result into its cache slice:
 // state units replace; events units accumulate (append + dedup by stable id +
 // age-out beyond the lookback) and advance the watermark.
+// After a successful collect it evaluates automations against newly observed
+// signals and (for state units) entity state transitions.
 func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	now := time.Now()
 	opts := &collectors.CollectOpts{
@@ -599,10 +615,19 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	if u.query != "" {
 		d = withQuery(d, u.query)
 	}
-	signals, err := e.reg.CollectUnit(ctx, d, u.mode, opts)
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	prevIDs := signalIDSet(u.signals)
+	snapKey := u.key.Directive + "/" + string(u.mode)
+	prevEntities := e.entitySnapshots[snapKey]
+	e.mu.Unlock()
+
+	signals, err := e.reg.CollectUnit(ctx, d, u.mode, opts)
+
+	var newSignals []model.Signal
+	var nextEntities map[string]model.Entity
+
+	e.mu.Lock()
 	u.lastRun = now
 	if err != nil {
 		u.lastErr = err.Error()
@@ -610,13 +635,27 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 		u.lastErr = ""
 		if u.mode == collectors.ModeState {
 			u.signals = signals
+			// State units: fire signal rules for newly appearing StableIDs,
+			// and transition rules against the previous entity snapshot.
+			newSignals = filterNewSignals(signals, prevIDs)
+			nextEntities = e.entitiesByID(signals)
+			e.entitySnapshots[snapKey] = nextEntities
 		} else {
+			// Events units: the collector already returns the window since
+			// watermark; treat the whole batch as new for automation matching
+			// (dedupe/cooldown in the dispatcher prevents re-fires).
+			newSignals = signals
 			u.signals = mergeEvents(u.signals, signals, cutoff)
 			u.watermark = now
 		}
 	}
 	if u.interval > 0 {
 		u.nextDue = now.Add(u.interval)
+	}
+	e.mu.Unlock()
+
+	if err == nil && e.automations != nil {
+		e.evaluateAutomations(ctx, newSignals, prevEntities, nextEntities)
 	}
 }
 
