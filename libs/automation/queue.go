@@ -15,15 +15,22 @@ import (
 
 // DurableJob is a persisted automation job for the out-of-process worker.
 type DurableJob struct {
-	ID        string    `json:"id"`
-	RuleID    string    `json:"ruleId"`
-	Status    JobStatus `json:"status"`
-	Action    Action    `json:"action"`
-	Context   Context   `json:"context"`
-	Error     string    `json:"error,omitempty"`
-	Message   string    `json:"message,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID       string    `json:"id"`
+	RuleID   string    `json:"ruleId"`
+	Status   JobStatus `json:"status"`
+	Action   Action    `json:"action"`
+	Context  Context   `json:"context"`
+	Error    string    `json:"error,omitempty"`
+	Message  string    `json:"message,omitempty"`
+	// ConfigDir and JiraDirective let the worker perform post-steps that need
+	// credentials (e.g. post.jira_comment). JiraDirective is a serialized
+	// userdata.Directive; it is carried as raw JSON so this package does not
+	// import userdata (which would create an import cycle). The worker
+	// unmarshals it and builds a collector to post the comment.
+	ConfigDir     string          `json:"configDir,omitempty"`
+	JiraDirective json.RawMessage `json:"jiraDirective,omitempty"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	UpdatedAt     time.Time       `json:"updatedAt"`
 }
 
 // QueueDir returns the durable job queue directory.
@@ -183,14 +190,21 @@ func EventFromContext(ruleID string, action Action, ctx Context) Event {
 // running them in-process. The docent-automations worker drains the queue.
 type QueuingAgentRunner struct {
 	StateDir string
+	// ConfigDir and JiraDirectiveJSON are persisted onto each job so the
+	// worker can perform post-steps that need credentials (post.jira_comment).
+	// JiraDirectiveJSON is a serialized userdata.Directive.
+	ConfigDir         string
+	JiraDirectiveJSON []byte
 }
 
 func (r QueuingAgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	actx := EventContext(ev)
 	_, err := EnqueueAgentJob(r.StateDir, DurableJob{
-		RuleID:  ev.Rule.ID,
-		Action:  action,
-		Context: actx,
+		RuleID:        ev.Rule.ID,
+		Action:        action,
+		Context:       actx,
+		ConfigDir:     r.ConfigDir,
+		JiraDirective: json.RawMessage(r.JiraDirectiveJSON),
 	})
 	return err
 }

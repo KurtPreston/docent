@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -146,7 +147,16 @@ func (e *Engine) wireAutomationConnectors() {
 		}),
 	})
 	// Agent actions are enqueued to the durable queue for apps/docent-automations.
-	e.automations.Registry.Register("agent", automation.QueuingAgentRunner{})
+	// Persist the JIRA directive + config dir so the worker can run
+	// post.jira_comment steps with real credentials.
+	var jiraDirJSON []byte
+	if dir, ok := firstDirective(e.cfg.Directives, "jira"); ok {
+		jiraDirJSON, _ = json.Marshal(dir)
+	}
+	e.automations.Registry.Register("agent", automation.QueuingAgentRunner{
+		ConfigDir:         e.cfg.ConfigDir,
+		JiraDirectiveJSON: jiraDirJSON,
+	})
 	// Also register an in-process agent runner under "agent-inline" for tests /
 	// environments without the worker.
 	e.automations.Registry.Register("agent-inline", automation.AgentRunner{

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/automation"
+	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
 func main() {
@@ -70,11 +73,33 @@ func drainOnce(ctx context.Context, stateDir string, runner automation.AgentRunn
 			continue
 		}
 		log.Printf("running job %s rule=%s", claimed.ID, claimed.RuleID)
-		if err := automation.ProcessAgentJob(ctx, stateDir, claimed, runner); err != nil {
+		jobRunner := runner
+		jobRunner.Commenter = commenterForJob(claimed)
+		if err := automation.ProcessAgentJob(ctx, stateDir, claimed, jobRunner); err != nil {
 			log.Printf("job %s failed: %v", claimed.ID, err)
 			continue
 		}
 		log.Printf("job %s done", claimed.ID)
 	}
 	return nil
+}
+
+// commenterForJob builds a JIRA commenter from the directive persisted on the
+// job, so post.jira_comment steps run with real credentials. Returns nil when
+// the job carries no JIRA directive (the runner then errors only if a comment
+// post-step is actually requested).
+func commenterForJob(job automation.DurableJob) automation.IssueCommenter {
+	if len(job.JiraDirective) == 0 {
+		return nil
+	}
+	var dir userdata.Directive
+	if err := json.Unmarshal(job.JiraDirective, &dir); err != nil {
+		log.Printf("job %s: bad jira directive: %v", job.ID, err)
+		return nil
+	}
+	reg := collectors.NewRegistry(nil)
+	opts := &collectors.CollectOpts{UserdataDir: job.ConfigDir}
+	return automation.IssueCommenterFunc(func(ctx context.Context, issueKey, body string) error {
+		return reg.PostComment(ctx, dir, opts, issueKey, body)
+	})
 }
