@@ -256,6 +256,18 @@ type ReferenceResolver interface {
 	ResolveRefs(ctx context.Context, directive userdata.Directive, opts *CollectOpts, refs []string) ([]StatusItem, error)
 }
 
+// CommentWriter is optionally implemented by collectors that can post a comment
+// on a referenced item (e.g. a JIRA issue). Used by Docent Automations.
+type CommentWriter interface {
+	PostComment(ctx context.Context, directive userdata.Directive, opts *CollectOpts, issueKey, body string) error
+}
+
+// MessagePoster is optionally implemented by collectors that can post a message
+// to a chat channel (e.g. Slack). Used by Docent Automations.
+type MessagePoster interface {
+	PostMessage(ctx context.Context, directive userdata.Directive, opts *CollectOpts, channel, body string) error
+}
+
 // ValidationIssue describes a single problem with a directive's configuration
 // or runtime environment that would prevent (or degrade) collection. Validators
 // return zero or more issues; an empty slice means the directive looks ready.
@@ -363,6 +375,32 @@ func (r *Registry) ResolveRefs(ctx context.Context, d userdata.Directive, opts *
 		return nil, fmt.Errorf("collector %q does not support reference resolution", d.Collector)
 	}
 	return rr.ResolveRefs(ctx, d, opts, refs)
+}
+
+// PostComment dispatches to the directive collector's CommentWriter capability.
+func (r *Registry) PostComment(ctx context.Context, d userdata.Directive, opts *CollectOpts, issueKey, body string) error {
+	c, ok := r.collectors[d.Collector]
+	if !ok {
+		return fmt.Errorf("directive %s uses unknown collector %q", d.ID, d.Collector)
+	}
+	cw, ok := c.(CommentWriter)
+	if !ok {
+		return fmt.Errorf("collector %q does not support posting comments", d.Collector)
+	}
+	return cw.PostComment(ctx, d, opts, issueKey, body)
+}
+
+// PostMessage dispatches to the directive collector's MessagePoster capability.
+func (r *Registry) PostMessage(ctx context.Context, d userdata.Directive, opts *CollectOpts, channel, body string) error {
+	c, ok := r.collectors[d.Collector]
+	if !ok {
+		return fmt.Errorf("directive %s uses unknown collector %q", d.ID, d.Collector)
+	}
+	mp, ok := c.(MessagePoster)
+	if !ok {
+		return fmt.Errorf("collector %q does not support posting messages", d.Collector)
+	}
+	return mp.PostMessage(ctx, d, opts, channel, body)
 }
 
 func (r *Registry) Names() []string {

@@ -199,13 +199,13 @@ type slackReplies struct {
 // search.messages results (the channel and team data is nested differently
 // from conversations.history).
 type slackSearchMatch struct {
-	Type    string `json:"type"`
-	User    string `json:"user,omitempty"`
+	Type     string `json:"type"`
+	User     string `json:"user,omitempty"`
 	Username string `json:"username,omitempty"`
-	Text    string `json:"text"`
-	TS      string `json:"ts"`
-	Team    string `json:"team,omitempty"`
-	Channel struct {
+	Text     string `json:"text"`
+	TS       string `json:"ts"`
+	Team     string `json:"team,omitempty"`
+	Channel  struct {
 		ID   string `json:"id"`
 		Name string `json:"name,omitempty"`
 	} `json:"channel"`
@@ -790,6 +790,41 @@ func (c SlackCollector) CollectEvents(ctx context.Context, directive userdata.Di
 
 	progress.SetStage("authors")
 	return finalize(), nil
+}
+
+// PostMessage posts a Slack message via chat.postMessage. channel may be a
+// channel ID (C…) or name (#foo). Requires chat:write (or chat:write:user)
+// on the configured user token — the collector's read scopes alone are not
+// sufficient.
+func (c SlackCollector) PostMessage(ctx context.Context, directive userdata.Directive, opts *CollectOpts, channel, body string) error {
+	channel = strings.TrimSpace(channel)
+	body = strings.TrimSpace(body)
+	if channel == "" {
+		return fmt.Errorf("slack channel is required")
+	}
+	if body == "" {
+		return fmt.Errorf("slack message body is required")
+	}
+	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
+	if tokenKey == "" {
+		return fmt.Errorf("slack credential missing (set credential_refs.token)")
+	}
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
+	}
+	token := userdata.ResolveEnv(userdataDir, tokenKey)
+	if token == "" {
+		return fmt.Errorf("slack token env %q is empty", tokenKey)
+	}
+	params := url.Values{}
+	params.Set("channel", strings.TrimPrefix(channel, "#"))
+	params.Set("text", body)
+	var resp slackResponseMeta
+	if err := c.callAPI(ctx, token, http.MethodPost, "chat.postMessage", params, &resp, opts, directive.ID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ValidateDirective resolves the configured token, verifies it via auth.test,

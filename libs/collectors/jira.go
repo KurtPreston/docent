@@ -167,6 +167,80 @@ func (c JiraCollector) ResolveRefs(ctx context.Context, directive userdata.Direc
 	return items, nil
 }
 
+// PostComment adds a comment to a JIRA issue via POST /rest/api/2/issue/{key}/comment.
+func (c JiraCollector) PostComment(ctx context.Context, directive userdata.Directive, opts *CollectOpts, issueKey, body string) error {
+	issueKey = strings.ToUpper(strings.TrimSpace(issueKey))
+	body = strings.TrimSpace(body)
+	if issueKey == "" {
+		return fmt.Errorf("jira issue key is required")
+	}
+	if body == "" {
+		return fmt.Errorf("jira comment body is required")
+	}
+	base, secret, email, useBearer, err := c.resolveAuth(directive, opts)
+	if err != nil {
+		return err
+	}
+	api := strings.TrimRight(base, "/") + "/rest/api/2/issue/" + url.PathEscape(issueKey) + "/comment"
+	payload, err := json.Marshal(map[string]string{"body": body})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api, strings.NewReader(string(payload)))
+	if err != nil {
+		return err
+	}
+	if useBearer {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	} else {
+		req.SetBasicAuth(email, secret)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	res, respBody, err := doAndReadHTTP(c.client(), req, 1<<20, opts, directive.ID)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("jira comment %s: %s: %s", issueKey, res.Status, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+// resolveAuth returns base URL and credentials for a JIRA directive.
+func (c JiraCollector) resolveAuth(directive userdata.Directive, opts *CollectOpts) (base, secret, email string, useBearer bool, err error) {
+	base = strings.TrimSpace(directive.Config["base_url"])
+	if base == "" {
+		return "", "", "", false, fmt.Errorf("config.base_url is required")
+	}
+	userdataDir := ""
+	if opts != nil {
+		userdataDir = opts.UserdataDir
+	}
+	patKey := strings.TrimSpace(directive.CredentialRefs["pat"])
+	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
+	email = strings.TrimSpace(directive.Config["email"])
+	switch {
+	case patKey != "":
+		secret = userdata.ResolveEnv(userdataDir, patKey)
+		if secret == "" {
+			return "", "", "", false, fmt.Errorf("jira pat env %q is empty", patKey)
+		}
+		return base, secret, email, true, nil
+	case tokenKey != "":
+		secret = userdata.ResolveEnv(userdataDir, tokenKey)
+		if secret == "" {
+			return "", "", "", false, fmt.Errorf("jira token env %q is empty", tokenKey)
+		}
+		if email == "" {
+			return "", "", "", false, fmt.Errorf("config.email is required for Jira API token (Basic) auth")
+		}
+		return base, secret, email, false, nil
+	default:
+		return "", "", "", false, fmt.Errorf("jira credential missing (set credential_refs.pat in userdata/.env)")
+	}
+}
+
 // runJiraSearch resolves credentials, executes the JQL search, and returns the
 // parsed result plus the trimmed base URL. Auth prefers a Personal Access
 // Token (Bearer); it falls back to email + API token (Basic) for legacy
@@ -176,38 +250,9 @@ func (c JiraCollector) runJiraSearch(ctx context.Context, directive userdata.Dir
 		maxResults = jiraDefaultMaxResults
 	}
 	var parsed jiraSearchResult
-	base := strings.TrimSpace(directive.Config["base_url"])
-	if base == "" {
-		return parsed, "", fmt.Errorf("config.base_url is required")
-	}
-	userdataDir := ""
-	if opts != nil {
-		userdataDir = opts.UserdataDir
-	}
-	patKey := strings.TrimSpace(directive.CredentialRefs["pat"])
-	tokenKey := strings.TrimSpace(directive.CredentialRefs["token"])
-	email := strings.TrimSpace(directive.Config["email"])
-	var (
-		secret    string
-		useBearer bool
-	)
-	switch {
-	case patKey != "":
-		secret = userdata.ResolveEnv(userdataDir, patKey)
-		if secret == "" {
-			return parsed, "", fmt.Errorf("jira pat env %q is empty", patKey)
-		}
-		useBearer = true
-	case tokenKey != "":
-		secret = userdata.ResolveEnv(userdataDir, tokenKey)
-		if secret == "" {
-			return parsed, "", fmt.Errorf("jira token env %q is empty", tokenKey)
-		}
-		if email == "" {
-			return parsed, "", fmt.Errorf("config.email is required for Jira API token (Basic) auth")
-		}
-	default:
-		return parsed, "", fmt.Errorf("jira credential missing (set credential_refs.pat in userdata/.env)")
+	base, secret, email, useBearer, err := c.resolveAuth(directive, opts)
+	if err != nil {
+		return parsed, "", err
 	}
 	api := strings.TrimRight(base, "/") + "/rest/api/2/search"
 	q := url.Values{}

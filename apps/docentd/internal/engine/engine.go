@@ -226,6 +226,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 	e.units = e.buildUnits()
 	if len(cfg.Automations) > 0 {
 		e.automations = automation.NewDispatcher(cfg.Automations)
+		e.wireAutomationConnectors()
 	}
 	return e
 }

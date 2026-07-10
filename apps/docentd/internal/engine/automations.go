@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/KurtPreston/docent/libs/automation"
+	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
 )
@@ -102,4 +105,40 @@ func filterNewSignals(signals []model.Signal, prev map[string]struct{}) []model.
 		out = append(out, s)
 	}
 	return out
+}
+
+// wireAutomationConnectors registers jira-comment and slack-post runners that
+// dispatch through the collector registry using the first matching directive.
+func (e *Engine) wireAutomationConnectors() {
+	if e.automations == nil || e.automations.Registry == nil {
+		return
+	}
+	opts := &collectors.CollectOpts{UserdataDir: e.cfg.ConfigDir}
+	e.automations.Registry.Register("jira-comment", automation.JiraCommentRunner{
+		Commenter: automation.IssueCommenterFunc(func(ctx context.Context, issueKey, body string) error {
+			dir, ok := firstDirective(e.cfg.Directives, "jira")
+			if !ok {
+				return fmt.Errorf("no enabled jira directive configured")
+			}
+			return e.reg.PostComment(ctx, dir, opts, issueKey, body)
+		}),
+	})
+	e.automations.Registry.Register("slack-post", automation.SlackPostRunner{
+		Poster: automation.ChatPosterFunc(func(ctx context.Context, channel, body string) error {
+			dir, ok := firstDirective(e.cfg.Directives, "slack")
+			if !ok {
+				return fmt.Errorf("no enabled slack directive configured")
+			}
+			return e.reg.PostMessage(ctx, dir, opts, channel, body)
+		}),
+	})
+}
+
+func firstDirective(dirs []userdata.Directive, collector string) (userdata.Directive, bool) {
+	for _, d := range dirs {
+		if d.Enabled && d.Collector == collector {
+			return d, true
+		}
+	}
+	return userdata.Directive{}, false
 }
