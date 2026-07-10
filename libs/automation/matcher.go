@@ -349,8 +349,17 @@ func EventContext(ev Event) Context {
 					ctx.Branch = ev.Signal.Fields["branch"]
 				}
 			}
+			if ctx.OpenPath == "" {
+				ctx.OpenPath = ev.Signal.Fields["path"]
+				if ctx.OpenPath == "" {
+					ctx.OpenPath = ev.Signal.Fields["open_path"]
+				}
+			}
 			if ctx.Ticket.Key == "" {
 				ctx.Ticket.Key = ev.Signal.Fields["key"]
+				if ctx.Ticket.Key == "" {
+					ctx.Ticket.Key = ev.Signal.Fields["ticket"]
+				}
 			}
 		}
 	}

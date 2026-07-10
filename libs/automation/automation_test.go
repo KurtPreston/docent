@@ -176,6 +176,33 @@ func TestMatchTransitions_selfCondition(t *testing.T) {
 	}
 }
 
+func TestEventContext_signalFields(t *testing.T) {
+	ev := automation.Event{
+		Rule:    automation.Rule{ID: "r"},
+		Trigger: "signal",
+		Signal: &model.Signal{
+			Source: "local-git",
+			Kind:   "commit",
+			Title:  "SALSA-900 fix things",
+			Fields: map[string]string{
+				"path":   "/code/demo",
+				"ticket": "SALSA-900",
+				"branch": "main",
+			},
+		},
+	}
+	ctx := automation.EventContext(ev)
+	if ctx.OpenPath != "/code/demo" {
+		t.Errorf("OpenPath = %q, want /code/demo (agent workdir open_path needs this)", ctx.OpenPath)
+	}
+	if ctx.Ticket.Key != "SALSA-900" {
+		t.Errorf("Ticket.Key = %q, want SALSA-900", ctx.Ticket.Key)
+	}
+	if ctx.Branch != "main" {
+		t.Errorf("Branch = %q, want main", ctx.Branch)
+	}
+}
+
 func TestValidateRules(t *testing.T) {
 	err := automation.ValidateRules([]automation.Rule{{
 		ID:      "bad",
