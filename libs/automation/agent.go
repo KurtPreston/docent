@@ -25,6 +25,10 @@ type AgentRunner struct {
 	ResolveRemote func(ctx context.Context, openPath string) (string, error)
 	// Commenter is used when post.jira_comment is set.
 	Commenter IssueCommenter
+	// StateDir roots the docent-owned clones/worktrees (worktree mode). Empty
+	// falls back to docentconfig.StateDir(); set it so the worktree location
+	// matches the queue's state dir.
+	StateDir string
 }
 
 func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
@@ -63,6 +67,7 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 		Branch:    actx.Branch,
 		RemoteURL: remote,
 		OpenPath:  actx.OpenPath,
+		StateDir:  r.StateDir,
 	})
 	if err != nil {
 		return err

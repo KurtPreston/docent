@@ -31,6 +31,7 @@ func main() {
 	runner := automation.AgentRunner{
 		DefaultProvider: *provider,
 		ResolveRemote:   automation.ResolveRemoteURL,
+		StateDir:        dir,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
