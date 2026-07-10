@@ -5,6 +5,7 @@ import { Signals } from "./pages/Signals";
 import { Collectors } from "./pages/Collectors";
 import { WorkItem } from "./pages/WorkItem";
 import { Report } from "./pages/Report";
+import { Automations } from "./pages/Automations";
 
 // Settings pulls in Monaco (a multi-MB editor bundle), so it's the one page
 // loaded lazily — every other route stays on the small, always-loaded main
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
   { path: "/signals", element: <Signals /> },
   { path: "/collectors", element: <Collectors /> },
   { path: "/report", element: <Report /> },
+  { path: "/automations", element: <Automations /> },
   {
     path: "/settings",
     element: (

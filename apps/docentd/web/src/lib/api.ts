@@ -13,6 +13,7 @@ import type {
   ConfigFileID,
   ConfigFileView,
   ConfigSaveResult,
+  AutomationsView,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -115,3 +116,7 @@ export async function collectUnit(directive: string, mode: string): Promise<void
   if (r.ok && d.ok) toast("collected " + directive + "/" + mode);
   else toast("collect failed: " + (d.error ?? r.status), true);
 }
+
+export const fetchAutomations = (): Promise<AutomationsView> =>
+  getJSON<AutomationsView>("/api/automations");
+

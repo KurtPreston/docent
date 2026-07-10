@@ -9,6 +9,7 @@ import (
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
+	"github.com/KurtPreston/docent/libs/goals"
 	"github.com/KurtPreston/docent/libs/model"
 	"github.com/KurtPreston/docent/libs/report"
 )
@@ -199,12 +200,29 @@ func (e *Engine) generateReport(ctx context.Context, modeID string, days int) (s
 		ExecutionModes: e.cfg.ExecutionModes,
 		OutputDir:      e.cfg.OutputDir,
 	}
-	res, err := report.Generate(ctx, cfg, report.Options{
+	opts := report.Options{
 		ModeID:    modeID,
 		Days:      days,
 		ConfigDir: e.cfg.ConfigDir,
 		Registry:  e.reg,
-	})
+	}
+	if modeID == "goal-alignment" {
+		gf, err := goals.Load(goals.Path(e.cfg.ConfigDir))
+		if err != nil {
+			return "", fmt.Errorf("load goals: %w", err)
+		}
+		active := goals.ActiveGoals(gf)
+		if len(active) == 0 {
+			return "", fmt.Errorf("no active goals in goals.yaml")
+		}
+		opts.Prompt = goals.AlignmentPrompt(active)
+		if days <= 0 {
+			opts.Days = 7
+		}
+		// Fall back to recent-activity collection shape when no custom mode exists.
+		opts.ModeID = "recent-activity"
+	}
+	res, err := report.Generate(ctx, cfg, opts)
 	if err != nil {
 		return "", err
 	}

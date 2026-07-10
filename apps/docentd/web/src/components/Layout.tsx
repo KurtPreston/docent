@@ -35,6 +35,9 @@ export function Layout({ mainClass, stats, controls, children }: Props) {
           <NavLink to="/report" className={navClass}>
             Report
           </NavLink>
+          <NavLink to="/automations" className={navClass}>
+            Automations
+          </NavLink>
           <NavLink to="/settings" className={navClass}>
             Settings
           </NavLink>

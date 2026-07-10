@@ -13,6 +13,7 @@ import (
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/libs/config/configschema"
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/goals"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +29,7 @@ type configFileMeta struct {
 var configFileList = []configFileMeta{
 	{ID: "config", Label: "config.yaml"},
 	{ID: "docentd", Label: "docentd.yaml"},
+	{ID: "goals", Label: "goals.yaml"},
 }
 
 // configFilePath resolves the on-disk path for a config file id, matching
@@ -39,6 +41,8 @@ func (s *Server) configFilePath(id string) (path string, ok bool) {
 		return filepath.Join(s.cfg.ConfigDir, "config.yaml"), true
 	case "docentd":
 		return s.cfg.DaemonConfigPath, true
+	case "goals":
+		return filepath.Join(s.cfg.ConfigDir, "goals.yaml"), true
 	default:
 		return "", false
 	}
@@ -158,6 +162,8 @@ func (s *Server) configSchemaAPI(w http.ResponseWriter, r *http.Request, id stri
 		body = configschema.SchemaBytes
 	case "docentd":
 		body = configschema.DaemonSchemaBytes
+	case "goals":
+		body = configschema.GoalsSchemaBytes
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no schema available for this config file"})
 		return
@@ -175,6 +181,8 @@ func validateConfigContent(id string, content []byte) []string {
 		return validateAppConfigYAML(content)
 	case "docentd":
 		return validateDaemonConfigYAML(content)
+	case "goals":
+		return validateGoalsYAML(content)
 	default:
 		return []string{"unknown config file id"}
 	}
@@ -217,6 +225,20 @@ func validateDaemonConfigYAML(content []byte) []string {
 	dec.KnownFields(true)
 	var dc config.DaemonConfig
 	if err := dec.Decode(&dc); err != nil && !errors.Is(err, io.EOF) {
+		return []string{err.Error()}
+	}
+	return nil
+}
+
+func validateGoalsYAML(content []byte) []string {
+	if len(bytes.TrimSpace(content)) == 0 {
+		return nil
+	}
+	f, err := goals.LoadFromBytes(content)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	if err := goals.Validate(f); err != nil {
 		return []string{err.Error()}
 	}
 	return nil

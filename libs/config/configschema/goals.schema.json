@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docent.local/goals.schema.json",
+  "title": "docent goals",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "repos": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "labels": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "ticket_keys": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "active": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

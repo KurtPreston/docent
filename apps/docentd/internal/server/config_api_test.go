@@ -55,7 +55,7 @@ func TestConfigAPI_listsMissingFilesAsNotExisting(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal %s: %v", rr.Body.Bytes(), err)
 	}
-	if len(resp.Files) != 2 {
+	if len(resp.Files) != 3 {
 		t.Fatalf("resp=%+v", resp)
 	}
 	for _, f := range resp.Files {

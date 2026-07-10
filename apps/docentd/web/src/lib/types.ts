@@ -160,7 +160,7 @@ export type ReportRequest = {
 
 // Settings page: mirrors the docentd /api/config payloads.
 
-export type ConfigFileID = "config" | "docentd";
+export type ConfigFileID = "config" | "docentd" | "goals";
 
 export type ConfigFileView = {
   id: ConfigFileID;
@@ -174,6 +174,45 @@ export type ConfigSaveResult = {
   ok: boolean;
   problems?: string[];
   error?: string;
+};
+
+export type AutomationTrigger = {
+  type?: string;
+  source?: string;
+  kind?: string | string[];
+  at?: string;
+  cron?: string;
+  weekday?: string;
+};
+
+export type AutomationAction = {
+  type: string;
+  [key: string]: unknown;
+};
+
+export type AutomationRule = {
+  id: string;
+  name?: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  actions: AutomationAction[];
+};
+
+export type AutomationJob = {
+  id: string;
+  ruleId: string;
+  dedupeKey?: string;
+  status: string;
+  message?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AutomationsView = {
+  ok: boolean;
+  rules: AutomationRule[];
+  jobs: AutomationJob[];
 };
 
 export type WorkItemDetail = {
