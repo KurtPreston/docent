@@ -146,20 +146,25 @@ func (s *Server) configItemAPI(w http.ResponseWriter, r *http.Request) {
 
 // configSchemaAPI handles GET /api/config/{id}/schema: the JSON Schema for a
 // config file's contents, consumed by the dashboard's Monaco editor for
-// inline validation/completion (via monaco-yaml). Only config.yaml has a
-// schema today; docentd.yaml has none yet, so this 404s for "docentd".
+// inline validation/completion (via monaco-yaml).
 func (s *Server) configSchemaAPI(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if id != "config" {
+	var body []byte
+	switch id {
+	case "config":
+		body = configschema.SchemaBytes
+	case "docentd":
+		body = configschema.DaemonSchemaBytes
+	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no schema available for this config file"})
 		return
 	}
 	w.Header().Set("Content-Type", "application/schema+json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(configschema.SchemaBytes)
+	_, _ = w.Write(body)
 }
 
 // validateConfigContent validates raw YAML for a config file id, returning a
@@ -199,12 +204,14 @@ func validateAppConfigYAML(content []byte) []string {
 	return nil
 }
 
-// validateDaemonConfigYAML validates docentd.yaml. There is no JSON Schema
-// for the daemon config (unlike config.yaml), so this decodes with
-// KnownFields to catch syntax errors, type mismatches, and typo'd keys.
+// validateDaemonConfigYAML validates docentd.yaml against the daemon JSON
+// Schema, then decodes with KnownFields as a secondary check.
 func validateDaemonConfigYAML(content []byte) []string {
 	if len(bytes.TrimSpace(content)) == 0 {
 		return nil
+	}
+	if err := configschema.ValidateDaemonYAML(content); err != nil {
+		return configschema.ValidationProblems(err)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(content))
 	dec.KnownFields(true)

@@ -54,6 +54,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/config/", s.requireAuth(s.configItemAPI))
 	mux.HandleFunc("/api/report", s.requireAuth(s.reportStart))
 	mux.HandleFunc("/api/report/", s.requireAuth(s.reportSub))
+	mux.HandleFunc("/api/hooks/", s.hooksAPI) // auth via bearer or hook secret
+	mux.HandleFunc("/api/automations", s.requireAuth(s.automationsAPI))
+	mux.HandleFunc("/api/automations/", s.requireAuth(s.automationsSub))
 	mux.HandleFunc("/ingest", s.requireAuth(s.ingest))
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux

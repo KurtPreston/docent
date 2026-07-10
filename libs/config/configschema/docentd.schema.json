@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docent.local/docentd.schema.json",
+  "title": "docentd daemon config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "HTTP listen port (default 39787)"
+    },
+    "token": {
+      "type": "string",
+      "description": "Shared-secret bearer token for data endpoints"
+    },
+    "refreshSec": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Legacy refresh hint for clients (seconds)"
+    },
+    "ticketPattern": {
+      "type": "string",
+      "description": "Optional regex override for ticket-key matching"
+    },
+    "ticketProjects": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "JIRA project keys that count as tickets (e.g. SALSA)"
+    },
+    "registryPath": {
+      "type": "string",
+      "description": "Path to sessions.json registry"
+    },
+    "configDir": {
+      "type": "string",
+      "description": "Directory containing config.yaml and .env"
+    },
+    "userdataDir": {
+      "type": "string",
+      "description": "Deprecated alias for configDir"
+    },
+    "bindHost": {
+      "type": "string",
+      "description": "Listen interface (default 0.0.0.0 when token set, else 127.0.0.1)"
+    },
+    "extraConfig": {
+      "type": "string",
+      "description": "Optional extra config.yaml merged after the primary"
+    },
+    "wsmUrl": {
+      "type": "string",
+      "description": "Local wsm HTTP base URL"
+    },
+    "onClickScript": {
+      "type": "string",
+      "description": "Hook script run when a work-item is launched"
+    },
+    "sshHost": {
+      "type": "string",
+      "description": "SSH alias for remote editor open (DOCENT_HOST)"
+    },
+    "directives": {
+      "type": "array",
+      "description": "Optional daemon-local directives appended to config.yaml",
+      "items": { "type": "object" }
+    }
+  }
+}

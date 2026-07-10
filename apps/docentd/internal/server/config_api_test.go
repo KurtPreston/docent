@@ -143,24 +143,21 @@ func TestConfigAPI_daemonConfigAcceptsKnownFields(t *testing.T) {
 	}
 }
 
-func TestConfigAPI_schemaServedForConfigOnly(t *testing.T) {
+func TestConfigAPI_schemasServedForBothFiles(t *testing.T) {
 	h, _, _ := newConfigTestServer(t)
 
-	rr := doJSON(t, h, http.MethodGet, "/api/config/config/schema", "", "")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("GET /api/config/config/schema: got %d body=%s", rr.Code, rr.Body.String())
-	}
-	var schema map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &schema); err != nil {
-		t.Fatalf("schema is not valid JSON: %v", err)
-	}
-	if len(schema) == 0 {
-		t.Fatal("schema body is empty")
-	}
-
-	rr = doJSON(t, h, http.MethodGet, "/api/config/docentd/schema", "", "")
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("GET /api/config/docentd/schema: got %d want 404 (no schema yet)", rr.Code)
+	for _, id := range []string{"config", "docentd"} {
+		rr := doJSON(t, h, http.MethodGet, "/api/config/"+id+"/schema", "", "")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET /api/config/%s/schema: got %d body=%s", id, rr.Code, rr.Body.String())
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &schema); err != nil {
+			t.Fatalf("%s schema is not valid JSON: %v", id, err)
+		}
+		if len(schema) == 0 {
+			t.Fatalf("%s schema body is empty", id)
+		}
 	}
 }
 

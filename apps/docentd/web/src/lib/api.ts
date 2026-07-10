@@ -96,7 +96,7 @@ export const validateConfigFile = (id: ConfigFileID, content: string): Promise<C
 
 // fetchConfigSchema returns the JSON Schema for a config file's contents (for
 // the Monaco editor's inline validation/completion), or null when the file
-// has no schema yet (docentd.yaml, until a later phase).
+// has no schema.
 export async function fetchConfigSchema(id: ConfigFileID): Promise<JSONSchema | null> {
   const r = await docentFetch("/api/config/" + encodeURIComponent(id) + "/schema", { cache: "no-store" });
   if (r.status === 404) return null;

@@ -11,9 +11,12 @@ import (
 )
 
 var (
-	compiledSchema *jsonschema.Schema
-	compileOnce    sync.Once
-	compileErr     error
+	compiledSchema       *jsonschema.Schema
+	compileOnce          sync.Once
+	compileErr           error
+	compiledDaemonSchema *jsonschema.Schema
+	compileDaemonOnce    sync.Once
+	compileDaemonErr     error
 )
 
 func mustCompiledSchema() (*jsonschema.Schema, error) {
@@ -28,6 +31,18 @@ func mustCompiledSchema() (*jsonschema.Schema, error) {
 	return compiledSchema, compileErr
 }
 
+func mustCompiledDaemonSchema() (*jsonschema.Schema, error) {
+	compileDaemonOnce.Do(func() {
+		c := jsonschema.NewCompiler()
+		if err := c.AddResource(DaemonSchemaURL, bytes.NewReader(DaemonSchemaBytes)); err != nil {
+			compileDaemonErr = err
+			return
+		}
+		compiledDaemonSchema, compileDaemonErr = c.Compile(DaemonSchemaURL)
+	})
+	return compiledDaemonSchema, compileDaemonErr
+}
+
 // ValidateYAML checks userdata config YAML against the embedded JSON Schema.
 func ValidateYAML(raw []byte) error {
 	raw = bytes.TrimSpace(raw)
@@ -39,6 +54,26 @@ func ValidateYAML(raw []byte) error {
 		return err
 	}
 	sch, err := mustCompiledSchema()
+	if err != nil {
+		return err
+	}
+	if err := sch.Validate(doc); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ValidateDaemonYAML checks docentd.yaml against the embedded daemon JSON Schema.
+func ValidateDaemonYAML(raw []byte) error {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil
+	}
+	var doc any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	sch, err := mustCompiledDaemonSchema()
 	if err != nil {
 		return err
 	}
