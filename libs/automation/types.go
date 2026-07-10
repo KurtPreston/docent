@@ -4,7 +4,6 @@
 package automation
 
 import (
-	"regexp"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/model"
@@ -161,9 +160,4 @@ type TicketRef struct {
 	Key   string
 	Title string
 	URL   string
-}
-
-// compiledText caches a compiled Match.Text regex.
-type compiledText struct {
-	re *regexp.Regexp
 }

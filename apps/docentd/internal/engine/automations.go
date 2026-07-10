@@ -79,10 +79,20 @@ func (e *Engine) enrichEvents(events []automation.Event) {
 	}
 }
 
+// entitiesByID builds the per-unit entity snapshot used for transition
+// detection, keyed by entity ID. It stamps State["is_self"] from the
+// originating signal's IsSelf so transition rules can evaluate the "me"
+// sentinel and the self condition (model.Entity has no IsSelf field).
 func (e *Engine) entitiesByID(signals []model.Signal) map[string]model.Entity {
-	ents := correlation.SignalsToEntities(signals, e.corrCfg)
-	out := make(map[string]model.Entity, len(ents))
-	for _, ent := range ents {
+	out := make(map[string]model.Entity, len(signals))
+	for i := range signals {
+		ent := correlation.SignalToEntity(signals[i], e.corrCfg)
+		if signals[i].IsSelf {
+			if ent.State == nil {
+				ent.State = map[string]string{}
+			}
+			ent.State["is_self"] = "true"
+		}
 		out[ent.ID] = ent
 	}
 	return out

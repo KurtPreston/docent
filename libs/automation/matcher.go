@@ -44,7 +44,10 @@ func MatchSignals(rules []Rule, signals []model.Signal, opts MatchOpts) []Event 
 }
 
 // MatchTransitions evaluates transition-type rules against state changes.
-// prev and next are keyed by entity StableID / entity ID.
+// prev and next are keyed by entity StableID / entity ID. Entities carry an
+// optional State["is_self"]="true" marker (stamped by the engine from the
+// originating signal) so the "me" sentinel and the self condition can be
+// evaluated without an IsSelf field on model.Entity.
 func MatchTransitions(rules []Rule, prev, next map[string]model.Entity, opts MatchOpts) []Event {
 	now := opts.Now
 	if now.IsZero() {
@@ -69,20 +72,24 @@ func MatchTransitions(rules []Rule, prev, next map[string]model.Entity, opts Mat
 				continue
 			}
 			newVal := ""
+			newSelf := false
 			if ent.State != nil {
 				newVal = ent.State[field]
+				newSelf = ent.State["is_self"] == "true"
 			}
 			oldVal := ""
+			oldSelf := false
 			if old, ok := prev[id]; ok && old.State != nil {
 				oldVal = old.State[field]
+				oldSelf = old.State["is_self"] == "true"
 			}
 			if oldVal == newVal {
 				continue
 			}
-			if wantFrom != "" && !valueMatch(wantFrom, oldVal) {
+			if !transitionValueMatch(wantFrom, oldVal, oldSelf) {
 				continue
 			}
-			if wantTo != "" && !valueMatch(wantTo, newVal) {
+			if !transitionValueMatch(wantTo, newVal, newSelf) {
 				continue
 			}
 			if !conditionsOK(rule.Conditions, nil, &ent) {
@@ -156,46 +163,51 @@ func matchSignalRule(rule Rule, sig *model.Signal, opts MatchOpts, now time.Time
 	}, true
 }
 
+// sourceKinds maps a trigger `source` to the entity kinds its collector
+// actually produces. An entity's Kind equals its originating signal Kind
+// (see correlation.SignalToEntity), so these are signal kinds. Sources not
+// listed here are not gated on kind — any entity kind is accepted.
+var sourceKinds = map[string]map[string]bool{
+	"jira":              {"issue": true, "issue_activity": true, "ticket": true},
+	"github":            {"pr_review_status": true, "pr": true, "pr_activity": true, "issue": true, "issue_activity": true},
+	"github-enterprise": {"pr_review_status": true, "pr": true, "pr_activity": true, "issue": true, "issue_activity": true},
+	"gitea":             {"pr_review_status": true, "pr": true, "pr_activity": true, "issue": true, "issue_activity": true},
+}
+
+// kindAliases lets a rule use a friendly `kind` and still match the concrete
+// entity kind (e.g. `kind: pr` matches `pr_review_status`, and vice versa).
+var kindAliases = map[string][]string{
+	"pr":               {"pr_review_status", "pr_activity"},
+	"pr_review_status": {"pr"},
+	"pr_activity":      {"pr"},
+	"ticket":           {"issue", "issue_activity"},
+	"issue":            {"issue_activity", "ticket"},
+	"issue_activity":   {"issue", "ticket"},
+}
+
 func sourceKindMatch(tr Trigger, ent model.Entity) bool {
-	if src := strings.TrimSpace(tr.Source); src != "" {
-		// Entity kinds are source-agnostic (ticket, pr, …); map common sources.
-		switch strings.ToLower(src) {
-		case "jira":
-			if ent.Kind != "ticket" {
-				return false
-			}
-		case "github", "github-enterprise", "gitea":
-			if ent.Kind != "pr" && ent.Kind != "issue" {
-				return false
-			}
-		}
-	}
-	if len(tr.Kind) > 0 {
-		// For transitions, Kind may refer to the originating signal kind
-		// (e.g. pr_review_status) or the entity kind. Accept either.
-		ok := kindIn(tr.Kind, ent.Kind)
-		if !ok && ent.State != nil {
-			ok = kindIn(tr.Kind, ent.State["kind"])
-		}
-		// Also accept when the trigger kind is a known signal kind that
-		// maps to this entity (pr_review_status → pr).
-		if !ok {
-			for _, k := range tr.Kind {
-				if k == "pr_review_status" && ent.Kind == "pr" {
-					ok = true
-					break
-				}
-				if (k == "issue" || k == "issue_activity") && ent.Kind == "ticket" {
-					ok = true
-					break
-				}
-			}
-		}
-		if !ok {
+	if src := strings.ToLower(strings.TrimSpace(tr.Source)); src != "" {
+		if allowed, known := sourceKinds[src]; known && !allowed[ent.Kind] {
 			return false
 		}
 	}
-	return true
+	if len(tr.Kind) == 0 {
+		return true
+	}
+	if kindIn(tr.Kind, ent.Kind) {
+		return true
+	}
+	if ent.State != nil && kindIn(tr.Kind, ent.State["kind"]) {
+		return true
+	}
+	for _, k := range tr.Kind {
+		for _, alias := range kindAliases[strings.ToLower(strings.TrimSpace(k))] {
+			if strings.EqualFold(alias, ent.Kind) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func kindIn(kinds KindSpec, kind string) bool {
@@ -207,18 +219,27 @@ func kindIn(kinds KindSpec, kind string) bool {
 	return false
 }
 
-// valueMatch treats "me" as a sentinel that matches any non-empty value when
-// the caller has already resolved identity; for exact matches it compares
-// case-insensitively. Empty want always matches.
+// valueMatch compares a wanted value against an observed one case-insensitively.
+// Empty want always matches.
 func valueMatch(want, got string) bool {
 	if want == "" {
 		return true
 	}
-	if want == "me" {
-		// "me" is resolved by the engine before matching when possible;
-		// here we accept any non-empty value as a fallback, or an exact
-		// "me" that the engine stamped.
-		return got != "" && (got == "me" || !strings.EqualFold(got, "unassigned") && got != "")
+	return strings.EqualFold(want, got)
+}
+
+// transitionValueMatch matches a When.from/to spec against a field value for a
+// transition. The sentinel "me" matches when the entity belongs to the current
+// user (is_self, stamped by the engine from the originating signal's IsSelf)
+// and the value is non-empty — i.e. a field that transitioned *to* the user
+// (e.g. assignee -> me), not one that was cleared. Empty want always matches.
+func transitionValueMatch(want, got string, isSelf bool) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
+	}
+	if strings.EqualFold(want, "me") {
+		return isSelf && strings.TrimSpace(got) != ""
 	}
 	return strings.EqualFold(want, got)
 }
@@ -229,6 +250,10 @@ func conditionsOK(c Conditions, sig *model.Signal, ent *model.Entity) bool {
 		got := false
 		if sig != nil {
 			got = sig.IsSelf
+		} else if ent != nil && ent.State != nil {
+			// Transitions have no signal; the engine stamps is_self onto the
+			// entity so self conditions still work.
+			got = ent.State["is_self"] == "true"
 		}
 		if want != got {
 			return false

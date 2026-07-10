@@ -93,6 +93,89 @@ func TestMatchTransitions(t *testing.T) {
 	}
 }
 
+func TestMatchTransitions_realGithubKind(t *testing.T) {
+	// Real PR entities have Kind "pr_review_status" (not "pr"), and a
+	// source: github gate must not reject them.
+	rules := []automation.Rule{{
+		ID:      "autofix-pr",
+		Enabled: true,
+		Trigger: automation.Trigger{
+			Type:   "transition",
+			Source: "github",
+			Kind:   automation.KindSpec{"pr_review_status"},
+			When:   automation.When{Field: "checks", To: "failing"},
+		},
+		Actions: []automation.Action{{Type: "shell", Command: "true"}},
+	}}
+	prev := map[string]model.Entity{
+		"pr:Chip/salsa#1": {ID: "pr:Chip/salsa#1", Kind: "pr_review_status", State: map[string]string{"checks": "passing", "is_self": "true"}},
+	}
+	next := map[string]model.Entity{
+		"pr:Chip/salsa#1": {ID: "pr:Chip/salsa#1", Kind: "pr_review_status", State: map[string]string{"checks": "failing", "is_self": "true"}, Coordinates: map[string]string{"repo": "Chip/salsa"}},
+	}
+	evs := automation.MatchTransitions(rules, prev, next, automation.MatchOpts{})
+	if len(evs) != 1 {
+		t.Fatalf("got %d events, want 1", len(evs))
+	}
+}
+
+func TestMatchTransitions_assigneeToMe(t *testing.T) {
+	// Real JIRA state entities have Kind "issue"; assignee -> me must fire
+	// only when the entity is the current user's (is_self), not for any
+	// assignment to anyone.
+	rules := []automation.Rule{{
+		ID:      "jira-assigned",
+		Enabled: true,
+		Trigger: automation.Trigger{
+			Type:   "transition",
+			Source: "jira",
+			Kind:   automation.KindSpec{"issue"},
+			When:   automation.When{Field: "assignee", To: "me"},
+		},
+		Actions: []automation.Action{{Type: "shell", Command: "true"}},
+	}}
+	prev := map[string]model.Entity{
+		"jira:SALSA-1": {ID: "jira:SALSA-1", Kind: "issue", State: map[string]string{"assignee": ""}},
+		"jira:SALSA-2": {ID: "jira:SALSA-2", Kind: "issue", State: map[string]string{"assignee": "someone"}},
+	}
+	next := map[string]model.Entity{
+		// Newly assigned to me (is_self set by the engine).
+		"jira:SALSA-1": {ID: "jira:SALSA-1", Kind: "issue", State: map[string]string{"assignee": "kpreston", "is_self": "true"}},
+		// Reassigned to another person on a ticket that isn't mine.
+		"jira:SALSA-2": {ID: "jira:SALSA-2", Kind: "issue", State: map[string]string{"assignee": "other"}},
+	}
+	evs := automation.MatchTransitions(rules, prev, next, automation.MatchOpts{})
+	if len(evs) != 1 {
+		t.Fatalf("got %d events, want 1", len(evs))
+	}
+	if evs[0].Entity.ID != "jira:SALSA-1" {
+		t.Fatalf("fired for %s, want jira:SALSA-1", evs[0].Entity.ID)
+	}
+}
+
+func TestMatchTransitions_selfCondition(t *testing.T) {
+	self := true
+	rules := []automation.Rule{{
+		ID:         "self-only",
+		Enabled:    true,
+		Trigger:    automation.Trigger{Type: "transition", Source: "github", Kind: automation.KindSpec{"pr_review_status"}, When: automation.When{Field: "checks", To: "failing"}},
+		Conditions: automation.Conditions{Self: &self},
+		Actions:    []automation.Action{{Type: "shell", Command: "true"}},
+	}}
+	prev := map[string]model.Entity{
+		"a": {ID: "a", Kind: "pr_review_status", State: map[string]string{"checks": "passing", "is_self": "true"}},
+		"b": {ID: "b", Kind: "pr_review_status", State: map[string]string{"checks": "passing"}},
+	}
+	next := map[string]model.Entity{
+		"a": {ID: "a", Kind: "pr_review_status", State: map[string]string{"checks": "failing", "is_self": "true"}},
+		"b": {ID: "b", Kind: "pr_review_status", State: map[string]string{"checks": "failing"}},
+	}
+	evs := automation.MatchTransitions(rules, prev, next, automation.MatchOpts{})
+	if len(evs) != 1 || evs[0].Entity.ID != "a" {
+		t.Fatalf("got %+v, want single event for a", evs)
+	}
+}
+
 func TestValidateRules(t *testing.T) {
 	err := automation.ValidateRules([]automation.Rule{{
 		ID:      "bad",
