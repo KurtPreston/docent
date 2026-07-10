@@ -202,6 +202,12 @@ type Engine struct {
 	// by mu; updated only from collectUnit after a successful collect.
 	entitySnapshots map[string]map[string]model.Entity
 
+	// automationSeeded marks unit keys whose first successful collect has
+	// completed. The first collect only seeds the baseline (snapshot +
+	// watermark) without firing automations, so a daemon start/restart does
+	// not replay the whole lookback window as "new". Guarded by mu.
+	automationSeeded map[string]bool
+
 	// scheduleLastFire tracks the last fire time per schedule rule ID so we
 	// don't re-fire within the same minute. Guarded by scheduleMu.
 	scheduleLastFire map[string]time.Time
@@ -224,6 +230,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		entityWorkItem:   map[string]string{},
 		annotations:      map[string]annotationEntry{},
 		entitySnapshots:  map[string]map[string]model.Entity{},
+		automationSeeded: map[string]bool{},
 		scheduleLastFire: map[string]time.Time{},
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
@@ -628,6 +635,7 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	prevIDs := signalIDSet(u.signals)
 	snapKey := u.key.Directive + "/" + string(u.mode)
 	prevEntities := e.entitySnapshots[snapKey]
+	seeded := e.automationSeeded[snapKey]
 	e.mu.Unlock()
 
 	signals, err := e.reg.CollectUnit(ctx, d, u.mode, opts)
@@ -656,13 +664,19 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 			u.signals = mergeEvents(u.signals, signals, cutoff)
 			u.watermark = now
 		}
+		// The first successful collect only establishes the baseline; mark
+		// it seeded so subsequent collects fire against genuinely new state.
+		e.automationSeeded[snapKey] = true
 	}
 	if u.interval > 0 {
 		u.nextDue = now.Add(u.interval)
 	}
 	e.mu.Unlock()
 
-	if err == nil && e.automations != nil {
+	// Skip firing on the first successful collect of a unit (seeded==false
+	// here): startup/restart would otherwise replay the whole lookback
+	// window (events) or every current item (state) as "new".
+	if err == nil && seeded && e.automations != nil {
 		e.evaluateAutomations(ctx, newSignals, prevEntities, nextEntities)
 	}
 }
