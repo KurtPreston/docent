@@ -202,6 +202,11 @@ type Engine struct {
 	// by mu; updated only from collectUnit after a successful collect.
 	entitySnapshots map[string]map[string]model.Entity
 
+	// scheduleLastFire tracks the last fire time per schedule rule ID so we
+	// don't re-fire within the same minute. Guarded by scheduleMu.
+	scheduleLastFire map[string]time.Time
+	scheduleMu       sync.Mutex
+
 	refreshing sync.Mutex // single-flight guard for on-request collection
 	annotating sync.Mutex // single-flight guard for the annotation fetch
 }
@@ -215,10 +220,11 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 			TicketPattern: cfg.TicketPattern,
 			Projects:      deriveTicketProjects(cfg),
 		},
-		collecting:      map[unitKey]bool{},
-		entityWorkItem:  map[string]string{},
-		annotations:     map[string]annotationEntry{},
-		entitySnapshots: map[string]map[string]model.Entity{},
+		collecting:       map[unitKey]bool{},
+		entityWorkItem:   map[string]string{},
+		annotations:      map[string]annotationEntry{},
+		entitySnapshots:  map[string]map[string]model.Entity{},
+		scheduleLastFire: map[string]time.Time{},
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
@@ -512,6 +518,7 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 				return
 			case <-ticker.C:
 				e.tick(ctx, false)
+				e.tickSchedules(ctx)
 			}
 		}
 	}()

@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/report"
 )
 
 // Automations returns the dispatcher (may be nil when no rules are configured).
@@ -149,6 +151,36 @@ func (e *Engine) wireAutomationConnectors() {
 			return e.reg.PostComment(ctx, dir, opts, issueKey, body)
 		}),
 	})
+	e.automations.Registry.Register("report", automation.ReportRunner{
+		DefaultOutDir: e.cfg.OutputDir,
+		SlackPoster: automation.ChatPosterFunc(func(ctx context.Context, channel, body string) error {
+			dir, ok := firstDirective(e.cfg.Directives, "slack")
+			if !ok {
+				return fmt.Errorf("no enabled slack directive configured")
+			}
+			return e.reg.PostMessage(ctx, dir, opts, channel, body)
+		}),
+		Generator: automation.ReportGeneratorFunc(func(ctx context.Context, modeID string, days int) (string, error) {
+			return e.generateReport(ctx, modeID, days)
+		}),
+	})
+}
+
+// tickSchedules evaluates schedule-type automation rules.
+func (e *Engine) tickSchedules(ctx context.Context) {
+	if e.automations == nil {
+		return
+	}
+	now := time.Now()
+	e.scheduleMu.Lock()
+	events := automation.MatchSchedule(e.automations.EnabledRules(), now, e.scheduleLastFire)
+	for _, ev := range events {
+		e.scheduleLastFire[ev.Rule.ID] = now
+	}
+	e.scheduleMu.Unlock()
+	if len(events) > 0 {
+		e.automations.HandleEvents(ctx, events)
+	}
 }
 
 func firstDirective(dirs []userdata.Directive, collector string) (userdata.Directive, bool) {
@@ -158,4 +190,23 @@ func firstDirective(dirs []userdata.Directive, collector string) (userdata.Direc
 		}
 	}
 	return userdata.Directive{}, false
+}
+
+func (e *Engine) generateReport(ctx context.Context, modeID string, days int) (string, error) {
+	cfg := userdata.ConfigFile{
+		AI:             e.cfg.AI,
+		Directives:     e.cfg.Directives,
+		ExecutionModes: e.cfg.ExecutionModes,
+		OutputDir:      e.cfg.OutputDir,
+	}
+	res, err := report.Generate(ctx, cfg, report.Options{
+		ModeID:    modeID,
+		Days:      days,
+		ConfigDir: e.cfg.ConfigDir,
+		Registry:  e.reg,
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.Markdown, nil
 }
