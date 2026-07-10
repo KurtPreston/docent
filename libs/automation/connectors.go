@@ -18,6 +18,20 @@ func (f IssueCommenterFunc) PostComment(ctx context.Context, issueKey, body stri
 	return f(ctx, issueKey, body)
 }
 
+// Opener opens or reveals an editor window at a filesystem path. The engine
+// implements this via libs/sessionmanager; it is a local interface so this
+// package does not import sessionmanager (which imports userdata).
+type Opener interface {
+	Open(ctx context.Context, path, name string) error
+}
+
+// OpenerFunc adapts a function to Opener.
+type OpenerFunc func(ctx context.Context, path, name string) error
+
+func (f OpenerFunc) Open(ctx context.Context, path, name string) error {
+	return f(ctx, path, name)
+}
+
 // ChatPoster posts a message to a chat channel (e.g. Slack).
 type ChatPoster interface {
 	PostMessage(ctx context.Context, channel, body string) error
@@ -64,6 +78,39 @@ func (r JiraCommentRunner) Run(ctx context.Context, action Action, ev Event) err
 		return fmt.Errorf("jira-comment: body is empty after templating")
 	}
 	return r.Commenter.PostComment(ctx, issue, body)
+}
+
+// OpenRunner opens the event's work-item path in the configured editor.
+// The path defaults to the event's OpenPath and can be overridden with a
+// templated action.Cwd.
+type OpenRunner struct {
+	Opener Opener
+}
+
+func (r OpenRunner) Run(ctx context.Context, action Action, ev Event) error {
+	if r.Opener == nil {
+		return fmt.Errorf("open: no session manager configured")
+	}
+	actx := EventContext(ev)
+	path := strings.TrimSpace(action.Cwd)
+	if path != "" {
+		rendered, err := RenderTemplate(path, actx)
+		if err != nil {
+			return err
+		}
+		path = strings.TrimSpace(rendered)
+	}
+	if path == "" {
+		path = strings.TrimSpace(actx.OpenPath)
+	}
+	if path == "" {
+		return fmt.Errorf("open: no path (set action.cwd or ensure the event has an open path)")
+	}
+	name := actx.Title
+	if name == "" {
+		name = actx.RuleID
+	}
+	return r.Opener.Open(ctx, path, name)
 }
 
 // SlackPostRunner posts a templated message via ChatPoster.

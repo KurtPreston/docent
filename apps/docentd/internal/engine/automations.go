@@ -13,6 +13,7 @@ import (
 	"github.com/KurtPreston/docent/libs/goals"
 	"github.com/KurtPreston/docent/libs/model"
 	"github.com/KurtPreston/docent/libs/report"
+	"github.com/KurtPreston/docent/libs/sessionmanager"
 )
 
 // Automations returns the dispatcher (may be nil when no rules are configured).
@@ -172,6 +173,15 @@ func (e *Engine) wireAutomationConnectors() {
 			return e.reg.PostComment(ctx, dir, opts, issueKey, body)
 		}),
 	})
+	if e.sessionMgr != nil {
+		sm := e.sessionMgr
+		host := e.cfg.SSHHost
+		e.automations.Registry.Register("open", automation.OpenRunner{
+			Opener: automation.OpenerFunc(func(ctx context.Context, path, name string) error {
+				return sm.Open(ctx, sessionmanager.OpenReq{Path: path, Host: host, Name: name})
+			}),
+		})
+	}
 	e.automations.Registry.Register("report", automation.ReportRunner{
 		DefaultOutDir: e.cfg.OutputDir,
 		SlackPoster: automation.ChatPosterFunc(func(ctx context.Context, channel, body string) error {
