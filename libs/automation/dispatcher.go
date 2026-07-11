@@ -76,6 +76,34 @@ func (d *Dispatcher) handleOne(ctx context.Context, ev Event, now time.Time) {
 	go d.runJob(id, ev)
 }
 
+// RunRuleNow runs a rule's actions immediately, bypassing cooldown/dedupe, and
+// waits for completion. Intended for manual testing via the API. ev.Rule must
+// be populated; ev's other fields (Signal, From/To, TicketKey, …) provide the
+// template context actions render against.
+func (d *Dispatcher) RunRuleNow(ctx context.Context, ev Event) Job {
+	id := newJobID()
+	now := time.Now()
+	d.Store.Start(id, ev.Rule.ID, "manual:"+ev.Rule.ID, now)
+	var lastErr error
+	for _, action := range ev.Rule.Actions {
+		if err := d.Registry.Run(ctx, action, ev); err != nil {
+			lastErr = err
+			d.logf("automation %s (manual) action %s failed: %v", ev.Rule.ID, action.Type, err)
+		}
+	}
+	now = time.Now()
+	if lastErr != nil {
+		d.Store.Fail(id, lastErr.Error(), now)
+	} else {
+		d.Store.Finish(id, "ok", now)
+		d.logf("automation %s (manual) completed", ev.Rule.ID)
+	}
+	if out, ok := d.Store.Get(id); ok {
+		return out
+	}
+	return Job{ID: id, RuleID: ev.Rule.ID}
+}
+
 func (d *Dispatcher) runJob(id string, ev Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()

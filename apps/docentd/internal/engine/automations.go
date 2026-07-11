@@ -197,6 +197,29 @@ func (e *Engine) wireAutomationConnectors() {
 	})
 }
 
+// FindAutomation returns a configured rule by ID, including disabled ones, so
+// the API can trigger a rule for testing without enabling it.
+func (e *Engine) FindAutomation(id string) (automation.Rule, bool) {
+	for _, r := range e.cfg.Automations {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return automation.Rule{}, false
+}
+
+// RunAutomationNow runs a rule's actions immediately, bypassing the
+// schedule/cooldown, and returns the resulting job. Used by the manual-trigger
+// API to test automations. ev.Rule must be set by the caller.
+func (e *Engine) RunAutomationNow(ctx context.Context, ev automation.Event) (automation.Job, bool) {
+	if e.automations == nil {
+		return automation.Job{}, false
+	}
+	evs := []automation.Event{ev}
+	e.enrichEvents(evs)
+	return e.automations.RunRuleNow(ctx, evs[0]), true
+}
+
 // tickSchedules evaluates schedule-type automation rules.
 func (e *Engine) tickSchedules(ctx context.Context) {
 	if e.automations == nil {
