@@ -52,9 +52,16 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 			remote, _ = r.ResolveRemote(ctx, actx.OpenPath)
 		}
 		if remote == "" && actx.Repo != "" {
-			// Best-effort GitHub HTTPS URL; users with enterprise remotes
-			// should have OpenPath so ResolveRemote can find the real URL.
-			remote = "https://github.com/" + actx.Repo + ".git"
+			// Build an HTTPS clone URL from the PR's host (carried in the
+			// entity/signal fields) so enterprise repos resolve correctly.
+			// HTTPS lets `gh` act as the git credential helper, avoiding a
+			// dependency on SSH keys in the daemon's environment. Defaults to
+			// github.com when no host is present.
+			host := strings.TrimSpace(actx.Fields["host"])
+			if host == "" {
+				host = "github.com"
+			}
+			remote = "https://" + host + "/" + actx.Repo + ".git"
 		}
 		if remote == "" {
 			return fmt.Errorf("agent: cannot resolve remote URL for worktree (need OpenPath or Repo)")

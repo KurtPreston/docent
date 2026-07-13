@@ -119,7 +119,7 @@ func validateAction(path string, a Action) []string {
 		if strings.TrimSpace(a.Body) == "" {
 			problems = append(problems, path+".body is required for slack-post actions")
 		}
-	case "agent":
+	case "agent", "agent-inline":
 		if strings.TrimSpace(a.Prompt) == "" {
 			problems = append(problems, path+".prompt is required for agent actions")
 		}

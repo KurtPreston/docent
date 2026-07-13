@@ -134,7 +134,7 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["webhook", "shell", "jira-comment", "slack-post", "agent", "report", "open"]
+          "enum": ["webhook", "shell", "jira-comment", "slack-post", "agent", "agent-inline", "report", "open"]
         },
         "url": { "type": "string" },
         "headers": {
