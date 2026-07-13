@@ -85,18 +85,16 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 	if err := ensureBareClone(ctx, clonePath, remote, req.OpenPath); err != nil {
 		return WorkdirResult{}, err
 	}
-	if err := runGit(ctx, clonePath, "fetch", "origin", branch); err != nil {
-		// Try fetching all if the specific branch ref fails.
-		if err2 := runGit(ctx, clonePath, "fetch", "origin"); err2 != nil {
-			return WorkdirResult{}, fmt.Errorf("git fetch: %v (also: %v)", err, err2)
-		}
-	}
-
 	if _, err := os.Stat(wtPath); err == nil {
-		// Reuse existing worktree; reset to origin/branch.
-		_ = runGit(ctx, wtPath, "fetch", "origin", branch)
-		_ = runGit(ctx, wtPath, "checkout", branch)
-		_ = runGit(ctx, wtPath, "reset", "--hard", "origin/"+branch)
+		// Reuse existing worktree; hard-reset it to the freshly fetched tip.
+		// Fetch inside the worktree so FETCH_HEAD updates without trying to
+		// move the (checked-out) branch ref in the bare clone.
+		if err := runGit(ctx, wtPath, "fetch", "origin", branch); err != nil {
+			return WorkdirResult{}, fmt.Errorf("git fetch (reuse) %s: %w", branch, err)
+		}
+		if err := runGit(ctx, wtPath, "reset", "--hard", "FETCH_HEAD"); err != nil {
+			return WorkdirResult{}, fmt.Errorf("git reset (reuse) %s: %w", branch, err)
+		}
 		return WorkdirResult{
 			Path:      wtPath,
 			ClonePath: clonePath,
@@ -104,14 +102,23 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 		}, nil
 	}
 
+	// Fetch the branch into a local head ref in the bare clone. A bare clone
+	// does not keep remote-tracking (origin/*) refs, and `git fetch origin
+	// <branch>` only updates FETCH_HEAD — neither lets `git worktree add
+	// <branch>` resolve a branch created *after* the clone. An explicit
+	// refspec writes refs/heads/<branch> so the worktree can check it out.
+	if err := runGit(ctx, clonePath, "fetch", "origin", "+refs/heads/"+branch+":refs/heads/"+branch); err != nil {
+		// Fall back to a full fetch (covers unusual ref layouts).
+		if err2 := runGit(ctx, clonePath, "fetch", "origin"); err2 != nil {
+			return WorkdirResult{}, fmt.Errorf("git fetch %s: %v (also: %v)", branch, err, err2)
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
 		return WorkdirResult{}, err
 	}
-	// Prefer tracking origin/branch; fall back to creating from FETCH_HEAD.
 	if err := runGit(ctx, clonePath, "worktree", "add", "--force", wtPath, branch); err != nil {
-		if err2 := runGit(ctx, clonePath, "worktree", "add", "--force", "-b", branch, wtPath, "origin/"+branch); err2 != nil {
-			return WorkdirResult{}, fmt.Errorf("git worktree add: %v (also: %v)", err, err2)
-		}
+		return WorkdirResult{}, fmt.Errorf("git worktree add %s: %w", branch, err)
 	}
 	return WorkdirResult{
 		Path:       wtPath,
