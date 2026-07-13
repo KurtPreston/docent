@@ -24,7 +24,7 @@ SRC_ENV="$ROOT/userdata/.env"
 
 INSTALL_SYSTEMD=1
 SKIP_BUILD=0
-ENABLE_LINGER=0
+ENABLE_LINGER=1
 DRY_RUN=0
 GO="${DOCENT_GO:-}"
 NODE="${DOCENT_NODE:-node}"
@@ -39,7 +39,9 @@ Usage: install-docent-linux.sh [options]
 Builds the dashboard (Vite/React) and docentd (with the built dashboard
 embedded into the binary via -tags embed), lays down config under
 ~/.config/docent, and registers a systemd --user service that serves the
-dashboard on 127.0.0.1:39787.
+dashboard on 127.0.0.1:39787. Lingering is enabled by default so docentd keeps
+running — and scheduled automations still fire — even when you're logged out
+(pass --no-linger to opt out).
 
 config.yaml and .env are canonical real files in ~/.config/docent. On first
 run they are seeded from the repo's userdata/ (or the bundled examples) when
@@ -49,7 +51,10 @@ earlier install is converted into a real file in place.
 Options:
   --no-systemd      Skip systemd unit install (build + config only)
   --no-build        Skip go build (reuse existing binary in BIN_DIR)
-  --linger          Enable lingering so docentd runs without an active login
+  --no-linger       Don't enable lingering. docentd then only runs while you
+                    have an active login session, so scheduled automations are
+                    skipped whenever you're logged out.
+  --linger          Enable lingering (default) so docentd survives logout
   --port N          Dashboard port (default: 39787)
   --bin-dir PATH    Install binary here (default: ~/.local/bin)
   --dry-run         Print actions without changing the system
@@ -79,6 +84,7 @@ while [ $# -gt 0 ]; do
     --no-systemd) INSTALL_SYSTEMD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
     --linger) ENABLE_LINGER=1 ;;
+    --no-linger) ENABLE_LINGER=0 ;;
     --port) shift; DOCENT_PORT="${1:?--port requires a number}" ;;
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
     --dry-run) DRY_RUN=1 ;;
@@ -306,9 +312,21 @@ EOF
   # restart (not just start) so re-runs pick up unit/port changes
   run systemctl --user restart "$SERVICE_NAME"
 
+  # Lingering keeps the systemd --user manager (and docentd with it) alive when
+  # you have no active login session. Without it, logging out tears docentd down,
+  # so time-based automations (e.g. a 05:00 standup) never fire while you're away.
   if [ "$ENABLE_LINGER" -eq 1 ]; then
-    log "enabling linger so docentd survives logout"
-    run loginctl enable-linger "$USER"
+    log "enabling linger so docentd keeps running (and scheduled automations fire) while logged out"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      run loginctl enable-linger "$USER"
+    elif ! loginctl enable-linger "$USER"; then
+      log "warning: could not enable linger — docentd will only run while you're"
+      log "         logged in, so scheduled automations are skipped when you log out."
+      log "         Retry manually with: sudo loginctl enable-linger $USER"
+    fi
+  else
+    log "skipping linger (--no-linger): docentd runs only while you have an active"
+    log "  login session; scheduled automations are skipped when you're logged out."
   fi
 fi
 
@@ -347,6 +365,7 @@ Manage:
   systemctl --user status $SERVICE_NAME
   systemctl --user restart $SERVICE_NAME
   journalctl --user -u $SERVICE_NAME -f
+  loginctl show-user $USER -p Linger   # Linger=yes => runs even when logged out
 EOF
 fi
 
