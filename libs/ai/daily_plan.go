@@ -8,25 +8,20 @@ import (
 
 // BuildPrompt assembles the message body sent to an LLM provider for one
 // run: the mode-supplied instruction, ground-truth hint, the time window,
-// and the formatted activity body. The formatter is responsible for the
-// activity body's structure (Markdown headings or JSON).
+// and the formatted activity body. Prefers correlated WorkItems when
+// present (compact); otherwise formats the raw Statuses list.
 //
 // LLM providers append no per-mode framing of their own; everything the
 // model sees comes from `instruction` plus the activity body that follows.
-// For modes whose deterministic rule-based rendering nests activity under a
-// `## Yesterday` / `## Activity` heading (daily-plan, custom-prompt), the
-// formatter passed in here should already have been depth-adjusted via
-// NestRepoChronologicalDepth — otherwise repo headings will collide with
-// any sections the model is asked to produce.
 func BuildPrompt(instruction string, in RunInput, formatter ActivityFormatter) (string, error) {
-	body, err := formatter.Format(in.Statuses)
+	body, err := formatActivityBody(in, formatter)
 	if err != nil {
 		return "", err
 	}
 	var buf strings.Builder
 	buf.WriteString(strings.TrimRight(instruction, "\n"))
 	buf.WriteString("\n\n")
-	buf.WriteString(groundTruthHint(formatter))
+	buf.WriteString(groundTruthHint(in, formatter))
 	buf.WriteString(" Return only a single Markdown document (no JSON). Do not wrap the entire answer in a code fence.\n")
 	buf.WriteString("Never include credentials, secrets, or unrelated local data.\n\n")
 	appendWindowMeta(&buf, in)
@@ -43,10 +38,17 @@ func appendWindowMeta(buf *strings.Builder, in RunInput) {
 }
 
 // RenderDailyPlanMarkdown renders the deterministic two-section document
-// previously produced by the rule-based daily-plan path.
+// previously produced by the rule-based daily-plan path. Prefer work items
+// when present.
 func RenderDailyPlanMarkdown(in RunInput, formatter ActivityFormatter) string {
-	nestedFmt := NestRepoChronologicalDepth(formatter)
-	body, err := nestedFmt.Format(in.Statuses)
+	var body string
+	var err error
+	if len(in.WorkItems) > 0 {
+		body, err = formatActivityBody(in, formatter)
+	} else {
+		nestedFmt := NestRepoChronologicalDepth(formatter)
+		body, err = nestedFmt.Format(in.Statuses)
+	}
 	if err != nil {
 		body = fmt.Sprintf("_formatter error: %v_", err)
 	}
@@ -62,10 +64,10 @@ func RenderDailyPlanMarkdown(in RunInput, formatter ActivityFormatter) string {
 	return b.String()
 }
 
-// RenderRecentActivityMarkdown deterministically renders statuses via the
-// formatter under a single `# Recent activity` heading.
+// RenderRecentActivityMarkdown deterministically renders work items (or
+// statuses) under a single `# Recent activity` heading.
 func RenderRecentActivityMarkdown(in RunInput, formatter ActivityFormatter) string {
-	body, err := formatter.Format(in.Statuses)
+	body, err := formatActivityBody(in, formatter)
 	if err != nil {
 		body = fmt.Sprintf("_formatter error: %v_", err)
 	}
@@ -81,8 +83,7 @@ func RenderRecentActivityMarkdown(in RunInput, formatter ActivityFormatter) stri
 // RenderCustomPromptMarkdown deterministically renders the user-prompt mode
 // (instruction at the top, activity nested under `## Activity (ground truth)`).
 func RenderCustomPromptMarkdown(in RunInput, formatter ActivityFormatter) string {
-	nestedFmt := NestRepoChronologicalDepth(formatter)
-	body, err := nestedFmt.Format(in.Statuses)
+	body, err := formatActivityBody(in, formatter)
 	if err != nil {
 		body = fmt.Sprintf("_formatter error: %v_", err)
 	}
@@ -100,8 +101,7 @@ func RenderCustomPromptMarkdown(in RunInput, formatter ActivityFormatter) string
 // instruction (when present) as a blockquote-style preamble, and the
 // activity body nested under `## Activity`.
 func RenderGenericMarkdown(in RunInput, formatter ActivityFormatter) string {
-	nestedFmt := NestRepoChronologicalDepth(formatter)
-	body, err := nestedFmt.Format(in.Statuses)
+	body, err := formatActivityBody(in, formatter)
 	if err != nil {
 		body = fmt.Sprintf("_formatter error: %v_", err)
 	}
@@ -125,8 +125,14 @@ func RenderGenericMarkdown(in RunInput, formatter ActivityFormatter) string {
 	return b.String()
 }
 
-func groundTruthHint(formatter ActivityFormatter) string {
-	if formatter.Name() == activityFormatterJSONSignalList {
+func groundTruthHint(in RunInput, formatter ActivityFormatter) string {
+	if len(in.WorkItems) > 0 {
+		if formatter != nil && formatter.Name() == activityFormatterJSONSignalList {
+			return "Use the structured JSON work-item array below as ground truth."
+		}
+		return "Use the correlated work-item list below as ground truth (each item groups a ticket/branch with its PRs and activity)."
+	}
+	if formatter != nil && formatter.Name() == activityFormatterJSONSignalList {
 		return "Use the structured JSON activity array below as ground truth."
 	}
 	return "Use the aggregated activity timeline below as ground truth (Markdown headings separate repositories; lines are chronological within each)."

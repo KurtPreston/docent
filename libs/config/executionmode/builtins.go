@@ -4,9 +4,9 @@ package executionmode
 // internal/ai (the more thorough ollama variant; cursor's was a shorter
 // paraphrase of the same intent).
 const (
-	dailyPlanInstruction = "Create a practical daily plan. Section `## Yesterday` summarizes factual work from the aggregated activity below. Section `## Today` proposes a focused plan for today using that activity."
+	dailyPlanInstruction = "Create a practical daily plan. Section `## Yesterday` summarizes factual work from the correlated work items below. Section `## Today` proposes a focused plan for today using that activity."
 
-	recentActivityInstruction = "Summarize the developer's recent activity. Activity below is grouped by Git repository where each item's repository field is set (usually org/repo); treat it as ground truth. Return one Markdown document with a brief executive summary at the top and noteworthy callouts. Do not invent activity not present in the input."
+	recentActivityInstruction = "Summarize the developer's recent activity. Activity below is grouped into correlated work items (ticket/branch with linked PRs); treat it as ground truth. Return one Markdown document with a brief executive summary at the top and noteworthy callouts. Do not invent activity not present in the input."
 
 	prsInstruction = "List the developer's open GitHub pull requests grouped into `Ready for review:` (not a draft and all checks passing) and `Work in progress:` (everything else). For each PR emit a Markdown bullet linking the Jira ticket key (when present in the title) to the PR URL, followed by the PR title with the Jira ticket stripped. This mode is rendered deterministically; the instruction is a fallback description only."
 )

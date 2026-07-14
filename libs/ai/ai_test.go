@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 func TestBuildPromptIncludesGuardrailsAndActivity(t *testing.T) {
@@ -66,16 +67,14 @@ func TestRuleBasedRunModeRecentActivity(t *testing.T) {
 		Now:          time.Unix(1000, 0).UTC(),
 		Since:        time.Unix(0, 0).UTC(),
 		LookbackDays: 7,
-		Statuses: []collectors.StatusItem{{
-			DirectiveID: "d",
-			Repository:  "p1",
-			Source:      "local-git",
-			Kind:        "commit",
-			Title:       "x",
-			Summary:     "y",
-			ObservedAt:  time.Unix(500, 0).UTC(),
-			Fields: map[string]string{
-				"short_hash": "abcd123",
+		WorkItems: []model.WorkItem{{
+			Key:          "wb:p1@main",
+			Title:        "main",
+			Repo:         "p1",
+			Branch:       "main",
+			LastActivity: "2026-05-05T12:00:00Z",
+			Entities: []model.Entity{
+				{Kind: "commit", Title: "x"},
 			},
 		}},
 	})
@@ -85,8 +84,8 @@ func TestRuleBasedRunModeRecentActivity(t *testing.T) {
 	if !strings.Contains(md, "p1") {
 		t.Fatal(md)
 	}
-	if !strings.Contains(md, "local-git commit abcd123:") {
-		t.Fatal(md)
+	if !strings.Contains(md, "## main") {
+		t.Fatalf("expected work-item heading:\n%s", md)
 	}
 }
 
