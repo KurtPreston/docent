@@ -37,33 +37,6 @@ func appendWindowMeta(buf *strings.Builder, in RunInput) {
 	buf.WriteString("\n")
 }
 
-// RenderDailyPlanMarkdown renders the deterministic two-section document
-// previously produced by the rule-based daily-plan path. Prefer work items
-// when present.
-func RenderDailyPlanMarkdown(in RunInput, formatter ActivityFormatter) string {
-	var body string
-	var err error
-	if len(in.WorkItems) > 0 {
-		body, err = formatActivityBody(in, formatter)
-	} else {
-		nestedFmt := NestRepoChronologicalDepth(formatter)
-		body, err = nestedFmt.Format(in.Statuses)
-	}
-	if err != nil {
-		body = fmt.Sprintf("_formatter error: %v_", err)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "# Daily plan\n\n")
-	fmt.Fprintf(&b, "_Window: %s — %s_\n\n", in.Since.Format(time.RFC3339), in.Now.Format(time.RFC3339))
-	fmt.Fprintf(&b, "## Yesterday\n\n")
-	fmt.Fprintf(&b, "%s\n\n", strings.TrimRight(body, "\n"))
-	fmt.Fprintf(&b, "## Today\n\n")
-	fmt.Fprintf(&b, "_Suggested next steps (configure `ai.provider` to `ollama`, `cursor`, or `claude` for model-generated planning):_\n\n")
-	fmt.Fprintf(&b, "- Review the activity above and pick 1–3 focus items.\n")
-	fmt.Fprintf(&b, "- Block time for the highest-signal work.\n")
-	return b.String()
-}
-
 // RenderRecentActivityMarkdown deterministically renders work items (or
 // statuses) under a single `# Recent activity` heading.
 func RenderRecentActivityMarkdown(in RunInput, formatter ActivityFormatter) string {

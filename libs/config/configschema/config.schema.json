@@ -220,6 +220,11 @@
           "type": "string",
           "enum": ["self", "involved", "all"]
         },
+        "collect": {
+          "type": "string",
+          "enum": ["events", "state", "both"],
+          "description": "Which collection capabilities to run: events (timeline), state (current snapshot), or both"
+        },
         "collectors": {
           "type": "array",
           "items": {

@@ -65,10 +65,13 @@ func defaultClaudeArgs() []string {
 // RunMode builds the prompt payload for the resolved mode and shells out to
 // claude.
 func (p ClaudeCLIProvider) RunMode(ctx context.Context, in RunInput) (string, error) {
-	// The `prs` report is fully deterministic (draft + checks status are
-	// resolved during collection); never send it to the model.
+	// The `prs` and `daily-plan` reports are fully deterministic; never
+	// send them to the model.
 	if in.ModeID == prsModeID {
 		return RenderPRsMarkdown(in), nil
+	}
+	if in.ModeID == dailyPlanModeID {
+		return RenderDailyPlanMarkdown(in, p.formatterOrDefault()), nil
 	}
 	formatter := p.formatterOrDefault()
 	if needsNested(in.ModeID) {

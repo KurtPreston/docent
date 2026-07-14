@@ -182,9 +182,12 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 	}
 
 	var all []collectors.StatusItem
-	runPass := func(mode collectors.Mode) error {
+	runPass := func(mode collectors.Mode, onlyCollectors []string) error {
 		pass := *base
 		pass.Mode = mode
+		if onlyCollectors != nil {
+			pass.OnlyCollectorTypes = onlyCollectors
+		}
 		items, err := reg.Collect(ctx, cfg.Directives, &pass)
 		if err != nil {
 			return err
@@ -195,22 +198,45 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 
 	switch collect {
 	case executionmode.CollectState:
-		if err := runPass(collectors.ModeState); err != nil {
+		if err := runPass(collectors.ModeState, nil); err != nil {
 			return nil, err
 		}
 	case executionmode.CollectBoth:
-		if err := runPass(collectors.ModeEvents); err != nil {
+		if err := runPass(collectors.ModeEvents, nil); err != nil {
 			return nil, err
 		}
-		if err := runPass(collectors.ModeState); err != nil {
-			return nil, err
+		// State pass is for live readiness (open PRs / checks), not a
+		// full JIRA inventory. Restrict to GitHub collectors so Done
+		// tickets outside the window don't flood the report.
+		ghOnly := []string{"github", "github-enterprise"}
+		if len(resolved.Collectors) > 0 {
+			ghOnly = intersectCollectors(resolved.Collectors, ghOnly)
+		}
+		if len(ghOnly) > 0 {
+			if err := runPass(collectors.ModeState, ghOnly); err != nil {
+				return nil, err
+			}
 		}
 	default: // CollectEvents
-		if err := runPass(collectors.ModeEvents); err != nil {
+		if err := runPass(collectors.ModeEvents, nil); err != nil {
 			return nil, err
 		}
 	}
 	return all, nil
+}
+
+func intersectCollectors(a, b []string) []string {
+	set := make(map[string]bool, len(b))
+	for _, x := range b {
+		set[x] = true
+	}
+	var out []string
+	for _, x := range a {
+		if set[x] {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // Render turns a resolved run + collected statuses + correlated work items
@@ -230,6 +256,9 @@ func Render(ctx context.Context, resolved executionmode.ResolvedRun, statuses []
 		Instruction:  resolved.Instruction,
 		Statuses:     statuses,
 		WorkItems:    workItems,
+		PrevDayLabel: resolved.PrevDayLabel,
+		NextDayLabel: resolved.NextDayLabel,
+		IsMorning:    resolved.IsMorning,
 		DebugDir:     opts.DebugDir,
 		StreamOut:    opts.StreamOut,
 	})

@@ -91,15 +91,33 @@ func TestRuleBasedRunModeRecentActivity(t *testing.T) {
 
 func TestRuleBasedRunModeDailyPlan(t *testing.T) {
 	md, err := RuleBasedProvider{}.RunMode(context.Background(), RunInput{
-		ModeID: "daily-plan",
-		Now:    time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC),
-		Since:  time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC),
+		ModeID:       "daily-plan",
+		Now:          time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC),
+		Since:        time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC),
+		PrevDayLabel: "Thursday",
+		NextDayLabel: "Friday",
+		WorkItems: []model.WorkItem{{
+			Key: "wb:o/r@salsa-1",
+			Tickets: []model.TicketRef{{
+				Key: "SALSA-1", Title: "SALSA-1 Thing", URL: "https://jira.example/browse/SALSA-1",
+			}},
+			Entities: []model.Entity{
+				{Kind: "commit", Coordinates: map[string]string{"ticket": "SALSA-1", "branch": "salsa-1"}},
+				{Kind: "issue", Coordinates: map[string]string{"ticket": "SALSA-1"}, State: map[string]string{"status_tier": "started"}},
+			},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(md, "## Yesterday") || !strings.Contains(md, "## Today") {
-		t.Fatalf("expected Yesterday/Today sections:\n%s", md)
+	if !strings.Contains(md, "**Thursday**") || !strings.Contains(md, "**Friday**") {
+		t.Fatalf("expected day labels:\n%s", md)
+	}
+	if !strings.Contains(md, "Started [SALSA-1]") {
+		t.Fatalf("expected Started line:\n%s", md)
+	}
+	if !strings.Contains(md, "PRs ready for review:") {
+		t.Fatalf("expected ready section:\n%s", md)
 	}
 }
 

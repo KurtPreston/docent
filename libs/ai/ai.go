@@ -33,7 +33,14 @@ type RunInput struct {
 	LookbackDays int // 0 when the lookback is not days-based (e.g. previous-weekday)
 	Instruction  string
 	Statuses     []collectors.StatusItem
-	WorkItems    []model.WorkItem
+// WorkItems is the correlated + annotated view of Statuses. Report modes that
+	// summarize work (daily-plan, recent-activity, custom-prompt) should prefer
+	// WorkItems; prs still reads Statuses for pr_review_status rows.
+	WorkItems []model.WorkItem
+	// Daily-plan framing labels (empty for other modes).
+	PrevDayLabel string
+	NextDayLabel string
+	IsMorning    bool
 	DebugDir     string
 	StreamOut    io.Writer
 }
