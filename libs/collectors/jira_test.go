@@ -38,15 +38,31 @@ func TestBuildJiraItemStampsStatusTier(t *testing.T) {
 	iss.Key = "SALSA-5"
 	iss.Fields.Summary = "do the thing"
 	iss.Fields.Status.Name = "In Development"
+	iss.Fields.Status.StatusCategory.Key = "indeterminate"
 	item := buildJiraItem(d, "https://jira.example", iss, "issue", time.Now(), true)
 	if item.Fields["status_tier"] != "started" {
 		t.Errorf("status_tier = %q, want started", item.Fields["status_tier"])
+	}
+	if item.Fields["status_category"] != "indeterminate" {
+		t.Errorf("status_category = %q, want indeterminate", item.Fields["status_category"])
 	}
 	// Without a status_tier config the field is absent.
 	d2 := userdata.Directive{ID: "jira", Collector: "jira"}
 	item2 := buildJiraItem(d2, "https://jira.example", iss, "issue", time.Now(), true)
 	if _, ok := item2.Fields["status_tier"]; ok {
 		t.Errorf("status_tier should be absent without config, got %v", item2.Fields)
+	}
+}
+
+func TestBuildJiraItemStampsStatusCategoryDone(t *testing.T) {
+	var iss jiraIssue
+	iss.Key = "SALSA-9"
+	iss.Fields.Summary = "shipped"
+	iss.Fields.Status.Name = "Done"
+	iss.Fields.Status.StatusCategory.Key = "done"
+	item := buildJiraItem(userdata.Directive{ID: "jira", Collector: "jira"}, "https://jira.example", iss, "issue", time.Now(), true)
+	if item.Fields["status_category"] != "done" {
+		t.Errorf("status_category = %q, want done", item.Fields["status_category"])
 	}
 }
 

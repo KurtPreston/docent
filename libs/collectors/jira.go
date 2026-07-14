@@ -45,7 +45,11 @@ type jiraIssue struct {
 	Fields struct {
 		Summary string `json:"summary"`
 		Status  struct {
-			Name string `json:"name"`
+			Name            string `json:"name"`
+			StatusCategory  struct {
+				Key  string `json:"key"`
+				Name string `json:"name"`
+			} `json:"statusCategory"`
 		} `json:"status"`
 		Priority struct {
 			Name string `json:"name"`
@@ -316,6 +320,9 @@ func buildJiraItem(directive userdata.Directive, base string, iss jiraIssue, kin
 		"updated":  iss.Fields.Updated,
 		"assignee": iss.Fields.Assignee.Name,
 		"reporter": iss.Fields.Reporter.Name,
+	}
+	if cat := strings.ToLower(strings.TrimSpace(iss.Fields.Status.StatusCategory.Key)); cat != "" {
+		fields["status_category"] = cat
 	}
 	// A per-tier unit stamps which dashboard status (started / assigned)
 	// its JQL is meant to satisfy so the engine can classify without

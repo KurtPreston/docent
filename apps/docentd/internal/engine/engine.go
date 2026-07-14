@@ -756,7 +756,7 @@ func (e *Engine) rebuild() {
 	// (by a PR/branch/commit) but never collected. This is async and
 	// TTL-cached; results land in e.annotations and trigger a follow-up
 	// rebuild, so this rebuild proceeds with whatever is cached now.
-	e.maybeAnnotate(danglingTicketKeys(workItems, corrCfg))
+	e.maybeAnnotate(correlation.DanglingTicketKeys(workItems, corrCfg))
 	dashboard := e.buildDashboard(workItems, corrCfg)
 	entityWorkItem := make(map[string]string)
 	for _, wi := range workItems {
@@ -786,30 +786,6 @@ func (e *Engine) freshAnnotationSignalsLocked() []model.Signal {
 			continue
 		}
 		out = append(out, *ent.Signal)
-	}
-	return out
-}
-
-// danglingTicketKeys returns the distinct ticket keys that a work item
-// references but for which no JIRA metadata was collected (TicketRef.Title is
-// empty). Only keys that parse as known JIRA project keys are returned, so a
-// non-JIRA reference (e.g. a "PR-1234" false match) is never handed to the
-// JIRA resolver.
-func danglingTicketKeys(workItems []model.WorkItem, cfg correlation.Config) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, wi := range workItems {
-		for _, tr := range wi.Tickets {
-			if tr.Title != "" {
-				continue
-			}
-			key := correlation.ParseTicketKey(tr.Key, cfg)
-			if key == "" || seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, key)
-		}
 	}
 	return out
 }

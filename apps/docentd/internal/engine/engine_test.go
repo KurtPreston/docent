@@ -445,14 +445,14 @@ func TestDanglingTicketKeys(t *testing.T) {
 		{Key: "wb:o/r@foo", Tickets: []model.TicketRef{{Key: "PR-7"}}},                               // not a JIRA project key
 		{Key: "wb:o/r@dup", Tickets: []model.TicketRef{{Key: "SALSA-1"}}},                            // duplicate of SALSA-1
 	}
-	got := danglingTicketKeys(items, cfg)
+	got := correlation.DanglingTicketKeys(items, cfg)
 	want := []string{"SALSA-1", "SALSA-3"}
 	if len(got) != len(want) {
-		t.Fatalf("danglingTicketKeys = %v, want %v", got, want)
+		t.Fatalf("DanglingTicketKeys = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("danglingTicketKeys[%d] = %q, want %q (%v)", i, got[i], want[i], got)
+			t.Errorf("DanglingTicketKeys[%d] = %q, want %q (%v)", i, got[i], want[i], got)
 		}
 	}
 }

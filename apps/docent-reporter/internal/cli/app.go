@@ -300,6 +300,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	writeRunLogCollectSummary(run.RunInfo(), tracker, statuses, collectDuration)
 
+	workItems, statuses, err := report.Correlate(ctx, a.Reg, cfg, statuses, report.CorrelateOptions{
+		ConfigDir: envDir,
+	})
+	if err != nil {
+		return err
+	}
+
 	// Scope semantics are now honored by the collectors themselves; the
 	// CLI no longer needs to post-filter the aggregated status list.
 	// collectors.FilterToSelf remains exported as a fallback helper for
@@ -308,7 +315,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	// report.Render applies the mode's per-run formatter override (if any)
 	// on top of the provider SelectProvider chose from ai.activity_formatter.
 	aiStart := a.Now()
-	md, err := report.Render(ctx, resolved, statuses, provider, report.RenderOptions{
+	md, err := report.Render(ctx, resolved, statuses, workItems, provider, report.RenderOptions{
 		DebugDir:  run.Dir(),
 		StreamOut: stream,
 	})

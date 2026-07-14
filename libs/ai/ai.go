@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 // Provider turns a single resolved execution-mode run into a Markdown document.
@@ -15,10 +16,15 @@ type Provider interface {
 
 // RunInput is everything a provider needs to produce one Markdown document:
 // the LLM instruction text (already resolved by executionmode.Resolve), the
-// time window, the collected statuses, and where to stream/debug.
+// time window, the collected statuses, correlated work items, and where to
+// stream/debug.
 //
 // ModeID is provided so the deterministic RuleBasedProvider can preserve the
 // historical per-mode output shape; LLM providers ignore it.
+//
+// WorkItems is the correlated + annotated view of Statuses. Report modes that
+// summarize work (daily-plan, recent-activity, custom-prompt) should prefer
+// WorkItems; prs still reads Statuses for pr_review_status rows.
 type RunInput struct {
 	ModeID       string
 	ModeName     string
@@ -27,6 +33,7 @@ type RunInput struct {
 	LookbackDays int // 0 when the lookback is not days-based (e.g. previous-weekday)
 	Instruction  string
 	Statuses     []collectors.StatusItem
+	WorkItems    []model.WorkItem
 	DebugDir     string
 	StreamOut    io.Writer
 }

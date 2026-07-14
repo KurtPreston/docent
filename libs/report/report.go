@@ -20,6 +20,7 @@ import (
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 // Options carries everything Generate needs for one report run: the mode
@@ -77,9 +78,10 @@ type RenderOptions struct {
 
 // Result is the outcome of a report run.
 type Result struct {
-	Markdown string
-	Run      executionmode.ResolvedRun
-	Statuses int
+	Markdown  string
+	Run       executionmode.ResolvedRun
+	Statuses  int
+	WorkItems int
 }
 
 // Generate runs the full pipeline (resolve -> collect -> render) for the
@@ -131,8 +133,15 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		return Result{}, err
 	}
 
+	workItems, statuses, err := Correlate(ctx, reg, cfg, statuses, CorrelateOptions{
+		ConfigDir: opts.ConfigDir,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+
 	provider := ai.SelectProvider(cfg.AI, opts.Provider)
-	md, err := Render(ctx, resolved, statuses, provider, RenderOptions{
+	md, err := Render(ctx, resolved, statuses, workItems, provider, RenderOptions{
 		DebugDir:  opts.DebugDir,
 		StreamOut: opts.StreamOut,
 	})
@@ -140,7 +149,7 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		return Result{}, err
 	}
 
-	return Result{Markdown: md, Run: resolved, Statuses: len(statuses)}, nil
+	return Result{Markdown: md, Run: resolved, Statuses: len(statuses), WorkItems: len(workItems)}, nil
 }
 
 // Collect runs the enabled directives for an already-resolved run, honoring
@@ -200,10 +209,11 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 	return all, nil
 }
 
-// Render turns a resolved run + collected statuses into a Markdown document
-// via the given provider, applying the mode's per-run formatter override.
-// The returned Markdown is trimmed and newline-terminated.
-func Render(ctx context.Context, resolved executionmode.ResolvedRun, statuses []collectors.StatusItem, provider ai.Provider, opts RenderOptions) (string, error) {
+// Render turns a resolved run + collected statuses + correlated work items
+// into a Markdown document via the given provider, applying the mode's
+// per-run formatter override. The returned Markdown is trimmed and
+// newline-terminated.
+func Render(ctx context.Context, resolved executionmode.ResolvedRun, statuses []collectors.StatusItem, workItems []model.WorkItem, provider ai.Provider, opts RenderOptions) (string, error) {
 	if resolved.Formatter != "" {
 		provider = ai.WithFormatter(provider, ai.SelectActivityFormatter(resolved.Formatter))
 	}
@@ -215,6 +225,7 @@ func Render(ctx context.Context, resolved executionmode.ResolvedRun, statuses []
 		LookbackDays: resolved.LookbackDays,
 		Instruction:  resolved.Instruction,
 		Statuses:     statuses,
+		WorkItems:    workItems,
 		DebugDir:     opts.DebugDir,
 		StreamOut:    opts.StreamOut,
 	})
