@@ -42,6 +42,11 @@ type ResolveOpts struct {
 	// prompt / default (involved). ScopeUnset ("") means "no override".
 	ScopeOverride Scope
 
+	// CollectOverride forces the collection capability for this run
+	// regardless of what the mode pinned. Precedence: override >
+	// mode-pinned > default (events). CollectUnset ("") means "no override".
+	CollectOverride Collect
+
 	// ConfigActivityFormatter is the ai.activity_formatter value from
 	// userdata/config.yaml. Used as the fallback when the mode does not
 	// override the formatter. Empty falls through to the AI package's own
@@ -60,6 +65,8 @@ type ResolvedRun struct {
 	Formatter    string // resolved formatter name; "" => provider/global default
 	Instruction  string // LLM instruction (verbatim; provider appends activity body)
 	Scope        Scope
+	// Collect is the resolved collection capability (events, state, or both).
+	Collect Collect
 	// Collectors restricts collection to these collector types (by their
 	// directive `collector` value). Empty means "all enabled directives".
 	Collectors []string
@@ -83,6 +90,11 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 	}
 
 	scope, err := resolveScope(mode.Scope, opts)
+	if err != nil {
+		return ResolvedRun{}, err
+	}
+
+	collect, err := resolveCollect(mode.Collect, opts)
 	if err != nil {
 		return ResolvedRun{}, err
 	}
@@ -113,6 +125,7 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 		Formatter:    formatter,
 		Instruction:  instruction,
 		Scope:        scope,
+		Collect:      collect,
 		Collectors:   collectorTypes,
 	}, nil
 }
@@ -180,6 +193,23 @@ func resolveScope(declared Scope, opts ResolveOpts) (Scope, error) {
 		return raw, nil
 	}
 	return "", fmt.Errorf("invalid scope choice %q", pick)
+}
+
+// resolveCollect picks the collection capability for a run. Precedence:
+// override > mode-pinned > default (events). Unlike Scope there is no
+// interactive prompt — modes that need state declare it, and callers that
+// need a one-off override pass CollectOverride / --collect.
+func resolveCollect(declared Collect, opts ResolveOpts) (Collect, error) {
+	if opts.CollectOverride != CollectUnset {
+		if err := opts.CollectOverride.Validate(); err != nil {
+			return "", err
+		}
+		return opts.CollectOverride, nil
+	}
+	if declared != CollectUnset {
+		return declared, nil
+	}
+	return CollectEvents, nil
 }
 
 // scopeMenu returns the labels shown in the interactive scope picker, a

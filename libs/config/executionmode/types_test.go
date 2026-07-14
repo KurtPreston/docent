@@ -58,6 +58,15 @@ func TestExecutionModeValidate(t *testing.T) {
 			mode:    ExecutionMode{ID: "x", Scope: "team"},
 			wantErr: "unknown scope",
 		},
+		{
+			name:    "unknown collect",
+			mode:    ExecutionMode{ID: "x", Collect: "timeline"},
+			wantErr: "unknown collect",
+		},
+		{
+			name: "ok collect both",
+			mode: ExecutionMode{ID: "x", Collect: CollectBoth},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,6 +120,9 @@ func TestBuiltinModesValid(t *testing.T) {
 			if m.Scope != ScopeInvolved {
 				t.Fatalf("daily-plan scope: %q", m.Scope)
 			}
+			if m.Collect != CollectBoth {
+				t.Fatalf("daily-plan collect: %q", m.Collect)
+			}
 		case BuiltinRecentActivity:
 			if m.Lookback != nil {
 				t.Fatalf("recent-activity should leave Lookback nil so the user is asked, got %+v", m.Lookback)
@@ -121,6 +133,9 @@ func TestBuiltinModesValid(t *testing.T) {
 			if m.Scope != ScopeUnset {
 				t.Fatalf("recent-activity should leave Scope unset so the user is asked, got %q", m.Scope)
 			}
+			if m.Collect != CollectEvents {
+				t.Fatalf("recent-activity collect: %q", m.Collect)
+			}
 		case BuiltinCustomPrompt:
 			if m.Lookback != nil {
 				t.Fatalf("custom-prompt should leave Lookback nil so the user is asked, got %+v", m.Lookback)
@@ -130,6 +145,9 @@ func TestBuiltinModesValid(t *testing.T) {
 			}
 			if m.Scope != ScopeInvolved {
 				t.Fatalf("custom-prompt scope: %q", m.Scope)
+			}
+			if m.Collect != CollectEvents {
+				t.Fatalf("custom-prompt collect: %q", m.Collect)
 			}
 		case BuiltinPRs:
 			// prs pins everything so a non-interactive `--mode prs`
@@ -142,6 +160,9 @@ func TestBuiltinModesValid(t *testing.T) {
 			}
 			if m.Scope != ScopeSelf {
 				t.Fatalf("prs scope: %q", m.Scope)
+			}
+			if m.Collect != CollectState {
+				t.Fatalf("prs collect: %q", m.Collect)
 			}
 			wantCollectors := map[string]bool{"github": true, "github-enterprise": true}
 			if len(m.Collectors) != len(wantCollectors) {

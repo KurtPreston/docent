@@ -59,6 +59,9 @@ func TestResolvePRsDoesNotPromptAndCarriesCollectors(t *testing.T) {
 	if res.Scope != ScopeSelf {
 		t.Fatalf("prs scope: %q", res.Scope)
 	}
+	if res.Collect != CollectState {
+		t.Fatalf("prs collect: %q", res.Collect)
+	}
 	want := map[string]bool{"github": true, "github-enterprise": true}
 	if len(res.Collectors) != len(want) {
 		t.Fatalf("prs collectors: %v", res.Collectors)
@@ -67,6 +70,38 @@ func TestResolvePRsDoesNotPromptAndCarriesCollectors(t *testing.T) {
 		if !want[c] {
 			t.Fatalf("unexpected collector %q in resolved run", c)
 		}
+	}
+}
+
+func TestResolveCollectOverridePrecedence(t *testing.T) {
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+
+	// Override beats a mode that pinned collect (daily-plan pins both).
+	daily := mustFindBuiltin(t, BuiltinDailyPlan)
+	res, err := Resolve(daily, ResolveOpts{Now: now, CollectOverride: CollectEvents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Collect != CollectEvents {
+		t.Fatalf("override should beat mode-pinned collect: got %q want events", res.Collect)
+	}
+
+	// Unset mode defaults to events.
+	mode := ExecutionMode{
+		ID:       "untyped",
+		Lookback: &Lookback{Kind: LookbackKindDays, Days: 3},
+		Prompt:   &Prompt{Instruction: "x"},
+	}
+	res, err = Resolve(mode, ResolveOpts{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Collect != CollectEvents {
+		t.Fatalf("default collect: got %q want events", res.Collect)
+	}
+
+	if _, err := Resolve(daily, ResolveOpts{Now: now, CollectOverride: Collect("bogus")}); err == nil {
+		t.Fatal("expected error for invalid collect override")
 	}
 }
 
@@ -134,6 +169,9 @@ func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	}
 	if res.Scope != ScopeInvolved {
 		t.Fatalf("daily-plan scope: %q", res.Scope)
+	}
+	if res.Collect != CollectBoth {
+		t.Fatalf("daily-plan collect: %q", res.Collect)
 	}
 }
 

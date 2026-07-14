@@ -31,6 +31,7 @@ func BuiltinModes() []ExecutionMode {
 			Lookback: &Lookback{Kind: LookbackKindPreviousWeekday},
 			Prompt:   &Prompt{Instruction: dailyPlanInstruction},
 			Scope:    ScopeInvolved,
+			Collect:  CollectBoth,
 		},
 		{
 			ID:   BuiltinRecentActivity,
@@ -40,7 +41,9 @@ func BuiltinModes() []ExecutionMode {
 			// involved) at runtime, matching the README's "default 7,
 			// or prompt" lookback and the documented behavior that any
 			// property a mode omits is asked interactively.
-			Prompt: &Prompt{Instruction: recentActivityInstruction},
+			// Collect defaults to events (activity timeline).
+			Prompt:  &Prompt{Instruction: recentActivityInstruction},
+			Collect: CollectEvents,
 		},
 		{
 			ID:   BuiltinPRs,
@@ -52,6 +55,7 @@ func BuiltinModes() []ExecutionMode {
 			Lookback: &Lookback{Kind: LookbackKindPreviousWeekday},
 			Prompt:   &Prompt{Instruction: prsInstruction},
 			Scope:    ScopeSelf,
+			Collect:  CollectState,
 			// Only the GitHub collectors can answer "what are my open
 			// PRs and are they ready for review"; skip everything else.
 			Collectors: []string{"github", "github-enterprise"},
@@ -65,7 +69,8 @@ func BuiltinModes() []ExecutionMode {
 			// "default 7, or prompt" lookback. --days still overrides.
 			// Prompt left nil on purpose: the user supplies the prompt
 			// interactively (or via --prompt / --prompt-file).
-			Scope: ScopeInvolved,
+			Scope:   ScopeInvolved,
+			Collect: CollectEvents,
 		},
 	}
 }

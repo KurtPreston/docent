@@ -65,6 +65,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	days := fs.Int("days", 0, "lookback days override (0 = use mode default or prompt)")
 	promptFlag := fs.String("prompt", "", "instruction override for the LLM (replaces the mode's prompt for this run)")
 	promptFile := fs.String("prompt-file", "", "read instruction override from file")
+	collectFlag := fs.String("collect", "", "collection capability override: events, state, or both (0 = use mode default)")
 	checkOnly := fs.Bool("check", false, "validate every enabled directive and exit without collecting data")
 	skipCheck := fs.Bool("skip-check", false, "skip the pre-flight directive validation that runs alongside the interactive menu")
 
@@ -204,6 +205,11 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	collectOverride, err := parseCollectFlag(*collectFlag)
+	if err != nil {
+		return err
+	}
+
 	var resolvePrompter executionmode.Prompter
 	if a.stdinIsTerminal() {
 		resolvePrompter = StdioPrompter{In: a.In, Out: a.Out}
@@ -213,6 +219,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		Prompter:                resolvePrompter,
 		DaysOverride:            *days,
 		PromptOverride:          promptOverride,
+		CollectOverride:         collectOverride,
 		ConfigActivityFormatter: cfg.AI.ActivityFormatter,
 	})
 	if err != nil {
@@ -435,6 +442,20 @@ func readPromptOverride(promptFlag, promptFile string) (string, error) {
 		return string(b), nil
 	}
 	return promptFlag, nil
+}
+
+// parseCollectFlag maps the --collect CLI flag to an executionmode.Collect
+// override. Empty means "no override" (use the mode default).
+func parseCollectFlag(raw string) (executionmode.Collect, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return executionmode.CollectUnset, nil
+	}
+	c := executionmode.Collect(v)
+	if err := c.Validate(); err != nil {
+		return "", fmt.Errorf("--collect: %w", err)
+	}
+	return c, nil
 }
 
 // uniqueOutputPath returns path if nothing exists at that path yet; otherwise it

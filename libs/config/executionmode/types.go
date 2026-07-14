@@ -50,6 +50,22 @@ const (
 	ScopeAll      Scope = "all"
 )
 
+// Collect describes which collection capabilities a run should invoke.
+// Mirrors Scope as a declared mode default with a per-run override:
+//
+//   - CollectEvents: activity/timeline within the lookback window (default).
+//   - CollectState: current-state snapshots (open PRs, current JIRA tiers),
+//     independent of the time window.
+//   - CollectBoth: run both passes and union the signals.
+type Collect string
+
+const (
+	CollectUnset  Collect = ""
+	CollectEvents Collect = "events"
+	CollectState  Collect = "state"
+	CollectBoth   Collect = "both"
+)
+
 // ExecutionMode is one declaratively-described docent run shape. All fields
 // are optional except ID; anything omitted is filled in at runtime by
 // Resolve.
@@ -60,6 +76,9 @@ type ExecutionMode struct {
 	Formatter string    `yaml:"formatter,omitempty"`
 	Prompt    *Prompt   `yaml:"prompt,omitempty"`
 	Scope     Scope     `yaml:"scope,omitempty"`
+	// Collect pins which collection capabilities the run uses (events,
+	// state, or both). Empty means Resolve defaults to CollectEvents.
+	Collect Collect `yaml:"collect,omitempty"`
 
 	// Collectors optionally restricts a run to a subset of collector
 	// types (by their directive `collector` value, e.g. "github" /
@@ -117,6 +136,9 @@ func (m ExecutionMode) Validate() error {
 	if err := m.Scope.Validate(); err != nil {
 		return err
 	}
+	if err := m.Collect.Validate(); err != nil {
+		return err
+	}
 	for i, c := range m.Collectors {
 		if strings.TrimSpace(c) == "" {
 			return fmt.Errorf("collectors[%d] must not be empty", i)
@@ -152,5 +174,16 @@ func (s Scope) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("unknown scope %q (expected one of: %s, %s, %s)", string(s), ScopeSelf, ScopeInvolved, ScopeAll)
+	}
+}
+
+// Validate ensures Collect is one of the known values (the empty string
+// is allowed and means "resolve to the default").
+func (c Collect) Validate() error {
+	switch c {
+	case CollectUnset, CollectEvents, CollectState, CollectBoth:
+		return nil
+	default:
+		return fmt.Errorf("unknown collect %q (expected one of: %s, %s, %s)", string(c), CollectEvents, CollectState, CollectBoth)
 	}
 }

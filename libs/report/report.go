@@ -36,6 +36,9 @@ type Options struct {
 	// Scope forces the collection scope. ScopeUnset ("") uses the mode
 	// default (which is ScopeInvolved for non-interactive callers).
 	Scope executionmode.Scope
+	// Collect forces the collection capability (events / state / both).
+	// CollectUnset ("") uses the mode default (events for most modes).
+	Collect executionmode.Collect
 
 	// Now is the clock anchor. Zero uses time.Now().
 	Now time.Time
@@ -106,6 +109,7 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		DaysOverride:            opts.Days,
 		PromptOverride:          opts.Prompt,
 		ScopeOverride:           opts.Scope,
+		CollectOverride:         opts.Collect,
 		ConfigActivityFormatter: cfg.AI.ActivityFormatter,
 	})
 	if err != nil {
@@ -139,21 +143,16 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 	return Result{Markdown: md, Run: resolved, Statuses: len(statuses)}, nil
 }
 
-// Collect runs the enabled directives for an already-resolved run, choosing
-// the state snapshot path for the `prs` mode and the events timeline path
-// otherwise. It assembles the CollectOpts both the CLI and Generate need.
+// Collect runs the enabled directives for an already-resolved run, honoring
+// resolved.Collect (events, state, or both). When CollectBoth, both passes
+// run and their signals are concatenated. It assembles the CollectOpts both
+// the CLI and Generate need.
 func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigFile, resolved executionmode.ResolvedRun, opts CollectOptions) ([]collectors.StatusItem, error) {
 	expand := opts.ExpandRepoPath
 	if expand == nil {
 		expand = func(s string) string { return s }
 	}
-	// `prs` lists current open PRs (state view); everything else walks the
-	// activity timeline.
-	collectMode := collectors.ModeEvents
-	if resolved.ModeID == executionmode.BuiltinPRs {
-		collectMode = collectors.ModeState
-	}
-	return reg.Collect(ctx, cfg.Directives, &collectors.CollectOpts{
+	base := &collectors.CollectOpts{
 		UserdataDir:        opts.ConfigDir,
 		ExpandRepoPath:     expand,
 		OnDirectiveUpdate:  opts.OnDirectiveUpdate,
@@ -161,9 +160,44 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 		Until:              resolved.Until,
 		Scope:              collectors.Scope(resolved.Scope),
 		OnlyCollectorTypes: resolved.Collectors,
-		Mode:               collectMode,
 		RunLog:             opts.RunLog,
-	})
+	}
+
+	collect := resolved.Collect
+	if collect == executionmode.CollectUnset {
+		collect = executionmode.CollectEvents
+	}
+
+	var all []collectors.StatusItem
+	runPass := func(mode collectors.Mode) error {
+		pass := *base
+		pass.Mode = mode
+		items, err := reg.Collect(ctx, cfg.Directives, &pass)
+		if err != nil {
+			return err
+		}
+		all = append(all, items...)
+		return nil
+	}
+
+	switch collect {
+	case executionmode.CollectState:
+		if err := runPass(collectors.ModeState); err != nil {
+			return nil, err
+		}
+	case executionmode.CollectBoth:
+		if err := runPass(collectors.ModeEvents); err != nil {
+			return nil, err
+		}
+		if err := runPass(collectors.ModeState); err != nil {
+			return nil, err
+		}
+	default: // CollectEvents
+		if err := runPass(collectors.ModeEvents); err != nil {
+			return nil, err
+		}
+	}
+	return all, nil
 }
 
 // Render turns a resolved run + collected statuses into a Markdown document
