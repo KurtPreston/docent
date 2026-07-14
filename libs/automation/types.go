@@ -132,6 +132,14 @@ type Event struct {
 	From      string   // transition from-value
 	To        string   // transition to-value
 	FiredAt   time.Time
+
+	// PriorActionError accumulates "<action type>: <error>" for every action
+	// that has already failed earlier in this rule's action chain (joined
+	// with "; "). The dispatcher updates it in place before running each
+	// action, so a later action (typically a `shell` notifier) can report a
+	// real failure instead of guessing from side effects. Empty when every
+	// preceding action in this run succeeded.
+	PriorActionError string
 }
 
 // Context is the template/env context for an action.
@@ -153,6 +161,8 @@ type Context struct {
 	StableID string
 	IsSelf   bool
 	FiredAt  time.Time
+	// ActionError mirrors Event.PriorActionError (see there for details).
+	ActionError string
 }
 
 // TicketRef is a JIRA (or ticket-pattern) key attached to an event.

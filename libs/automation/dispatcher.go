@@ -4,10 +4,28 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
+
+// maxActionErrorLen caps how much of a single action's error text is kept
+// in the accumulated PriorActionError chain, so one verbose failure (e.g. a
+// captured agent stdout/stderr blob) can't blow up the env var / template
+// payload passed to later actions.
+const maxActionErrorLen = 2000
+
+// describeActionError formats one action's failure for the chain, truncating
+// long error text (long stdout/stderr capture) to keep it notification-sized.
+func describeActionError(actionType string, err error) string {
+	msg := err.Error()
+	if len(msg) > maxActionErrorLen {
+		msg = msg[:maxActionErrorLen] + "… (truncated)"
+	}
+	return fmt.Sprintf("%s: %s", actionType, msg)
+}
 
 // Dispatcher matches events against cooldown and runs actions asynchronously.
 type Dispatcher struct {
@@ -85,9 +103,12 @@ func (d *Dispatcher) RunRuleNow(ctx context.Context, ev Event) Job {
 	now := time.Now()
 	d.Store.Start(id, ev.Rule.ID, "manual:"+ev.Rule.ID, now)
 	var lastErr error
+	var priorErrs []string
 	for _, action := range ev.Rule.Actions {
+		ev.PriorActionError = strings.Join(priorErrs, "; ")
 		if err := d.Registry.Run(ctx, action, ev); err != nil {
 			lastErr = err
+			priorErrs = append(priorErrs, describeActionError(action.Type, err))
 			d.logf("automation %s (manual) action %s failed: %v", ev.Rule.ID, action.Type, err)
 		}
 	}
@@ -108,9 +129,12 @@ func (d *Dispatcher) runJob(id string, ev Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	var lastErr error
+	var priorErrs []string
 	for _, action := range ev.Rule.Actions {
+		ev.PriorActionError = strings.Join(priorErrs, "; ")
 		if err := d.Registry.Run(ctx, action, ev); err != nil {
 			lastErr = err
+			priorErrs = append(priorErrs, describeActionError(action.Type, err))
 			d.logf("automation %s action %s failed: %v", ev.Rule.ID, action.Type, err)
 			// Continue remaining actions; record overall failure at the end.
 		}

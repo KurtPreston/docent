@@ -319,13 +319,14 @@ func ticketFromEntity(ent model.Entity, cfg correlation.Config) string {
 // EventContext builds a Context from an Event for templating / env.
 func EventContext(ev Event) Context {
 	ctx := Context{
-		RuleID:  ev.Rule.ID,
-		Match:   ev.Match,
-		From:    ev.From,
-		To:      ev.To,
-		FiredAt: ev.FiredAt,
-		Ticket:  TicketRef{Key: ev.TicketKey},
-		Fields:  map[string]string{},
+		RuleID:      ev.Rule.ID,
+		Match:       ev.Match,
+		From:        ev.From,
+		To:          ev.To,
+		FiredAt:     ev.FiredAt,
+		Ticket:      TicketRef{Key: ev.TicketKey},
+		Fields:      map[string]string{},
+		ActionError: ev.PriorActionError,
 	}
 	if ev.Signal != nil {
 		ctx.Source = ev.Signal.Source

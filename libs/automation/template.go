@@ -42,6 +42,11 @@ func EnvPairs(ctx Context) []string {
 		{"DOCENT_STABLE_ID", ctx.StableID},
 		{"DOCENT_FROM", ctx.From},
 		{"DOCENT_TO", ctx.To},
+		// Set only when an earlier action in this rule's chain already
+		// failed; lets a later notifier action (e.g. a `shell` step posting
+		// to Slack) report the real failure instead of guessing from side
+		// effects like a missing output file.
+		{"DOCENT_ACTION_ERROR", ctx.ActionError},
 	}
 	out := make([]string, 0, len(pairs)+len(ctx.Fields)+len(ctx.Match))
 	for _, p := range pairs {

@@ -2,6 +2,7 @@ package automation_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -321,6 +322,55 @@ func TestDispatcherCooldown(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("calls=%d want 1", calls)
 	}
+}
+
+func TestRunRuleNowPropagatesPriorActionError(t *testing.T) {
+	d := automation.NewDispatcher(nil)
+	d.Registry.Register("report", automation.RunnerFunc(func(ctx context.Context, action automation.Action, ev automation.Event) error {
+		if ev.PriorActionError != "" {
+			t.Fatalf("expected no prior error before the first action, got %q", ev.PriorActionError)
+		}
+		return fmt.Errorf("cursor-agent exited with code 1: stderr:\nError: Authentication required")
+	}))
+	var seenEnv, seenTemplateErr string
+	d.Registry.Register("shell", automation.RunnerFunc(func(ctx context.Context, action automation.Action, ev automation.Event) error {
+		seenEnv = envValue(automation.EnvPairs(automation.EventContext(ev)), "DOCENT_ACTION_ERROR")
+		seenTemplateErr = automation.EventContext(ev).ActionError
+		return nil
+	}))
+	ev := automation.Event{
+		Rule: automation.Rule{
+			ID: "daily-standup",
+			Actions: []automation.Action{
+				{Type: "report"},
+				{Type: "shell", Command: "notify-slack.sh"},
+			},
+		},
+		FiredAt: time.Now(),
+	}
+	job := d.RunRuleNow(context.Background(), ev)
+	if job.Status != automation.JobError {
+		t.Fatalf("job status = %v, want error", job.Status)
+	}
+	if !strings.Contains(seenEnv, "Authentication required") {
+		t.Fatalf("DOCENT_ACTION_ERROR = %q, want it to mention the report action's failure", seenEnv)
+	}
+	if !strings.HasPrefix(seenEnv, "report: ") {
+		t.Fatalf("DOCENT_ACTION_ERROR = %q, want it prefixed with the failing action's type", seenEnv)
+	}
+	if seenTemplateErr != seenEnv {
+		t.Fatalf("Context.ActionError = %q, want it to match the env value %q", seenTemplateErr, seenEnv)
+	}
+}
+
+func envValue(pairs []string, key string) string {
+	prefix := key + "="
+	for _, p := range pairs {
+		if strings.HasPrefix(p, prefix) {
+			return strings.TrimPrefix(p, prefix)
+		}
+	}
+	return ""
 }
 
 func TestRenderTemplate(t *testing.T) {
