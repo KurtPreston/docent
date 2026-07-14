@@ -40,6 +40,9 @@ type Options struct {
 	// Collect forces the collection capability (events / state / both).
 	// CollectUnset ("") uses the mode default (events for most modes).
 	Collect executionmode.Collect
+	// TimeOfDay forces daily-plan morning/afternoon framing ("auto",
+	// "morning", "afternoon"). Empty is treated as auto.
+	TimeOfDay string
 
 	// Now is the clock anchor. Zero uses time.Now().
 	Now time.Time
@@ -112,6 +115,7 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		PromptOverride:          opts.Prompt,
 		ScopeOverride:           opts.Scope,
 		CollectOverride:         opts.Collect,
+		TimeOfDay:               opts.TimeOfDay,
 		ConfigActivityFormatter: cfg.AI.ActivityFormatter,
 	})
 	if err != nil {

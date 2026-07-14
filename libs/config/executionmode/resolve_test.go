@@ -147,7 +147,7 @@ func TestResolveScopeOverridePrecedence(t *testing.T) {
 
 func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	mode := mustFindBuiltin(t, BuiltinDailyPlan)
-	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC) // Tuesday
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC) // Tuesday morning
 	prompter := &scriptedPrompter{}
 	res, err := Resolve(mode, ResolveOpts{Now: now, Prompter: prompter})
 	if err != nil {
@@ -156,13 +156,14 @@ func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	if len(prompter.calls) != 0 {
 		t.Fatalf("daily-plan must not prompt the user, got calls: %v", prompter.calls)
 	}
-	// previous-weekday from Tuesday => Monday 00:00 UTC.
-	want := time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)
-	if !res.Since.Equal(want) {
-		t.Fatalf("since: got %v want %v", res.Since, want)
+	// Morning frame: previous work day (Monday) 00:00 → today 00:00.
+	wantSince := time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)
+	wantUntil := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	if !res.Since.Equal(wantSince) {
+		t.Fatalf("since: got %v want %v", res.Since, wantSince)
 	}
-	if !res.Until.Equal(now) {
-		t.Fatalf("until: got %v want %v", res.Until, now)
+	if !res.Until.Equal(wantUntil) {
+		t.Fatalf("until: got %v want %v", res.Until, wantUntil)
 	}
 	if res.LookbackDays != 0 {
 		t.Fatalf("daily-plan LookbackDays should be 0, got %d", res.LookbackDays)
@@ -173,11 +174,68 @@ func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	if res.Collect != CollectBoth {
 		t.Fatalf("daily-plan collect: %q", res.Collect)
 	}
+	if !res.IsMorning {
+		t.Fatal("expected morning frame")
+	}
+	if res.PrevDayLabel != "Monday" || res.NextDayLabel != "Tuesday" {
+		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
+	}
+}
+
+func TestResolveDailyPlanAfternoon(t *testing.T) {
+	mode := mustFindBuiltin(t, BuiltinDailyPlan)
+	now := time.Date(2026, 5, 5, 15, 30, 0, 0, time.UTC) // Tuesday afternoon
+	res, err := Resolve(mode, ResolveOpts{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSince := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	if !res.Since.Equal(wantSince) {
+		t.Fatalf("since: got %v want %v", res.Since, wantSince)
+	}
+	if !res.Until.Equal(now) {
+		t.Fatalf("until: got %v want %v", res.Until, now)
+	}
+	if res.IsMorning {
+		t.Fatal("expected afternoon frame")
+	}
+	if res.PrevDayLabel != "Tuesday" || res.NextDayLabel != "Wednesday" {
+		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
+	}
+}
+
+func TestResolveDailyPlanFridayAfternoonPlansMonday(t *testing.T) {
+	mode := mustFindBuiltin(t, BuiltinDailyPlan)
+	now := time.Date(2026, 5, 8, 16, 0, 0, 0, time.UTC) // Friday afternoon
+	res, err := Resolve(mode, ResolveOpts{Now: now, TimeOfDay: "afternoon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PrevDayLabel != "Friday" || res.NextDayLabel != "Monday" {
+		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
+	}
+}
+
+func TestResolveDailyPlanTimeOfDayOverride(t *testing.T) {
+	mode := mustFindBuiltin(t, BuiltinDailyPlan)
+	// 15:00 but force morning.
+	now := time.Date(2026, 5, 5, 15, 0, 0, 0, time.UTC)
+	res, err := Resolve(mode, ResolveOpts{Now: now, TimeOfDay: "morning"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsMorning {
+		t.Fatal("expected forced morning")
+	}
+	wantUntil := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC)
+	if !res.Until.Equal(wantUntil) {
+		t.Fatalf("until: got %v want %v", res.Until, wantUntil)
+	}
 }
 
 func TestResolvePreviousWeekdayFromMonday(t *testing.T) {
 	mode := mustFindBuiltin(t, BuiltinDailyPlan)
-	now := time.Date(2026, 5, 4, 9, 0, 0, 0, time.UTC) // Monday
+	now := time.Date(2026, 5, 4, 9, 0, 0, 0, time.UTC) // Monday morning
 	res, err := Resolve(mode, ResolveOpts{Now: now})
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +243,47 @@ func TestResolvePreviousWeekdayFromMonday(t *testing.T) {
 	want := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) // previous Friday
 	if !res.Since.Equal(want) {
 		t.Fatalf("Mon: got %v want %v", res.Since, want)
+	}
+	if res.PrevDayLabel != "Friday" || res.NextDayLabel != "Monday" {
+		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
+	}
+}
+
+func TestResolveDaysOverrideSkipsDailyPlanFrame(t *testing.T) {
+	mode := mustFindBuiltin(t, BuiltinDailyPlan)
+	now := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
+	res, err := Resolve(mode, ResolveOpts{Now: now, DaysOverride: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.LookbackDays != 14 {
+		t.Fatalf("override LookbackDays: got %d", res.LookbackDays)
+	}
+	want := now.Add(-14 * 24 * time.Hour)
+	if !res.Since.Equal(want) {
+		t.Fatalf("since: got %v want %v", res.Since, want)
+	}
+	if res.PrevDayLabel != "" || res.NextDayLabel != "" {
+		t.Fatalf("days override should skip day labels, got %q / %q", res.PrevDayLabel, res.NextDayLabel)
+	}
+}
+
+func TestPreviousNextWorkday(t *testing.T) {
+	// Wednesday → Tue / Thu
+	wed := time.Date(2026, 5, 6, 0, 0, 0, 0, time.UTC)
+	if got := previousWorkday(wed); !got.Equal(wed.AddDate(0, 0, -1)) {
+		t.Fatalf("prev Wed: %v", got)
+	}
+	if got := nextWorkday(wed); !got.Equal(wed.AddDate(0, 0, 1)) {
+		t.Fatalf("next Wed: %v", got)
+	}
+	fri := time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC)
+	if got := nextWorkday(fri); !got.Equal(fri.AddDate(0, 0, 3)) {
+		t.Fatalf("next Fri: %v", got)
+	}
+	mon := time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)
+	if got := previousWorkday(mon); !got.Equal(mon.AddDate(0, 0, -3)) {
+		t.Fatalf("prev Mon: %v", got)
 	}
 }
 

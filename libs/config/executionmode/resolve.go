@@ -47,6 +47,13 @@ type ResolveOpts struct {
 	// mode-pinned > default (events). CollectUnset ("") means "no override".
 	CollectOverride Collect
 
+	// TimeOfDay is the --time-of-day CLI flag for daily-plan framing:
+	// "auto" (default), "morning", or "afternoon". Empty is treated as auto.
+	TimeOfDay string
+	// MorningCutoffHour is the local hour (0-23) at which afternoon begins.
+	// Zero means the default of 12 (noon).
+	MorningCutoffHour int
+
 	// ConfigActivityFormatter is the ai.activity_formatter value from
 	// userdata/config.yaml. Used as the fallback when the mode does not
 	// override the formatter. Empty falls through to the AI package's own
@@ -70,6 +77,12 @@ type ResolvedRun struct {
 	// Collectors restricts collection to these collector types (by their
 	// directive `collector` value). Empty means "all enabled directives".
 	Collectors []string
+
+	// Daily-plan framing (populated only for BuiltinDailyPlan when --days
+	// is not overriding the window). Empty for other modes.
+	PrevDayLabel string // e.g. "Monday"
+	NextDayLabel string // e.g. "Tuesday"
+	IsMorning    bool
 }
 
 // Resolve produces a ResolvedRun from a mode + per-run options. It is
@@ -116,7 +129,7 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 		}
 	}
 
-	return ResolvedRun{
+	run := ResolvedRun{
 		ModeID:       mode.ID,
 		ModeName:     mode.Display(),
 		Since:        since,
@@ -127,7 +140,21 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 		Scope:        scope,
 		Collect:      collect,
 		Collectors:   collectorTypes,
-	}, nil
+	}
+
+	// Daily-plan gets a morning/afternoon frame when --days is not forcing
+	// a calendar-day override. This rewrites Since/Until and fills day labels.
+	if mode.ID == BuiltinDailyPlan && opts.DaysOverride <= 0 {
+		frame := resolveDailyPlanFrame(now, opts.TimeOfDay, opts.MorningCutoffHour)
+		run.Since = frame.Since
+		run.Until = frame.Until
+		run.PrevDayLabel = frame.PrevDayLabel
+		run.NextDayLabel = frame.NextDayLabel
+		run.IsMorning = frame.IsMorning
+		run.LookbackDays = 0
+	}
+
+	return run, nil
 }
 
 func resolveLookback(l *Lookback, opts ResolveOpts, now time.Time) (time.Time, int, error) {
@@ -291,18 +318,96 @@ func lookbackSinceDays(now time.Time, days int) time.Time {
 // day" for planning, matching the historical cli.PreviousWeekdayStart
 // semantics: Mon → Fri 00:00; Sat/Sun → Fri 00:00; Tue–Fri → yesterday 00:00.
 func previousWeekdayStart(now time.Time) time.Time {
+	return previousWorkday(startOfDay(now))
+}
+
+// startOfDay returns midnight local time for now's calendar day.
+func startOfDay(now time.Time) time.Time {
 	loc := now.Location()
 	local := now.In(loc)
 	y, m, d := local.Date()
-	today := time.Date(y, m, d, 0, 0, 0, 0, loc)
-	switch today.Weekday() {
+	return time.Date(y, m, d, 0, 0, 0, 0, loc)
+}
+
+// previousWorkday returns midnight on the previous Mon–Fri work day for the
+// given day's midnight. Mon → Fri; Sat → Fri; Sun → Fri; Tue–Fri → yesterday.
+func previousWorkday(day time.Time) time.Time {
+	switch day.Weekday() {
 	case time.Monday:
-		return today.AddDate(0, 0, -3)
+		return day.AddDate(0, 0, -3)
 	case time.Sunday:
-		return today.AddDate(0, 0, -2)
+		return day.AddDate(0, 0, -2)
 	case time.Saturday:
-		return today.AddDate(0, 0, -1)
+		return day.AddDate(0, 0, -1)
 	default:
-		return today.AddDate(0, 0, -1)
+		return day.AddDate(0, 0, -1)
+	}
+}
+
+// nextWorkday returns midnight on the next Mon–Fri work day for the given
+// day's midnight. Fri → Mon; Sat → Mon; Sun → Mon; Mon–Thu → tomorrow.
+func nextWorkday(day time.Time) time.Time {
+	switch day.Weekday() {
+	case time.Friday:
+		return day.AddDate(0, 0, 3)
+	case time.Saturday:
+		return day.AddDate(0, 0, 2)
+	case time.Sunday:
+		return day.AddDate(0, 0, 1)
+	default:
+		return day.AddDate(0, 0, 1)
+	}
+}
+
+// dailyPlanFrame is the morning/afternoon window + day-of-week labels for
+// the daily-plan mode.
+type dailyPlanFrame struct {
+	Since        time.Time
+	Until        time.Time
+	PrevDayLabel string
+	NextDayLabel string
+	IsMorning    bool
+}
+
+// resolveDailyPlanFrame computes the collection window and day labels.
+//
+//	Morning (< cutoff, default noon): previous work day → today 00:00;
+//	  labels = (prev work day DOW, today DOW).
+//	Afternoon (>= cutoff): today 00:00 → now;
+//	  labels = (today DOW, next work day DOW).
+//
+// timeOfDay may be "auto", "morning", "afternoon", or empty (auto).
+func resolveDailyPlanFrame(now time.Time, timeOfDay string, cutoffHour int) dailyPlanFrame {
+	if cutoffHour <= 0 || cutoffHour > 23 {
+		cutoffHour = 12
+	}
+	today := startOfDay(now)
+	isMorning := now.Hour() < cutoffHour
+	switch strings.ToLower(strings.TrimSpace(timeOfDay)) {
+	case "morning":
+		isMorning = true
+	case "afternoon":
+		isMorning = false
+	}
+
+	dow := func(t time.Time) string { return t.Weekday().String() }
+
+	if isMorning {
+		prev := previousWorkday(today)
+		return dailyPlanFrame{
+			Since:        prev,
+			Until:        today,
+			PrevDayLabel: dow(prev),
+			NextDayLabel: dow(today),
+			IsMorning:    true,
+		}
+	}
+	next := nextWorkday(today)
+	return dailyPlanFrame{
+		Since:        today,
+		Until:        now,
+		PrevDayLabel: dow(today),
+		NextDayLabel: dow(next),
+		IsMorning:    false,
 	}
 }

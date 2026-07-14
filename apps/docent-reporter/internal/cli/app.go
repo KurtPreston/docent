@@ -66,6 +66,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	promptFlag := fs.String("prompt", "", "instruction override for the LLM (replaces the mode's prompt for this run)")
 	promptFile := fs.String("prompt-file", "", "read instruction override from file")
 	collectFlag := fs.String("collect", "", "collection capability override: events, state, or both (0 = use mode default)")
+	timeOfDayFlag := fs.String("time-of-day", "auto", "daily-plan framing: auto (noon cutoff), morning, or afternoon")
 	checkOnly := fs.Bool("check", false, "validate every enabled directive and exit without collecting data")
 	skipCheck := fs.Bool("skip-check", false, "skip the pre-flight directive validation that runs alongside the interactive menu")
 
@@ -209,6 +210,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	timeOfDay, err := parseTimeOfDayFlag(*timeOfDayFlag)
+	if err != nil {
+		return err
+	}
 
 	var resolvePrompter executionmode.Prompter
 	if a.stdinIsTerminal() {
@@ -220,6 +225,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		DaysOverride:            *days,
 		PromptOverride:          promptOverride,
 		CollectOverride:         collectOverride,
+		TimeOfDay:               timeOfDay,
 		ConfigActivityFormatter: cfg.AI.ActivityFormatter,
 	})
 	if err != nil {
@@ -463,6 +469,21 @@ func parseCollectFlag(raw string) (executionmode.Collect, error) {
 		return "", fmt.Errorf("--collect: %w", err)
 	}
 	return c, nil
+}
+
+// parseTimeOfDayFlag validates --time-of-day. Empty/"auto" both mean
+// noon-cutoff auto detection.
+func parseTimeOfDayFlag(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch v {
+	case "", "auto", "morning", "afternoon":
+		if v == "" {
+			return "auto", nil
+		}
+		return v, nil
+	default:
+		return "", fmt.Errorf("--time-of-day must be auto, morning, or afternoon (got %q)", raw)
+	}
 }
 
 // uniqueOutputPath returns path if nothing exists at that path yet; otherwise it
