@@ -180,62 +180,6 @@ func TestSignalEntityWorkItemLinks(t *testing.T) {
 	}
 }
 
-func TestClassifyGroup(t *testing.T) {
-	cases := []struct {
-		name       string
-		facts      groupFacts
-		wantStatus string
-		wantRank   int
-		wantAction bool
-	}{
-		{"live session needs followup", groupFacts{hasLiveSession: true, sessionNeedsFollowup: true, branchEvidence: true}, statusActive, rankActive, true},
-		{"live session no followup", groupFacts{hasLiveSession: true}, statusActive, rankActive, false},
-		{"approved beats started", groupFacts{authoredApproved: true, branchEvidence: true}, statusApproved, rankApproved, true},
-		{"jira started no branch", groupFacts{jiraStarted: true}, statusStarted, rankStarted, false},
-		{"draft pr is started", groupFacts{authoredDraft: true}, statusStarted, rankStarted, false},
-		{"branch evidence is started with action", groupFacts{branchEvidence: true}, statusStarted, rankStarted, true},
-		{"authored awaiting waits on others", groupFacts{authoredAwaiting: true}, statusAwaiting, rankAwaiting, false},
-		{"authored my turn", groupFacts{authoredAwaiting: true, authoredMyTurn: true}, statusAwaiting, rankAwaiting, true},
-		{"review requested needs action", groupFacts{reviewRequested: true}, statusAwaiting, rankAwaiting, true},
-		{"assigned no action", groupFacts{jiraAssigned: true}, statusAssigned, rankAssigned, false},
-		{"nothing hidden", groupFacts{}, "", rankHidden, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s, r, a := classifyGroup(tc.facts)
-			if s != tc.wantStatus || r != tc.wantRank || a != tc.wantAction {
-				t.Errorf("classifyGroup = (%q,%d,%v), want (%q,%d,%v)", s, r, a, tc.wantStatus, tc.wantRank, tc.wantAction)
-			}
-		})
-	}
-}
-
-func TestClassifyPR(t *testing.T) {
-	mk := func(state map[string]string) model.Entity {
-		return model.Entity{Kind: "pr_review_status", State: state}
-	}
-	var f groupFacts
-	classifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"}))
-	if !f.authoredApproved {
-		t.Error("approved+passing authored PR should set authoredApproved")
-	}
-	f = groupFacts{}
-	classifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "true"}))
-	if !f.authoredDraft || f.authoredApproved {
-		t.Errorf("draft PR facts wrong: %+v", f)
-	}
-	f = groupFacts{}
-	classifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "CHANGES_REQUESTED", "checks": "passing"}))
-	if !f.authoredAwaiting || !f.authoredMyTurn {
-		t.Errorf("changes-requested should be awaiting+my-turn: %+v", f)
-	}
-	f = groupFacts{}
-	classifyPR(&f, mk(map[string]string{"relation": "review_requested"}))
-	if !f.reviewRequested || f.authoredAwaiting {
-		t.Errorf("review_requested facts wrong: %+v", f)
-	}
-}
-
 func TestPrNumberFromURL(t *testing.T) {
 	tests := map[string]int{
 		"https://github.com/o/r/pull/123":      123,

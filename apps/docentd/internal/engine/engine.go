@@ -17,6 +17,7 @@ import (
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
 	"github.com/KurtPreston/docent/libs/sessionmanager"
+	"github.com/KurtPreston/docent/libs/workitem"
 )
 
 // Dashboard matches the legacy docent /sessions payload for the web UI.
@@ -60,22 +61,22 @@ type DashboardGroup struct {
 	Tickets        []DashboardTicket  `json:"tickets,omitempty"`
 }
 
-// Work-item status tiers, ordered by display priority (lower rank sorts
-// first). A work-item takes the lowest-rank status it qualifies for; one
-// with no qualifying status is hidden from the dashboard.
+// Work-item status tiers are defined in libs/workitem. Re-exported here as
+// package-local aliases so existing dashboard tests and string comparisons
+// keep working without a large churn.
 const (
-	statusActive   = "active"
-	statusApproved = "approved"
-	statusStarted  = "started"
-	statusAwaiting = "awaiting-response"
-	statusAssigned = "assigned"
+	statusActive   = workitem.StatusActive
+	statusApproved = workitem.StatusApproved
+	statusStarted  = workitem.StatusStarted
+	statusAwaiting = workitem.StatusAwaiting
+	statusAssigned = workitem.StatusAssigned
 
-	rankActive   = 1
-	rankApproved = 2
-	rankStarted  = 3
-	rankAwaiting = 4
-	rankAssigned = 5
-	rankHidden   = 99
+	rankActive   = workitem.RankActive
+	rankApproved = workitem.RankApproved
+	rankStarted  = workitem.RankStarted
+	rankAwaiting = workitem.RankAwaiting
+	rankAssigned = workitem.RankAssigned
+	rankHidden   = workitem.RankHidden
 )
 
 type DashboardSession struct {
@@ -988,21 +989,6 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 	return entities
 }
 
-// groupFacts accumulates the entity-derived signals a work-item needs to be
-// classified into a status + action_required.
-type groupFacts struct {
-	hasLiveSession       bool
-	sessionNeedsFollowup bool
-	authoredApproved     bool // authored, non-draft, approved, checks passing/none
-	authoredDraft        bool // authored draft PR
-	authoredAwaiting     bool // authored, non-draft, not approved
-	authoredMyTurn       bool // authored, non-draft, changes-requested or failing checks
-	reviewRequested      bool // someone else's PR awaiting my review
-	jiraStarted          bool
-	jiraAssigned         bool
-	branchEvidence       bool // a local branch/commit/reflog/session ties work to the ticket
-}
-
 func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.Config) Dashboard {
 	groups := make([]DashboardGroup, 0, len(workItems))
 	liveCount := 0
@@ -1042,28 +1028,28 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			g.Color = model.ColorForName(wi.Key)
 			g.FG = model.ForegroundForHex(g.Color)
 		}
-		var facts groupFacts
+		var facts workitem.Facts
 		for _, ent := range wi.Entities {
 			switch ent.Kind {
 			case "session":
 				live := ent.State["live"] == "true"
 				if live {
 					liveCount++
-					facts.hasLiveSession = true
+					facts.HasLiveSession = true
 				}
 				// A ticket-anchored session means a local checkout exists
 				// for that ticket (branch evidence for "started"). A
 				// ticketless session is still shown when live via
-				// hasLiveSession, but doesn't imply a ticket branch.
+				// HasLiveSession, but doesn't imply a ticket branch.
 				if ent.Coordinates["ticket"] != "" {
-					facts.branchEvidence = true
+					facts.BranchEvidence = true
 				}
 				status := ent.State["attention"]
 				if status == "" {
 					status = "idle"
 				}
 				if status == "needs-followup" {
-					facts.sessionNeedsFollowup = true
+					facts.SessionNeedsFollowup = true
 				}
 				ds := DashboardSession{
 					Kind:          "session",
@@ -1093,18 +1079,18 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 					g.JiraStatus = ent.State["status"]
 					switch ent.State["status_tier"] {
 					case "started":
-						facts.jiraStarted = true
+						facts.JiraStarted = true
 					case "assigned":
-						facts.jiraAssigned = true
+						facts.JiraAssigned = true
 					}
 				}
 			case "branch", "commit", "reflog":
 				// Repo/branch units always have local git evidence.
 				// Legacy ticket-keyed units only count when ticket-anchored.
 				if strings.HasPrefix(wi.Key, "wb:") {
-					facts.branchEvidence = true
+					facts.BranchEvidence = true
 				} else if ent.Coordinates["ticket"] != "" {
-					facts.branchEvidence = true
+					facts.BranchEvidence = true
 				}
 			default:
 				if strings.Contains(ent.Kind, "pr") {
@@ -1123,7 +1109,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 					// needs; events-mode activity PRs are shown as rows but
 					// don't drive classification.
 					if ent.Kind == "pr_review_status" {
-						classifyPR(&facts, ent)
+						workitem.ClassifyPR(&facts, ent)
 					}
 				}
 			}
@@ -1133,7 +1119,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 		if g.JiraURL == "" && correlation.ParseTicketKey(g.Ticket, corrCfg) != "" {
 			g.JiraURL = e.ticketBrowseURL(g.Ticket)
 		}
-		g.Status, g.StatusRank, g.ActionRequired = classifyGroup(facts)
+		g.Status, g.StatusRank, g.ActionRequired = workitem.Classify(facts)
 		if g.StatusRank >= rankHidden {
 			continue
 		}
@@ -1161,54 +1147,6 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 		Provider:     e.providerKey(),
 		SSHHost:      e.cfg.SSHHost,
 		Groups:       groups,
-	}
-}
-
-// classifyPR folds one PR entity's state into the group facts. Only authored
-// PRs (relation=authored) carry checks/review_decision; review_requested PRs
-// mean my review is still pending on someone else's PR.
-func classifyPR(facts *groupFacts, ent model.Entity) {
-	relation := ent.State["relation"]
-	if relation == "review_requested" {
-		facts.reviewRequested = true
-		return
-	}
-	// Treat anything else (authored, or legacy rows without a relation) as
-	// my own PR.
-	draft := ent.State["is_draft"] == "true"
-	if draft {
-		facts.authoredDraft = true
-		return
-	}
-	decision := ent.State["review_decision"]
-	checks := ent.State["checks"]
-	if decision == "APPROVED" && (checks == "passing" || checks == "none") {
-		facts.authoredApproved = true
-		return
-	}
-	facts.authoredAwaiting = true
-	if decision == "CHANGES_REQUESTED" || checks == "failing" {
-		facts.authoredMyTurn = true
-	}
-}
-
-// classifyGroup maps accumulated facts to (status, rank, action_required),
-// choosing the lowest-rank status the work-item qualifies for. Returns
-// rankHidden when nothing matches so the caller can drop the group.
-func classifyGroup(f groupFacts) (string, int, bool) {
-	switch {
-	case f.hasLiveSession:
-		return statusActive, rankActive, f.sessionNeedsFollowup
-	case f.authoredApproved:
-		return statusApproved, rankApproved, true // not merged yet
-	case f.jiraStarted || f.authoredDraft || f.branchEvidence:
-		return statusStarted, rankStarted, f.branchEvidence
-	case f.authoredAwaiting || f.reviewRequested:
-		return statusAwaiting, rankAwaiting, f.reviewRequested || f.authoredMyTurn
-	case f.jiraAssigned:
-		return statusAssigned, rankAssigned, false
-	default:
-		return "", rankHidden, false
 	}
 }
 
