@@ -18,7 +18,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/configschema"
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
-	"github.com/KurtPreston/docent/apps/docent-reporter/internal/runlog"
+	"github.com/KurtPreston/docent/libs/runlog"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/report"
 	"golang.org/x/term"

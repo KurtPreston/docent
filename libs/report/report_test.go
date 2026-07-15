@@ -39,6 +39,7 @@ func TestGenerateWiresResolvedRunThroughProvider(t *testing.T) {
 		Scope:    executionmode.ScopeAll,
 		Now:      now,
 		Provider: rec,
+		LogsDir:  t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -71,6 +72,9 @@ func TestGenerateWiresResolvedRunThroughProvider(t *testing.T) {
 	if len(rec.in.Statuses) != 0 {
 		t.Fatalf("provider Statuses: %d", len(rec.in.Statuses))
 	}
+	if rec.in.DebugDir == "" {
+		t.Fatal("expected Generate to provision DebugDir for AI logging")
+	}
 }
 
 func TestGenerateRuleBasedDeterministic(t *testing.T) {
@@ -78,9 +82,10 @@ func TestGenerateRuleBasedDeterministic(t *testing.T) {
 	cfg := userdata.ConfigFile{} // empty AI => built-in rule-based provider
 
 	res, err := Generate(context.Background(), cfg, Options{
-		ModeID: executionmode.BuiltinRecentActivity,
-		Days:   7,
-		Now:    now,
+		ModeID:  executionmode.BuiltinRecentActivity,
+		Days:    7,
+		Now:     now,
+		LogsDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -98,8 +103,9 @@ func TestGenerateRuleBasedDeterministic(t *testing.T) {
 
 func TestGenerateUnknownModeErrors(t *testing.T) {
 	_, err := Generate(context.Background(), userdata.ConfigFile{}, Options{
-		ModeID: "does-not-exist",
-		Now:    time.Now(),
+		ModeID:  "does-not-exist",
+		Now:     time.Now(),
+		LogsDir: t.TempDir(),
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown mode")

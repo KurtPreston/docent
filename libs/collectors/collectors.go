@@ -103,9 +103,8 @@ type CollectOpts struct {
 }
 
 // DirectiveLogger captures per-directive HTTP and subprocess
-// activity. The CLI builds a concrete logger that appends to
-// userdata/logs/<run>/<directive-id>.log; tests can pass nil
-// (collectors fall back to a noop logger).
+// activity. Callers write to <state>/logs/<run>/<directive-id>.log;
+// tests can pass nil (collectors fall back to a noop logger).
 type DirectiveLogger interface {
 	LogHTTP(method, url string, reqBytes int, status int, resBytes int64, duration time.Duration, err error)
 	LogExec(name string, args []string, exitCode int, stdoutBytes, stderrBytes int, duration time.Duration, err error)

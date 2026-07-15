@@ -3,10 +3,11 @@
 // collect signals for its window/scope, and render the result to Markdown
 // via the configured AI provider.
 //
-// It performs no file I/O, no stdout, and no interactive prompting. Callers
-// keep those concerns (the CLI writes run logs / output files and drives an
-// interactive picker; docentd wraps Generate in an async job). Overrides
-// (days, scope, prompt) must therefore be supplied explicitly.
+// Generate provisions a per-run log directory (AI request/response dumps and
+// collector HTTP/exec logs) when the caller does not supply DebugDir / RunLog.
+// The CLI stages its own run log and calls Collect/Render directly; docentd
+// goes through Generate and inherits that logging. Overrides (days, scope,
+// prompt) must be supplied explicitly.
 package report
 
 import (
@@ -18,9 +19,11 @@ import (
 
 	"github.com/KurtPreston/docent/libs/ai"
 	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/docentconfig"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/runlog"
 )
 
 // Options carries everything Generate needs for one report run: the mode
@@ -60,8 +63,14 @@ type Options struct {
 	ExpandRepoPath    func(string) string
 	OnDirectiveUpdate func(collectors.DirectiveProgress)
 	RunLog            collectors.RunLog
-	DebugDir          string
-	StreamOut         io.Writer
+	// DebugDir is where AI providers write summary-request/response JSON.
+	// Empty causes Generate to auto-create a run under LogsDir (or
+	// docentconfig.StateDir when LogsDir is also empty).
+	DebugDir string
+	// LogsDir is the parent of logs/<run>/ when DebugDir is empty.
+	// Empty defaults to docentconfig.StateDir(). Ignored when DebugDir is set.
+	LogsDir   string
+	StreamOut io.Writer
 }
 
 // CollectOptions are the collection-only knobs shared by Generate and the
@@ -90,6 +99,10 @@ type Result struct {
 // Generate runs the full pipeline (resolve -> collect -> render) for the
 // given config and options. docentd calls this directly; the CLI composes
 // the same steps itself so it can interleave run-log staging.
+//
+// When DebugDir is empty, Generate creates a run-log directory under LogsDir
+// (default: docentconfig.StateDir) so AI request/response JSON and collector
+// activity land in the same place as docent-reporter runs.
 func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Result, error) {
 	now := opts.Now
 	if now.IsZero() {
@@ -120,6 +133,25 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 	})
 	if err != nil {
 		return Result{}, err
+	}
+
+	if strings.TrimSpace(opts.DebugDir) == "" {
+		logsParent := strings.TrimSpace(opts.LogsDir)
+		if logsParent == "" {
+			logsParent = docentconfig.StateDir()
+		}
+		run, err := runlog.NewRun(logsParent, runBasename(now, resolved.ModeID), now)
+		if err != nil {
+			return Result{}, fmt.Errorf("create run log: %w", err)
+		}
+		opts.DebugDir = run.Dir()
+		if opts.RunLog == nil {
+			opts.RunLog = runLogAdapter{run: run}
+		}
+		defer func() {
+			_ = run.Close()
+			_ = runlog.PruneRunLogs(logsParent, runlog.DefaultRetention)
+		}()
 	}
 
 	reg := opts.Registry
@@ -154,6 +186,37 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 	}
 
 	return Result{Markdown: md, Run: resolved, Statuses: len(statuses), WorkItems: len(workItems)}, nil
+}
+
+// runBasename builds a unique-enough logs/<run>/ name for daemon-driven
+// Generate calls. The CLI uses the markdown output basename instead.
+func runBasename(now time.Time, modeID string) string {
+	modeID = strings.TrimSpace(modeID)
+	if modeID == "" {
+		modeID = "report"
+	}
+	var b strings.Builder
+	for _, r := range modeID {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return now.Format("2006-01-02T150405") + "-" + b.String()
+}
+
+// runLogAdapter bridges *runlog.Run to collectors.RunLog.
+type runLogAdapter struct {
+	run *runlog.Run
+}
+
+func (a runLogAdapter) Directive(id string) collectors.DirectiveLogger {
+	return a.run.Directive(id)
 }
 
 // Collect runs the enabled directives for an already-resolved run, honoring

@@ -1,5 +1,6 @@
 // Package runlog owns the per-run log directory that captures every
-// outbound activity docent performs. A single Run anchors:
+// outbound activity docent performs. Shared by docent-reporter and
+// docentd (via report.Generate). A single Run anchors:
 //
 //   - a top-level run.log capturing the resolved mode/options and a
 //     post-collection summary,
@@ -39,17 +40,19 @@ type Run struct {
 	closed   bool
 }
 
-// NewRun creates userdata/logs/<basename>/ (and the run.log inside it)
-// and returns a Run handle. basename is typically the saved markdown
-// output filename sans `.md` — including any `-2`/`-3` collision suffix
-// the CLI resolved beforehand. now is recorded as the run's start time
-// and used for the run.log header.
-func NewRun(userdataDir, basename string, now time.Time) (*Run, error) {
+// NewRun creates <parentDir>/logs/<basename>/ (and the run.log inside it)
+// and returns a Run handle. parentDir is typically the XDG state dir
+// (~/.local/state/docent) or a legacy combined userdata dir. basename is
+// typically the saved markdown output filename sans `.md` — including any
+// `-2`/`-3` collision suffix the CLI resolved beforehand — or a
+// timestamped mode id for daemon-driven runs. now is recorded as the
+// run's start time and used for the run.log header.
+func NewRun(parentDir, basename string, now time.Time) (*Run, error) {
 	basename = strings.TrimSpace(basename)
 	if basename == "" {
 		return nil, fmt.Errorf("runlog: basename is required")
 	}
-	dir := filepath.Join(userdataDir, "logs", basename)
+	dir := filepath.Join(parentDir, "logs", basename)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("runlog: create %s: %w", dir, err)
 	}
@@ -143,14 +146,14 @@ func (r *Run) Close() error {
 }
 
 // PruneRunLogs keeps the `keep` most recent subdirectories of
-// userdata/logs and removes the rest. Ordered by modification time
+// parentDir/logs and removes the rest. Ordered by modification time
 // (newest first). Errors during individual removes are swallowed so a
 // failed prune never blocks a finished run.
-func PruneRunLogs(userdataDir string, keep int) error {
+func PruneRunLogs(parentDir string, keep int) error {
 	if keep <= 0 {
 		return nil
 	}
-	root := filepath.Join(userdataDir, "logs")
+	root := filepath.Join(parentDir, "logs")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
