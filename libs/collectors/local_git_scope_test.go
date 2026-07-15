@@ -201,6 +201,84 @@ func TestLocalGitCollectResolvesWorktreePath(t *testing.T) {
 	}
 }
 
+// TestLocalGitCollectDedupesSharedWorktreeCommits verifies the two halves of
+// how the collector treats grove-style worktrees that share one object store:
+// commits (visible in every worktree via `git log --all`) are scanned once and
+// emitted a single time, while HEAD reflogs (which live in each worktree's own
+// gitdir) are still collected per worktree. Without the shared-store dedup the
+// feature branch's commit would be emitted once per sibling worktree.
+func TestLocalGitCollectDedupesSharedWorktreeCommits(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	codeHome := t.TempDir()
+	mainDir := codeHome + "/main"
+	featureDir := codeHome + "/feature"
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No faked GIT_*_DATE here: git stamps both commit times and reflog entry
+	// times at wall-clock "now", so the real-time collection window below
+	// captures the commits and the reflogs alike.
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	git(mainDir, "init", "--initial-branch=main", ".")
+	git(mainDir, "config", "user.name", "Kurt")
+	git(mainDir, "config", "user.email", "kurt@example")
+	git(mainDir, "commit", "--allow-empty", "-m", "initial on main")
+	// Sibling worktree on its own branch with a commit unique to that branch.
+	git(mainDir, "worktree", "add", "-b", "feature", featureDir)
+	git(featureDir, "config", "user.name", "Kurt")
+	git(featureDir, "config", "user.email", "kurt@example")
+	git(featureDir, "commit", "--allow-empty", "-m", "work on feature")
+
+	directive := userdata.Directive{
+		ID: "lg", Name: "Local", Collector: "local-git", Enabled: true,
+		CodeHome: codeHome,
+	}
+	now := time.Now()
+	c := LocalGitCollector{Clock: func() time.Time { return now }}
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
+		Since: now.Add(-24 * time.Hour),
+		Until: now.Add(24 * time.Hour),
+		Scope: ScopeAll,
+	})
+	if err != nil {
+		t.Fatalf("CollectEvents: %v", err)
+	}
+
+	// Commits: the feature branch's unique commit appears in every worktree's
+	// `git log --all`, but must be emitted exactly once.
+	featureCommits := 0
+	for _, it := range items {
+		if it.Kind == "commit" && it.Fields["subject"] == "work on feature" {
+			featureCommits++
+		}
+	}
+	if featureCommits != 1 {
+		t.Errorf("feature commit emitted %d time(s); want exactly 1 (a shared object store must be scanned once)", featureCommits)
+	}
+
+	// Reflogs: each worktree's own HEAD reflog is still collected, so rows
+	// tagged with both worktrees' paths must be present.
+	reflogBases := map[string]bool{}
+	for _, it := range items {
+		if it.Kind == "reflog" {
+			reflogBases[filepath.Base(it.Fields["path"])] = true
+		}
+	}
+	for _, want := range []string{"main", "feature"} {
+		if !reflogBases[want] {
+			t.Errorf("no reflog rows from the %q worktree (per-worktree reflogs must be preserved); got bases %v", want, reflogBases)
+		}
+	}
+}
+
 // TestLocalGitCollectSkipsEmptyRepo verifies that a freshly-initialised repo
 // with no commits yet is silently skipped instead of failing the whole
 // directive. Empty repos surfaced as `git reflog ... exit status 128: fatal:

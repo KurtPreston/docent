@@ -51,6 +51,12 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 	currentUser := strings.ToLower(strings.TrimSpace(currentOSUsername()))
 	var out []StatusItem
 	commitTimes := map[string]time.Time{}
+	// Tracks which shared git stores (keyed by common git dir) have already had
+	// their commit history scanned, so the many worktrees of one repository
+	// don't each re-emit the identical `git log --all` commit set. Reflogs are
+	// still collected per worktree below (HEAD's reflog lives in each
+	// worktree's own gitdir).
+	scannedCommits := map[string]bool{}
 	// One unit of progress per repo. This is by far the biggest
 	// wall-clock contributor for users with sizable code_home
 	// directories, so a steady "47/170" bar is much more useful than
@@ -95,48 +101,67 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		// not whichever worktree we happen to be scanning.
 		worktrees := localGitWorktreeBranches(ctx, abs, opts, directive.ID)
 
-		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
-		if err != nil {
-			return nil, err
+		// Worktrees of one repository share a single object store and ref set,
+		// so `git log --all` returns an identical commit set in every one of
+		// them (grove-style layouts keep 15+ worktrees side by side). Scan the
+		// history just once per shared store — keyed by the common git dir —
+		// rather than re-emitting (and re-walking) the same commits per
+		// worktree. Reflogs are handled per directory below, since HEAD's
+		// reflog lives in each worktree's own gitdir.
+		common := localGitCommonDir(ctx, abs, opts, directive.ID)
+		if common == "" {
+			common = abs
 		}
+		if !scannedCommits[common] {
+			scannedCommits[common] = true
 
-		// branchHashes is only populated for scope=involved (where we need
-		// to know which commits sit on local branches). For self/all we
-		// either don't care about it or just keep every commit anyway.
-		var branchHashes map[string]struct{}
-		if scope == ScopeInvolved {
-			branchHashes, err = localGitBranchHashes(ctx, abs, sinceISO, opts, directive.ID)
+			commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
 			if err != nil {
 				return nil, err
 			}
-		}
 
-		for _, ci := range commits {
-			keep := true
-			switch scope {
-			case ScopeSelf:
-				keep = ci.isSelf
-			case ScopeInvolved:
-				if !ci.isSelf {
-					if _, ok := branchHashes[ci.hash]; !ok {
-						keep = false
-					}
+			// branchHashes is only populated for scope=involved (where we need
+			// to know which commits sit on local branches). For self/all we
+			// either don't care about it or just keep every commit anyway.
+			var branchHashes map[string]struct{}
+			if scope == ScopeInvolved {
+				branchHashes, err = localGitBranchHashes(ctx, abs, sinceISO, opts, directive.ID)
+				if err != nil {
+					return nil, err
 				}
-			default: // ScopeAll
-				keep = true
 			}
-			if !keep {
-				continue
+
+			for _, ci := range commits {
+				keep := true
+				switch scope {
+				case ScopeSelf:
+					keep = ci.isSelf
+				case ScopeInvolved:
+					if !ci.isSelf {
+						if _, ok := branchHashes[ci.hash]; !ok {
+							keep = false
+						}
+					}
+				default: // ScopeAll
+					keep = true
+				}
+				if !keep {
+					continue
+				}
+				// Attribute the commit to the worktree that actually owns its
+				// branch — for both the open path and the disambiguating title
+				// prefix — instead of whichever worktree we scanned from.
+				commitDir := abs
+				if wt := worktrees[ci.branch]; ci.branch != "" && wt != "" {
+					commitDir = wt
+				}
+				item := buildLocalGitCommitItem(directive.ID, repoLabel, commitDir, ci, dirs)
+				if t := localGitTicket(ci.subject, repoTicket); t != "" {
+					item.Fields["ticket"] = t
+				}
+				out = append(out, item)
+				commitTimes[ci.hash] = ci.observed
 			}
-			item := buildLocalGitCommitItem(directive.ID, repoLabel, abs, ci, dirs)
-			if wt := worktrees[ci.branch]; ci.branch != "" && wt != "" {
-				item.Fields["path"] = wt
-			}
-			if t := localGitTicket(ci.subject, repoTicket); t != "" {
-				item.Fields["ticket"] = t
-			}
-			out = append(out, item)
-			commitTimes[ci.hash] = ci.observed
 		}
 
 		refOut, err := gitOutput(ctx, abs, opts, directive.ID, "reflog", "--since="+sinceISO, "--date=iso", "--pretty=format:%H%x09%gd%x09%gs")
@@ -447,6 +472,30 @@ func localGitWorktreeBranches(ctx context.Context, abs string, opts *CollectOpts
 		return nil
 	}
 	return branches
+}
+
+// localGitCommonDir returns the absolute path of a repository's shared git
+// directory (its "common dir"), which every linked worktree of that repository
+// reports identically. It is the natural key for collapsing many worktrees of
+// one repo down to a single commit scan: worktrees share one object store and
+// ref set, so `git log --all` yields the same commits in each. Returns "" on
+// error so callers can fall back to treating the directory as its own repo.
+func localGitCommonDir(ctx context.Context, abs string, opts *CollectOpts, directiveID string) string {
+	out, err := gitOutput(ctx, abs, opts, directiveID, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return ""
+	}
+	dir := strings.TrimSpace(out)
+	if dir == "" {
+		return ""
+	}
+	// `--git-common-dir` is absolute for linked worktrees but relative (".git")
+	// for an ordinary clone; resolve it against the scanned directory so the
+	// key is stable and comparable across sibling worktrees.
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(abs, dir)
+	}
+	return filepath.Clean(dir)
 }
 
 // localGitCurrentBranch returns the checked-out branch name for a repo (or
