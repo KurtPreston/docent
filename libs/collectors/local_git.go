@@ -88,6 +88,12 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		if repoTicket == "" {
 			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), correlation.Config{})
 		}
+		// When this repo has sibling worktrees sharing its refs (grove-style
+		// layouts), a commit surfaced by `git log --all` may belong to a
+		// branch checked out elsewhere. Map branch -> owning worktree so each
+		// row is tagged with the directory that actually holds its branch,
+		// not whichever worktree we happen to be scanning.
+		worktrees := localGitWorktreeBranches(ctx, abs, opts, directive.ID)
 
 		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
 		if err != nil {
@@ -123,6 +129,9 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				continue
 			}
 			item := buildLocalGitCommitItem(directive.ID, repoLabel, abs, ci, dirs)
+			if wt := worktrees[ci.branch]; ci.branch != "" && wt != "" {
+				item.Fields["path"] = wt
+			}
 			if t := localGitTicket(ci.subject, repoTicket); t != "" {
 				item.Fields["ticket"] = t
 			}
@@ -190,6 +199,9 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			}
 			if b := localGitReflogBranch(gd, gs); b != "" {
 				fields["branch"] = b
+				if wt := worktrees[b]; wt != "" {
+					fields["path"] = wt
+				}
 			}
 			// Reflog subjects like "checkout: moving from main to salsa-123"
 			// carry the branch (and thus ticket); fall back to the repo's
@@ -398,6 +410,43 @@ func parseReflogTime(gd string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
+}
+
+// localGitWorktreeBranches maps each local branch name to the absolute path of
+// the worktree that currently has it checked out, via `git worktree list
+// --porcelain`. Grove-style setups keep many worktrees of one repository side
+// by side under code_home, all sharing a single object store and refs, so `git
+// log --all` run in ANY worktree lists commits from EVERY branch — tagged,
+// misleadingly, with the scanned worktree's own path. Resolving a commit's
+// branch back to the worktree that actually holds it keeps a work item's
+// open-path pointed at the right directory instead of whichever sibling
+// worktree happened to be scanned first (alphabetically). Bare and detached
+// worktrees carry no branch line and are skipped; an ordinary single-worktree
+// repo yields exactly one entry. Returns nil on error so callers fall back to
+// the scanned path unchanged.
+func localGitWorktreeBranches(ctx context.Context, abs string, opts *CollectOpts, directiveID string) map[string]string {
+	out, err := gitOutput(ctx, abs, opts, directiveID, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	branches := map[string]string{}
+	var current string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			current = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		case strings.HasPrefix(line, "branch "):
+			ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+			if name := normalizeGitRef(ref); name != "" && current != "" {
+				branches[name] = current
+			}
+		}
+	}
+	if len(branches) == 0 {
+		return nil
+	}
+	return branches
 }
 
 // localGitCurrentBranch returns the checked-out branch name for a repo (or
