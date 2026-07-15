@@ -5,9 +5,11 @@ Monorepo suite containing local-first tooling for developer activity: **docentd*
 ## Monorepo layout
 
 ```
-libs/           shared Go packages (model, collectors, correlation, ai, config, …)
+libs/           shared Go packages (model, collectors, correlation, ai,
+                automation, goals, report, workitem, sessionmanager, config, …)
 apps/
-  docentd/              merged daemon (collectors, dashboard, /ingest)
+  docentd/              merged daemon (collectors, dashboard, automations, /ingest)
+  docent-automations/   worker that drains queued agent automations
   docent-launcher-*/    hotkey + webview launchers
   docent-reporter/      stateless CLI reporter (was `slakkr`)
   docent-setup/         config wizard + `check` validator
@@ -113,6 +115,28 @@ binary, [`apps/docent-automations`](apps/docent-automations) — see
 every trigger/condition/action type, delivery destinations, the dashboard
 API, running the agent worker, and a list of gotchas.
 
+## Goals
+
+`~/.config/docent/goals.yaml` is a short list of long-lived objectives you
+want your activity checked against: an `id`, a `title`, an optional
+`description`, and an `active` flag (defaults to true). Edit it in the
+dashboard's Settings tab (validated against its own JSON Schema, alongside
+`config.yaml` and `docentd.yaml`) or by hand.
+
+```yaml
+goals:
+  - id: ship-feature-x
+    title: Ship feature X
+    description: Get the migration merged and rolled out.
+```
+
+The special **`goal-alignment`** mode loads your active goals and asks the AI
+provider to review recent activity against them — use it as an automation's
+`report` action (`mode: goal-alignment`, see [Automations](#automations)) or
+add it to `execution_modes:` to run it from the reporter/dashboard too.
+(`repos`, `labels`, and `ticket_keys` are accepted and validated but not yet
+used beyond storage.)
+
 ### Cursor hooks → docentd
 
 `hooks/docent-notify.sh` + `hooks/hooks.snippet.json` report session activity to
@@ -125,15 +149,32 @@ or `DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sen
 ### Launchers
 
 Spotlight-style pickers bound to a global hotkey; type to fuzzy-filter your
-sessions / tickets / PRs, **Enter** focuses the session (via wsm `/focus`)
-or opens the URL, **Esc** dismisses. Session rows come from `docentd`'s `/sessions`,
-which may point at a **remote** `docentd`.
+sessions / tickets / PRs, **Enter** focuses the session or opens the URL,
+**Esc** dismisses. Both launchers share the same data flow: session/ticket/PR
+rows come from `docentd`'s `GET /sessions` (which may point at a **remote**
+`docentd`, typically through [`docent-tunnel`](docs/Dashboard.md#reaching-a-remote-docentd-docent-tunnel)),
+while focusing a session POSTs to the **local** wsm `/focus` — the window
+manager on the machine you're sitting at. An **Open ↗** toolbar button pops
+the full dashboard into your system browser; when a token is configured it's
+forwarded once as a `?token=` query param, which the dashboard caches in
+`sessionStorage` and strips from the address bar.
 
-- **Windows** — `apps/docent-launcher-windows/docent-launcher.ps1`, a WPF window with
-  a Win32 `RegisterHotKey` (default **Ctrl+Alt+Space**). See its
-  [README](apps/docent-launcher-windows/README.md).
-- **macOS** — `apps/docent-launcher-macos/docent.lua`, a Hammerspoon chooser
-  (default **Cmd+Alt+Space**). Copy to `~/.hammerspoon/` and `require("docent")`.
+- **Windows** — `apps/docent-launcher-windows/docent-launcher.ps1`: a WPF
+  window with a Win32 `RegisterHotKey` (default **Ctrl+Alt+Space**), no extra
+  runtime or admin required. Configurable via flags (`-SessionsUrl`,
+  `-WsmUrl`, `-Token`, `-Hotkey`) or the equivalent `DOCENT_SESSIONS_URL` /
+  `DOCENT_URL`, `WSM_URL`, `DOCENT_TOKEN` env vars; `-SelfTest` checks
+  connectivity/parsing without opening a GUI. `scripts/install-docent-windows.ps1`
+  registers it as a hidden, auto-restarting Scheduled Task. See its
+  [README](apps/docent-launcher-windows/README.md) for the full flag/env
+  reference and the `docent-tunnel` wiring.
+- **macOS** — `apps/docent-launcher-macos/docent.lua`: a Hammerspoon chooser
+  (default **Cmd+Alt+Space**). Copy to `~/.hammerspoon/` and add
+  `require("docent")` to `init.lua`. Reads `DOCENT_PORT` / `WSM_PORT` /
+  `DOCENT_TOKEN` env vars, or overrides written to
+  `~/.config/docent/launcher.lua` by the install script (e.g. a remote `url`).
+  Focus failures due to missing Accessibility permissions surface as a native
+  notification with the fix.
 
 ## Installation
 
@@ -167,16 +208,18 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 
 ## Layout
 
-- `libs/` — shared packages (`model`, `collectors`, `correlation`, `ai`, `config`, `wmclient`, `webhook`, …)
+- `libs/` — shared packages: `model`, `collectors`, `correlation`, `workitem` (grouping + status classification), `ai`, `config`, `automation` (automations engine), `goals`, `report` (shared reporter/dashboard/automations pipeline), `sessionmanager`, `wmclient`, `webhook`, `runlog`, …
 - `apps/docent-reporter/` — reporter CLI
 - `apps/docent-setup/` — config wizard + `check`
 - `apps/docentd/` — daemon + dashboard (Vite/React SPA in `apps/docentd/web`, embedded via `-tags embed`)
+- `apps/docent-automations/` — worker that drains queued `agent` automation actions
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
 - `apps/docent-tunnel/` — workstation SSH local-forward helper for a remote, loopback-only docentd
 - the local window manager lives in the separate [wsm](https://github.com/KurtPreston/wsm) repo
 - `hooks/` — Cursor hook (`docent-notify.sh`) + snippet that report sessions to `docentd`
 - `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers
-- `~/.config/docent/` — `config.yaml`, `docentd.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
+- `~/.config/docent/` — `config.yaml` (reporter/automations), `docentd.yaml` (daemon), `goals.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
 - `~/.local/state/docent/logs/<run>/` — reporter run logs (`$XDG_STATE_HOME/docent`)
+- `~/.local/state/docent/automation-jobs/` — durable queue for `agent` automation actions
 - `~/docent/` — saved markdown from the reporter (override via `output_dir` in config.yaml or `--out-dir`)
 - `--userdata DIR` keeps the legacy all-in-one layout (config + .env + logs + output under one dir)
