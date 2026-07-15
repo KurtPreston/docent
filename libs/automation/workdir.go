@@ -86,20 +86,27 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 		return WorkdirResult{}, err
 	}
 	if _, err := os.Stat(wtPath); err == nil {
-		// Reuse existing worktree; hard-reset it to the freshly fetched tip.
-		// Fetch inside the worktree so FETCH_HEAD updates without trying to
-		// move the (checked-out) branch ref in the bare clone.
-		if err := runGit(ctx, wtPath, "fetch", "origin", branch); err != nil {
-			return WorkdirResult{}, fmt.Errorf("git fetch (reuse) %s: %w", branch, err)
+		if worktreeIsValid(ctx, wtPath) {
+			// Reuse existing worktree; hard-reset it to the freshly fetched tip.
+			// Fetch inside the worktree so FETCH_HEAD updates without trying to
+			// move the (checked-out) branch ref in the bare clone.
+			if err := runGit(ctx, wtPath, "fetch", "origin", branch); err != nil {
+				return WorkdirResult{}, fmt.Errorf("git fetch (reuse) %s: %w", branch, err)
+			}
+			if err := runGit(ctx, wtPath, "reset", "--hard", "FETCH_HEAD"); err != nil {
+				return WorkdirResult{}, fmt.Errorf("git reset (reuse) %s: %w", branch, err)
+			}
+			return WorkdirResult{
+				Path:      wtPath,
+				ClonePath: clonePath,
+				Cleanup:   func() error { return nil },
+			}, nil
 		}
-		if err := runGit(ctx, wtPath, "reset", "--hard", "FETCH_HEAD"); err != nil {
-			return WorkdirResult{}, fmt.Errorf("git reset (reuse) %s: %w", branch, err)
-		}
-		return WorkdirResult{
-			Path:      wtPath,
-			ClonePath: clonePath,
-			Cleanup:   func() error { return nil },
-		}, nil
+		// Corrupted leftover (e.g. an orphaned process recreated files under a
+		// path a prior run's cleanup had deleted): discard it and fall through
+		// to the fresh worktree-add path below instead of failing the run.
+		_ = os.RemoveAll(wtPath)
+		_ = runGit(ctx, clonePath, "worktree", "prune")
 	}
 
 	// Fetch the branch into a local head ref in the bare clone. A bare clone
@@ -130,6 +137,16 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 			return nil
 		},
 	}, nil
+}
+
+// worktreeIsValid reports whether path is a usable git worktree, as opposed
+// to a leftover partial directory (e.g. an orphaned process recreated files
+// under it after a prior run's cleanup deleted the worktree, or docentd was
+// killed mid-provision). rev-parse is the same check that failed in the
+// SALSA-12529 incident ("fatal: not a git repository").
+func worktreeIsValid(ctx context.Context, path string) bool {
+	out, err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 func ensureBareClone(ctx context.Context, clonePath, remote, reference string) error {
