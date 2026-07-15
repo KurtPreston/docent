@@ -479,40 +479,16 @@ bootstrap_docent_config() {
   fi
 }
 
-# configure_session_manager picks the dashboard's session provider for a local
-# docentd (the only case where this config.yaml is docentd's own). No default:
-# Cursor's CLI on PATH ⇒ provider: cursor (session column + cursor:// deep
-# links); otherwise left unset (no column). An existing block is left untouched
-# so users can switch to wsm for reliable exact-window focus.
-configure_session_manager() {
-  local cfg="$CONFIG_DIR/config.yaml"
-  [ -f "$cfg" ] || return 0
-  if grep -Eq '^[[:space:]]*session_manager:' "$cfg"; then
-    log "session_manager already set in config.yaml (leaving as-is)"
-    return 0
-  fi
-  if command -v cursor >/dev/null 2>&1; then
-    log "detected cursor — setting session_manager.provider: cursor"
-    if [ "$DRY_RUN" -eq 0 ]; then
-      cat >>"$cfg" <<'EOF'
-
-# Session manager auto-detected at install (Cursor CLI found on PATH). Drives the
-# dashboard session column + clickable open/focus links. Switch to `wsm` for
-# reliable exact-window focus, or remove this block for no session column.
-session_manager:
-  provider: cursor
-EOF
-    fi
-  else
-    log "no cursor CLI on PATH — leaving session_manager unset (set provider: wsm to use wsm)"
-  fi
-}
+# session_manager is left unset on macOS. provider: cursor shells
+# `cursor --status` on every dashboard poll; from launchd that path does
+# `open -n` and briefly spawns a second Cursor GUI (window flicker). Prefer
+# session_manager.provider: wsm (with the separate wsm daemon), or leave unset
+# for no session column. An existing block in config.yaml is left untouched.
 
 bootstrap_docent_config
 
 if [ "$DOCENTD_MODE" = local ]; then
   run_docent_setup_if_needed
-  configure_session_manager
 fi
 
 reload_agent() {

@@ -322,16 +322,19 @@ are managed on your workstation.
 
 How the dashboard lists and opens editor windows is selected by a
 `session_manager` block in `config.yaml` (mirroring the `ai:` block). There is
-**no default** — the installer picks one at setup time and you can change it:
+**no default** — set one explicitly (the Linux remote installer may suggest
+`cursor` when that CLI is present; macOS/Windows installers leave it unset):
 
-- **`cursor`** (installer default when the Cursor CLI is on PATH) — lists windows
-  via `cursor --status` and renders each work item's path as a `cursor://` deep
-  link. Clicking it first syncs the work item's color into the repo's
-  `.vscode/settings.json` (via `POST /api/workitems/:key/open`, disable with
-  `cursor.write_color: false`) and then navigates the link to open/focus the
-  window. Exact-window focus is best-effort (Cursor may open a duplicate).
+- **`cursor`** — lists windows via `cursor --status` and renders each work
+  item's path as a `cursor://` deep link. Clicking it first syncs the work
+  item's color into the repo's `.vscode/settings.json` (via
+  `POST /api/workitems/:key/open`, disable with `cursor.write_color: false`)
+  and then navigates the link to open/focus the window. Exact-window focus is
+  best-effort (Cursor may open a duplicate). Prefer this on a remote Linux
+  docentd that shares Cursor's remote-cli IPC; on macOS/Windows local
+  docentd, polling `cursor --status` can spawn a second GUI briefly.
 - **`wsm`** — lists and focuses windows through the local [wsm](https://github.com/KurtPreston/wsm)
-  daemon. Choose this when you need reliable exact-window focus.
+  daemon. Choose this on the workstation when you need reliable exact-window focus.
 - **unset** — no session column and no clickable links.
 
 ```yaml
