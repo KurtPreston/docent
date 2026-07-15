@@ -59,6 +59,18 @@ export function Report() {
   const aliveRef = useRef(true);
   const runIdRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
+  const thinkingRef = useRef<HTMLDivElement | null>(null);
+  const partialRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = thinkingRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thinking]);
+
+  useEffect(() => {
+    const el = partialRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [partial]);
 
   useEffect(() => {
     document.title = "docent · report";
@@ -167,7 +179,7 @@ export function Report() {
         if (ev.text) setPartial((p) => p + ev.text);
         break;
       case "thinking":
-        if (ev.text) setThinking((t) => (t + ev.text).slice(-240));
+        if (ev.text) setThinking((t) => t + ev.text);
         break;
       case "done":
         setJob({
@@ -427,13 +439,17 @@ export function Report() {
           ) : (
             <div className="muted report-progress-empty">Waiting for collectors…</div>
           )}
-          {thinking ? <div className="muted report-thinking wrap">{thinking}</div> : null}
+          {thinking ? (
+            <div ref={thinkingRef} className="muted report-thinking">
+              {thinking}
+            </div>
+          ) : null}
           {partial ? (
             <div className="report-partial">
               <div className="section-head">
                 <span className="title">Live preview</span>
               </div>
-              <div className="markdown-body">
+              <div ref={partialRef} className="markdown-body">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{partial}</ReactMarkdown>
               </div>
             </div>

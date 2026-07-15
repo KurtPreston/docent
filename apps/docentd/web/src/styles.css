@@ -260,9 +260,28 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .report-collectors { list-style: none; margin: 0; padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 6px; }
 .report-collector { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 6px 10px; border-radius: 6px; background: var(--bg-elev-2); }
 .report-collector-name { font-weight: 500; }
-.report-thinking { padding: 0 16px 12px; font-size: 12px; opacity: .75; max-height: 4.5em; overflow: hidden; }
+.report-thinking {
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: .85;
+  max-height: min(40vh, 280px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 6px;
+  background: var(--bg-elev-2);
+}
 .report-partial { border-top: 1px solid var(--border); margin-top: 4px; }
-.report-partial .markdown-body { opacity: .9; }
+.report-partial .markdown-body {
+  opacity: .9;
+  max-height: min(50vh, 420px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 16px 16px;
+}
 
 /* /settings page: per-file tabs + a Monaco-backed YAML editor (a
    schema-driven form view augments this in a later phase). */
