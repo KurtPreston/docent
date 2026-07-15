@@ -164,6 +164,8 @@ func (ShellRunner) Run(ctx context.Context, action Action, ev Event) error {
 	defer cancel()
 	cmd := exec.CommandContext(cctx, cmdName, args...)
 	cmd.Env = append(os.Environ(), EnvPairs(actx)...)
+	configureProcGroup(cmd)
+	cmd.WaitDelay = 10 * time.Second
 	if cwd := strings.TrimSpace(action.Cwd); cwd != "" {
 		rendered, err := RenderTemplate(cwd, actx)
 		if err != nil {
