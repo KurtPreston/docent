@@ -1,6 +1,6 @@
 # docent
 
-Monorepo suite containing local-first tooling for developer activity: **docent** (live dashboard + session focus) and **docent-reporter** (collectors → AI → Markdown reports). The local window manager it drives now lives in the separate [wsm](https://github.com/KurtPreston/wsm) project.
+Monorepo suite containing local-first tooling for developer activity: **docentd** (live dashboard + session focus + automations) and **docent-reporter** (collectors → AI → Markdown reports). The local window manager it drives now lives in the separate [wsm](https://github.com/KurtPreston/wsm) project.
 
 ## Monorepo layout
 
@@ -55,7 +55,7 @@ Every mode reads the same `~/.config/docent/config.yaml` (`ai`, `directives`,
 optional `execution_modes`) and honors a **scope** (`self` / `involved` /
 `all`) that controls how much of *other people's* activity gets pulled in.
 The same collectors, `config.yaml`, and AI providers also back the
-automations engine and the dashboard's Report tab.
+[automations](#automations) engine and the dashboard's Report tab.
 
 See **[docs/Reporting.md](docs/Reporting.md)** for the full reference: the
 `config.yaml` schema, the activity formatter, declaring custom modes,
@@ -80,6 +80,38 @@ of every page, the binding/auth model, the complete HTTP API, the frontend
 build (dev/embedded), the Report tab, the session-manager providers (`cursor`
 / `wsm` / none), reaching a remote docentd (`docent-tunnel`), and the
 `docentd.yaml` config fields (including the work-item launch hook).
+
+## Automations
+
+`docentd` also runs IFTTT-style rules declared under `automations:` in
+`config.yaml`: a **trigger** (a new signal, a state transition, or a
+schedule) fires one or more **actions** — post a webhook, run a shell
+command, comment on a JIRA ticket, post to Slack, generate-and-deliver a
+report, run a write-capable coding agent, or open an editor.
+
+```yaml
+automations:
+  - id: daily-standup
+    enabled: true
+    trigger:
+      type: schedule
+      at: "05:00"
+      weekday: friday
+    actions:
+      - type: report
+        mode: recent-activity
+        days: 7
+        deliver: slack
+        channel: "#standup"
+```
+
+Rules are edited as YAML (Settings, or by hand) and take effect on the next
+`docentd` restart; the dashboard's Automations tab lists rules and job
+history and can fire one manually. `agent` actions run on a separate worker
+binary, [`apps/docent-automations`](apps/docent-automations) — see
+**[docs/Automations.md](docs/Automations.md)** for the full reference:
+every trigger/condition/action type, delivery destinations, the dashboard
+API, running the agent worker, and a list of gotchas.
 
 ### Cursor hooks → docentd
 
