@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/report"
@@ -58,6 +60,7 @@ func (s *Server) reportStart(w http.ResponseWriter, r *http.Request) {
 		Directives:     s.cfg.Directives,
 		ExecutionModes: s.cfg.ExecutionModes,
 	}
+	id := s.reports.start()
 	opts := report.Options{
 		ModeID:    req.Mode,
 		Days:      req.Days,
@@ -65,9 +68,36 @@ func (s *Server) reportStart(w http.ResponseWriter, r *http.Request) {
 		Scope:     scope,
 		Collect:   collect,
 		ConfigDir: s.cfg.ConfigDir,
+		OnPhase: func(phase string) {
+			s.reports.emit(id, reportEvent{Type: "phase", Phase: phase})
+		},
+		OnDirectiveUpdate: func(p collectors.DirectiveProgress) {
+			s.reports.emit(id, reportEvent{
+				Type: "collector",
+				Collector: &reportCollectorView{
+					ID:          p.DirectiveID,
+					Description: p.Description,
+					Status:      p.Status,
+					Detail:      p.Detail,
+					Completed:   p.Completed,
+					Total:       p.Total,
+				},
+			})
+		},
+		OnContent: func(text string) {
+			if text == "" {
+				return
+			}
+			s.reports.emit(id, reportEvent{Type: "token", Text: text})
+		},
+		OnThinking: func(text string) {
+			if text == "" {
+				return
+			}
+			s.reports.emit(id, reportEvent{Type: "thinking", Text: text})
+		},
 	}
 
-	id := s.reports.start()
 	go func() {
 		s.reports.markRunning(id)
 		// Detached from the request context so polling/navigation doesn't
@@ -86,7 +116,8 @@ func (s *Server) reportStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // reportSub handles the /api/report/ subtree: the literal suffix "meta"
-// returns the form metadata; any other suffix is treated as a job id to poll.
+// returns the form metadata; "{id}/stream" is the SSE progress feed; any
+// other single-segment suffix is treated as a job id to poll.
 func (s *Server) reportSub(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -101,12 +132,100 @@ func (s *Server) reportSub(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "report id required"})
 		return
 	}
+	if id, ok := strings.CutSuffix(rest, "/stream"); ok && id != "" && !strings.Contains(id, "/") {
+		s.reportStream(w, r, id)
+		return
+	}
+	if strings.Contains(rest, "/") {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such report"})
+		return
+	}
 	job, ok := s.reports.get(rest)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such report"})
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+// reportStream is the SSE progress feed for one report job. Generation is
+// detached from this request: closing the stream (or navigating away) does
+// not cancel the run. Late subscribers replay buffered events first.
+func (s *Server) reportStream(w http.ResponseWriter, r *http.Request, id string) {
+	replay, ch, cancel, ok := s.reports.subscribe(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such report"})
+		return
+	}
+	if cancel != nil {
+		defer cancel()
+	}
+
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "streaming unsupported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	writeSSE := func(ev reportEvent) bool {
+		payload, err := json.Marshal(ev)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	terminal := false
+	for _, ev := range replay {
+		if !writeSSE(ev) {
+			return
+		}
+		if ev.Type == "done" || ev.Type == "error" {
+			terminal = true
+		}
+	}
+	if terminal || ch == nil {
+		return
+	}
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, open := <-ch:
+			if !open {
+				// Generation finished but the terminal event may have been
+				// dropped on a full buffer; synthesize from the job snapshot.
+				if job, ok := s.reports.get(id); ok {
+					switch job.Status {
+					case string(reportDone):
+						_ = writeSSE(reportEvent{Type: "done", Markdown: job.Markdown, Meta: job.Meta})
+					case string(reportError):
+						_ = writeSSE(reportEvent{Type: "error", Error: job.Error})
+					}
+				}
+				return
+			}
+			if !writeSSE(ev) {
+				return
+			}
+			if ev.Type == "done" || ev.Type == "error" {
+				return
+			}
+		}
+	}
 }
 
 type reportModeMeta struct {

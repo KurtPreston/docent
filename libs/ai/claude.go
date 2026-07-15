@@ -81,10 +81,10 @@ func (p ClaudeCLIProvider) RunMode(ctx context.Context, in RunInput) (string, er
 	if err != nil {
 		return "", err
 	}
-	return p.runMarkdown(ctx, payload, in.DebugDir, in.StreamOut)
+	return p.runMarkdown(ctx, payload, in.DebugDir, in.StreamOut, in.OnContent, in.OnThinking)
 }
 
-func (p ClaudeCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer) (string, error) {
+func (p ClaudeCLIProvider) runMarkdown(ctx context.Context, payload, debugDir string, streamOut io.Writer, onContent, onThinking func(string)) (string, error) {
 	dir, err := os.MkdirTemp("", "docent-claude-")
 	if err != nil {
 		return "", fmt.Errorf("claude: create temp workspace: %w", err)
@@ -110,16 +110,14 @@ func (p ClaudeCLIProvider) runMarkdown(ctx context.Context, payload, debugDir st
 	cmd.Dir = dir
 
 	var stdout, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdout
+	cmd.Stdout = teeCallback(&stdout, onContent)
+	cmd.Stderr = teeThinking(&stderrBuf, streamOut, onThinking)
 	if streamOut != nil {
-		cmd.Stderr = io.MultiWriter(&stderrBuf, streamOut)
 		fmt.Fprintf(streamOut, "$ %s %s  (cwd=%s)\n",
 			p.command(),
 			strings.Join(redactedArgs, " "),
 			dir,
 		)
-	} else {
-		cmd.Stderr = &stderrBuf
 	}
 
 	runErr := cmd.Run()

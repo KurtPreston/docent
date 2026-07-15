@@ -10,6 +10,7 @@ import type {
   ReportMeta,
   ReportJob,
   ReportRequest,
+  ReportEvent,
   ConfigFileID,
   ConfigFileView,
   ConfigSaveResult,
@@ -51,9 +52,9 @@ export async function launchWorkItem(key: string): Promise<void> {
   }
 }
 
-// Report API: fetch the form metadata, start an async generation job, and poll
-// it. Generation runs in a docentd goroutine, so startReport returns quickly
-// with a job id the page polls via fetchReportJob.
+// Report API: fetch the form metadata, start an async generation job, then
+// either stream live progress via SSE or poll the job snapshot. Generation
+// runs in a docentd goroutine, so startReport returns quickly with a job id.
 export const fetchReportMeta = (): Promise<ReportMeta> => getJSON<ReportMeta>("/api/report/meta");
 
 export async function startReport(req: ReportRequest): Promise<string> {
@@ -69,6 +70,53 @@ export async function startReport(req: ReportRequest): Promise<string> {
 
 export const fetchReportJob = (id: string): Promise<ReportJob> =>
   getJSON<ReportJob>("/api/report/" + encodeURIComponent(id));
+
+export type StreamReportHandlers = {
+  onEvent: (ev: ReportEvent) => void;
+  signal?: AbortSignal;
+};
+
+/** Consume the report SSE feed. Uses docentFetch so the bearer token rides
+ * along (EventSource cannot set Authorization). Resolves when the stream
+ * ends (terminal event or connection close). Throws on non-OK HTTP. */
+export async function streamReport(id: string, h: StreamReportHandlers): Promise<void> {
+  const r = await docentFetch("/api/report/" + encodeURIComponent(id) + "/stream", {
+    cache: "no-store",
+    headers: { Accept: "text/event-stream" },
+    signal: h.signal,
+  });
+  if (!r.ok) {
+    const d = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(d.error ?? "HTTP " + r.status);
+  }
+  if (!r.body) throw new Error("streaming unsupported");
+
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line.
+    for (;;) {
+      const sep = buffer.indexOf("\n\n");
+      if (sep < 0) break;
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      for (const line of frame.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const raw = line.slice(5).trimStart();
+        if (!raw) continue;
+        try {
+          h.onEvent(JSON.parse(raw) as ReportEvent);
+        } catch {
+          /* ignore malformed frames */
+        }
+      }
+    }
+  }
+}
 
 // Settings API: fetch every editable docent config file, then validate/save
 // one at a time. saveConfigFile and validateConfigFile never throw on

@@ -155,6 +155,27 @@ export type ReportJob = {
   markdown?: string;
   meta?: ReportRunMeta;
   error?: string;
+  phase?: string;
+  partial?: string;
+};
+
+export type ReportCollectorProgress = {
+  id: string;
+  description?: string;
+  status: string;
+  detail?: string;
+  completed?: number;
+  total?: number;
+};
+
+export type ReportEvent = {
+  type: "phase" | "collector" | "token" | "thinking" | "done" | "error";
+  phase?: string;
+  collector?: ReportCollectorProgress;
+  text?: string;
+  markdown?: string;
+  meta?: ReportRunMeta;
+  error?: string;
 };
 
 export type ReportRequest = {

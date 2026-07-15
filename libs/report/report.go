@@ -71,6 +71,13 @@ type Options struct {
 	// Empty defaults to docentconfig.StateDir(). Ignored when DebugDir is set.
 	LogsDir   string
 	StreamOut io.Writer
+	// OnPhase reports coarse pipeline phases ("collecting", "correlating",
+	// "generating"). Nil is fine.
+	OnPhase func(string)
+	// OnContent / OnThinking forward live AI chunks to callers (dashboard
+	// SSE). Nil is fine; providers skip the callbacks.
+	OnContent  func(string)
+	OnThinking func(string)
 }
 
 // CollectOptions are the collection-only knobs shared by Generate and the
@@ -84,8 +91,10 @@ type CollectOptions struct {
 
 // RenderOptions are the render-only knobs shared by Generate and the CLI.
 type RenderOptions struct {
-	DebugDir  string
-	StreamOut io.Writer
+	DebugDir   string
+	StreamOut  io.Writer
+	OnContent  func(string)
+	OnThinking func(string)
 }
 
 // Result is the outcome of a report run.
@@ -159,6 +168,9 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		reg = collectors.NewRegistry(func() time.Time { return now })
 	}
 
+	if opts.OnPhase != nil {
+		opts.OnPhase("collecting")
+	}
 	statuses, err := Collect(ctx, reg, cfg, resolved, CollectOptions{
 		ConfigDir:         opts.ConfigDir,
 		ExpandRepoPath:    opts.ExpandRepoPath,
@@ -169,6 +181,9 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		return Result{}, err
 	}
 
+	if opts.OnPhase != nil {
+		opts.OnPhase("correlating")
+	}
 	workItems, statuses, err := Correlate(ctx, reg, cfg, statuses, CorrelateOptions{
 		ConfigDir: opts.ConfigDir,
 	})
@@ -176,10 +191,15 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		return Result{}, err
 	}
 
+	if opts.OnPhase != nil {
+		opts.OnPhase("generating")
+	}
 	provider := ai.SelectProvider(cfg.AI, opts.Provider)
 	md, err := Render(ctx, resolved, statuses, workItems, provider, RenderOptions{
-		DebugDir:  opts.DebugDir,
-		StreamOut: opts.StreamOut,
+		DebugDir:   opts.DebugDir,
+		StreamOut:  opts.StreamOut,
+		OnContent:  opts.OnContent,
+		OnThinking: opts.OnThinking,
 	})
 	if err != nil {
 		return Result{}, err
@@ -324,6 +344,8 @@ func Render(ctx context.Context, resolved executionmode.ResolvedRun, statuses []
 		IsMorning:    resolved.IsMorning,
 		DebugDir:     opts.DebugDir,
 		StreamOut:    opts.StreamOut,
+		OnContent:    opts.OnContent,
+		OnThinking:   opts.OnThinking,
 	})
 	if err != nil {
 		return "", err

@@ -2,14 +2,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Layout } from "../components/Layout";
-import { fetchReportMeta, startReport, fetchReportJob } from "../lib/api";
+import { fetchReportMeta, startReport, fetchReportJob, streamReport } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
-import type { ReportJob, ReportMeta, ReportMode, ReportRequest } from "../lib/types";
+import type {
+  ReportCollectorProgress,
+  ReportEvent,
+  ReportJob,
+  ReportMeta,
+  ReportMode,
+  ReportRequest,
+} from "../lib/types";
 
 const POLL_MS = 2000;
 const CUSTOM_PROMPT_MODE = "custom-prompt";
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+const PHASE_LABELS: Record<string, string> = {
+  collecting: "Collecting signals…",
+  correlating: "Correlating work items…",
+  generating: "Generating report…",
+};
 
 /** Prefill form fields from a mode's declared (or non-interactive) defaults. */
 function applyModeDefaults(
@@ -36,16 +49,22 @@ export function Report() {
   const [collect, setCollect] = useState("");
   const [job, setJob] = useState<ReportJob | null>(null);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState("");
+  const [collectors, setCollectors] = useState<ReportCollectorProgress[]>([]);
+  const [partial, setPartial] = useState("");
+  const [thinking, setThinking] = useState("");
 
-  // aliveRef stops polling after unmount; runIdRef makes a fresh submit
-  // supersede any in-flight poll loop for a previous job.
+  // aliveRef stops work after unmount; runIdRef makes a fresh submit
+  // supersede any in-flight stream/poll for a previous job.
   const aliveRef = useRef(true);
   const runIdRef = useRef("");
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     document.title = "docent · report";
     return () => {
       aliveRef.current = false;
+      abortRef.current?.abort();
     };
   }, []);
 
@@ -129,6 +148,46 @@ export function Report() {
     [bumpToCustom],
   );
 
+  const applyEvent = useCallback((id: string, ev: ReportEvent) => {
+    if (runIdRef.current !== id || !aliveRef.current) return;
+    switch (ev.type) {
+      case "phase":
+        setPhase(ev.phase ?? "");
+        break;
+      case "collector":
+        if (ev.collector) {
+          setCollectors((prev) => {
+            const next = prev.filter((c) => c.id !== ev.collector!.id);
+            next.push(ev.collector!);
+            return next;
+          });
+        }
+        break;
+      case "token":
+        if (ev.text) setPartial((p) => p + ev.text);
+        break;
+      case "thinking":
+        if (ev.text) setThinking((t) => (t + ev.text).slice(-240));
+        break;
+      case "done":
+        setJob({
+          id,
+          status: "done",
+          markdown: ev.markdown,
+          meta: ev.meta,
+        });
+        setBusy(false);
+        setPhase("");
+        break;
+      case "error":
+        setJob({ id, status: "error", error: ev.error ?? "report failed" });
+        setBusy(false);
+        setPhase("");
+        toast(ev.error ?? "report failed", true);
+        break;
+    }
+  }, []);
+
   const poll = useCallback(async (id: string) => {
     while (aliveRef.current && runIdRef.current === id) {
       let j: ReportJob;
@@ -139,20 +198,52 @@ export function Report() {
         setBusy(false);
         return;
       }
-      if (runIdRef.current !== id) return; // superseded by a newer run
+      if (runIdRef.current !== id) return;
       setJob(j);
+      if (j.phase) setPhase(j.phase);
+      if (j.partial) setPartial(j.partial);
       if (j.status === "done") {
         setBusy(false);
+        setPhase("");
         return;
       }
       if (j.status === "error") {
         setBusy(false);
+        setPhase("");
         toast(j.error ?? "report failed", true);
         return;
       }
       await sleep(POLL_MS);
     }
   }, []);
+
+  const watch = useCallback(
+    async (id: string) => {
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      let sawTerminal = false;
+      try {
+        await streamReport(id, {
+          signal: ac.signal,
+          onEvent: (ev) => {
+            if (ev.type === "done" || ev.type === "error") sawTerminal = true;
+            applyEvent(id, ev);
+          },
+        });
+      } catch (e) {
+        if (ac.signal.aborted || runIdRef.current !== id) return;
+        // Fall back to polling so a report never appears stuck if SSE fails.
+        toast("live progress unavailable; falling back to poll", true);
+        void poll(id);
+        return;
+      }
+      if (!sawTerminal && aliveRef.current && runIdRef.current === id) {
+        void poll(id);
+      }
+    },
+    [applyEvent, poll],
+  );
 
   const submit = useCallback(async () => {
     if (!mode) {
@@ -177,18 +268,24 @@ export function Report() {
     if (collect) req.collect = collect;
     if (trimmedPrompt !== "") req.prompt = trimmedPrompt;
 
+    abortRef.current?.abort();
     setBusy(true);
     setJob(null);
+    setPhase("starting");
+    setCollectors([]);
+    setPartial("");
+    setThinking("");
     try {
       const id = await startReport(req);
       runIdRef.current = id;
       setJob({ id, status: "pending" });
-      void poll(id);
+      void watch(id);
     } catch (e) {
       setBusy(false);
+      setPhase("");
       toast("failed to start report: " + errMsg(e), true);
     }
-  }, [mode, days, scope, collect, prompt, promptRequired, poll]);
+  }, [mode, days, scope, collect, prompt, promptRequired, watch]);
 
   const download = useCallback(() => {
     if (!job?.markdown) return;
@@ -212,6 +309,8 @@ export function Report() {
   ) : null;
 
   const running = busy && (job?.status === "pending" || job?.status === "running" || !job);
+  const phaseLabel =
+    PHASE_LABELS[phase] ?? (phase === "starting" ? "Starting…" : phase ? phase + "…" : "Generating…");
 
   return (
     <Layout mainClass="wrap" stats={stats}>
@@ -301,10 +400,46 @@ export function Report() {
             <button type="submit" className="primary" disabled={!meta || busy}>
               {busy ? "Generating…" : "Generate"}
             </button>
-            {running ? <span className="muted">status: {job?.status ?? "starting"}…</span> : null}
+            {running ? <span className="muted">{phaseLabel}</span> : null}
           </div>
         </form>
       </div>
+
+      {running ? (
+        <div className="section report-progress">
+          <div className="section-head">
+            <span className="title">Progress</span>
+            <span className="muted">{phaseLabel}</span>
+          </div>
+          {collectors.length > 0 ? (
+            <ul className="report-collectors">
+              {collectors.map((c) => (
+                <li key={c.id} className={"report-collector status-" + (c.status || "unknown")}>
+                  <span className="report-collector-name">{c.description || c.id}</span>
+                  <span className="muted">
+                    {c.status}
+                    {c.total && c.total > 0 ? ` · ${c.completed ?? 0}/${c.total}` : ""}
+                    {c.detail ? ` · ${c.detail}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="muted report-progress-empty">Waiting for collectors…</div>
+          )}
+          {thinking ? <div className="muted report-thinking wrap">{thinking}</div> : null}
+          {partial ? (
+            <div className="report-partial">
+              <div className="section-head">
+                <span className="title">Live preview</span>
+              </div>
+              <div className="markdown-body">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{partial}</ReactMarkdown>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {job?.status === "done" ? (
         <div className="section report-result">

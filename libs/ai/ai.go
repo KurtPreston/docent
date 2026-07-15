@@ -43,6 +43,15 @@ type RunInput struct {
 	IsMorning    bool
 	DebugDir     string
 	StreamOut    io.Writer
+	// OnContent is an optional live callback for report-body chunks as the
+	// provider produces them (token-level for Ollama; flush-granularity for
+	// CLI providers). Nil is fine; providers skip the callback.
+	OnContent func(string)
+	// OnThinking is an optional live callback for model "thinking" tokens
+	// (Ollama) or provider progress banners (Cursor/Claude stderr). Kept
+	// separate from OnContent so the dashboard can show progress without
+	// polluting the markdown preview.
+	OnThinking func(string)
 }
 
 // RuleBasedProvider is deterministic (no network); used for tests and offline runs.

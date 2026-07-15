@@ -238,6 +238,85 @@ func TestReportJobLifecycle(t *testing.T) {
 	}
 }
 
+func TestReportStream(t *testing.T) {
+	h := newTestServer(t, "")
+
+	startRR := doJSON(t, h, http.MethodPost, "/api/report", "", `{"mode":"recent-activity","days":7}`)
+	if startRR.Code != http.StatusAccepted {
+		t.Fatalf("start: got %d body=%s", startRR.Code, startRR.Body.String())
+	}
+	var start struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(startRR.Body.Bytes(), &start); err != nil || start.ID == "" {
+		t.Fatalf("start json: err=%v id=%q", err, start.ID)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/report/"+start.ID+"/stream", nil)
+	rr := httptest.NewRecorder()
+	// ServeHTTP blocks until the stream ends (terminal event). Rule-based is fast.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(rr, req)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream timed out")
+	}
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("stream status: got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("content-type: got %q", ct)
+	}
+
+	var phases []string
+	var sawDone bool
+	for _, frame := range strings.Split(rr.Body.String(), "\n\n") {
+		frame = strings.TrimSpace(frame)
+		if frame == "" {
+			continue
+		}
+		for _, line := range strings.Split(frame, "\n") {
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			var ev reportEvent
+			if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+				t.Fatalf("event json: %v raw=%q", err, raw)
+			}
+			switch ev.Type {
+			case "phase":
+				phases = append(phases, ev.Phase)
+			case "done":
+				sawDone = true
+				if strings.TrimSpace(ev.Markdown) == "" {
+					t.Fatal("done event missing markdown")
+				}
+			}
+		}
+	}
+	if !sawDone {
+		t.Fatalf("stream missing done event; body=%q", rr.Body.String())
+	}
+	// Rule-based runs Collect → Correlate → Render; expect the three phases.
+	want := map[string]bool{"collecting": true, "correlating": true, "generating": true}
+	for _, p := range phases {
+		delete(want, p)
+	}
+	if len(want) > 0 {
+		t.Fatalf("missing phases %v (got %v)", want, phases)
+	}
+
+	if code := status(t, h, http.MethodGet, "/api/report/deadbeef/stream", ""); code != http.StatusNotFound {
+		t.Fatalf("unknown stream id: got %d want 404", code)
+	}
+}
+
 func TestStaticSPAFallback(t *testing.T) {
 	h := newTestServer(t, "")
 	// A real asset is served as-is.

@@ -76,7 +76,7 @@ func (p OllamaProvider) RunMode(ctx context.Context, in RunInput) (string, error
 		return "", err
 	}
 	p.printPrompt(in.StreamOut, payload)
-	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut)
+	raw, err := p.chatMarkdown(ctx, payload, in.DebugDir, in.StreamOut, in.OnContent, in.OnThinking)
 	if err != nil {
 		return "", err
 	}
@@ -106,7 +106,7 @@ func (p OllamaProvider) printPrompt(streamOut io.Writer, payload string) {
 	fmt.Fprintln(streamOut)
 }
 
-func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir string, streamOut io.Writer) (string, error) {
+func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir string, streamOut io.Writer, onContent, onThinking func(string)) (string, error) {
 	body, err := json.Marshal(ollamaChatRequest{
 		Model: p.Model,
 		Messages: []ollamaMsg{
@@ -165,13 +165,21 @@ func (p OllamaProvider) chatMarkdown(ctx context.Context, userContent, debugDir 
 			return "", fmt.Errorf("ollama stream: %w", err)
 		}
 		streamChunks = append(streamChunks, chunk)
-		if chunk.Message.Thinking != "" && streamOut != nil {
-			_, _ = io.WriteString(streamOut, chunk.Message.Thinking)
+		if chunk.Message.Thinking != "" {
+			if streamOut != nil {
+				_, _ = io.WriteString(streamOut, chunk.Message.Thinking)
+			}
+			if onThinking != nil {
+				onThinking(chunk.Message.Thinking)
+			}
 		}
 		if chunk.Message.Content != "" {
 			content.WriteString(chunk.Message.Content)
 			if streamOut != nil {
 				_, _ = io.WriteString(streamOut, chunk.Message.Content)
+			}
+			if onContent != nil {
+				onContent(chunk.Message.Content)
 			}
 		}
 		if chunk.Done {
