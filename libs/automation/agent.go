@@ -152,6 +152,8 @@ func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string)
 
 	cmd := exec.CommandContext(cctx, cmdName, args...)
 	cmd.Dir = cwd
+	configureProcGroup(cmd)
+	cmd.WaitDelay = 10 * time.Second
 	var combined bytes.Buffer
 	cmd.Stdout = &combined
 	cmd.Stderr = &combined
@@ -243,6 +245,8 @@ func runInDir(ctx context.Context, cwd, cmdline string) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdline)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
+	configureProcGroup(cmd)
+	cmd.WaitDelay = 10 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
