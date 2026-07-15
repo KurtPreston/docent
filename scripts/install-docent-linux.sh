@@ -169,6 +169,28 @@ fi
 
 DOCENTD_BIN="$BIN_DIR/docentd"
 
+# stop_previous_docent_services clears the way for a reinstall: stop the
+# systemd --user unit (if any), then kill stray processes from manual runs.
+stop_previous_docent_services() {
+  log "stopping previous docentd services"
+
+  if systemctl --user cat "$SERVICE_NAME" &>/dev/null; then
+    log "stopping systemd --user unit $SERVICE_NAME"
+    run systemctl --user stop "$SERVICE_NAME" || true
+  fi
+
+  if pgrep -x docentd >/dev/null 2>&1; then
+    log "stopping running docentd process(es)"
+    run pkill -x docentd || true
+  fi
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    sleep 0.5
+  fi
+}
+
+stop_previous_docent_services
+
 # --- Build --------------------------------------------------------------------
 # The Vite output (apps/docentd/web/dist) is embedded into docentd with the
 # `embed` build tag, so the installed binary is self-contained (no -web needed).

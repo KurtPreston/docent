@@ -24,10 +24,11 @@ install (the local/remote choice, plus the remote URL/token saved in
 ConfigDir\.env), so updating never forces you to re-pick the deployment or
 retype credentials; pass -RemoteUrl / -Token to override.
 
-Re-running is safe and idempotent: before (re)registering each task it stops the
-task and kills the running program tree, so a re-run always restarts the
-programs on the latest code (otherwise the old process keeps serving, since
-MultipleInstances=IgnoreNew makes Start a no-op while one is running).
+Re-running is safe and idempotent: before the build it stops any previous
+docentd / docent-tunnel Scheduled Tasks and kills their process trees (so the
+.exe is not locked and :39787 is free). Before (re)registering each kept task it
+stops that task again; tasks that no longer apply to this install mode are
+unregistered so they do not come back at next logon.
 
 .PARAMETER RemoteUrl
 Use a remote docentd at this base URL (skips the prompt + local build).
@@ -270,6 +271,61 @@ else {
     $Sessions = "http://127.0.0.1:$Port"
 }
 
+# Tear down a previously-installed program so a re-run loads fresh code.
+# Register-ScheduledTask -Force only rewrites the task definition, and
+# Start-ScheduledTask is a no-op while an instance is already running
+# (MultipleInstances=IgnoreNew). The program also runs detached from the task
+# (wscript .vbs -> cmd -> leaf), and Stop-ScheduledTask doesn't reliably reap
+# that leaf -- so stop the task and kill the whole tree, matched by a token that
+# appears in both the wscript host (.vbs name) and the leaf command line
+# (e.g. 'docent-launcher', 'docentd').
+function Stop-DocentProgram {
+    param([string]$TaskName, [string]$Match)
+    if ($DryRun) { Write-Host "[dry-run] stop task '$TaskName' + kill processes matching '$Match'"; return }
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+    $procs = @(
+        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='docentd.exe' OR Name='docent-tunnel.exe' OR Name='wscript.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($Match)) -and $_.ProcessId -ne $PID }
+    )
+    foreach ($p in $procs) {
+        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host "  stopped old $($p.Name) (pid $($p.ProcessId))" }
+        catch { }
+    }
+}
+
+function Unregister-DocentTaskIfPresent {
+    param([string]$TaskName, [string]$Match)
+    Stop-DocentProgram -TaskName $TaskName -Match $Match
+    if ($DryRun) {
+        Write-Host "[dry-run] Unregister-ScheduledTask $TaskName (if present)"
+        return
+    }
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Host "  unregistered task '$TaskName' (not used in this install mode)"
+    }
+}
+
+# Stop docentd / docent-tunnel before the build so .exe files are unlocked and
+# the listen port is free. Mode-specific unregister happens at task registration.
+function Stop-PreviousDocentServices {
+    Log "stopping previous docentd / docent-tunnel services"
+    Stop-DocentProgram -TaskName 'docentd' -Match 'docentd'
+    Stop-DocentProgram -TaskName 'docent-tunnel' -Match 'docent-tunnel'
+    if (-not $DryRun) {
+        Get-Process -Name 'docentd', 'docent-tunnel' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                try { Stop-Process -Id $_.Id -Force -ErrorAction Stop; Write-Host "  stopped leftover $($_.Name) (pid $($_.Id))" }
+                catch { }
+            }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+Stop-PreviousDocentServices
+
 # --- build dashboard + docentd (local only) ----------------------------------
 # The Vite output (apps\docentd\web\dist) is embedded into docentd via the
 # `embed` build tag, so the installed binary is self-contained (no -web needed).
@@ -464,30 +520,6 @@ shell.Run "$literal", 0, $waitArg
     Write-Host "  wrote $Path"
 }
 
-# Tear down a previously-installed program so a re-run loads fresh code.
-# Register-ScheduledTask -Force only rewrites the task definition, and
-# Start-ScheduledTask is a no-op while an instance is already running
-# (MultipleInstances=IgnoreNew). The program also runs detached from the task
-# (wscript .vbs -> cmd -> leaf), and Stop-ScheduledTask doesn't reliably reap
-# that leaf -- so stop the task and kill the whole tree, matched by a token that
-# appears in both the wscript host (.vbs name) and the leaf command line
-# (e.g. 'docent-launcher', 'docentd').
-function Stop-DocentProgram {
-    param([string]$TaskName, [string]$Match)
-    if ($DryRun) { Write-Host "[dry-run] stop task '$TaskName' + kill processes matching '$Match'"; return }
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    }
-    $procs = @(
-        Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='docentd.exe' OR Name='docent-tunnel.exe' OR Name='wscript.exe' OR Name='cmd.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($Match)) -and $_.ProcessId -ne $PID }
-    )
-    foreach ($p in $procs) {
-        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; Write-Host "  stopped old $($p.Name) (pid $($p.ProcessId))" }
-        catch { }
-    }
-}
-
 function Register-DocentTask {
     param([string]$Name, [string]$Vbs, [string]$Match)
     Stop-DocentProgram -TaskName $Name -Match $Match
@@ -514,6 +546,15 @@ else {
     if ($UseTunnel) { $extra += ', docent-tunnel' }
     Log "registering Scheduled Tasks (docent-launcher$extra) -- stopping any running instances first so fresh code loads"
     $tmp = $env:TEMP
+
+    # Drop tasks that don't belong in this mode so a leftover local/tunnel
+    # install does not come back at next logon.
+    if ($Mode -ne 'local') {
+        Unregister-DocentTaskIfPresent -TaskName 'docentd' -Match 'docentd'
+    }
+    if (-not $UseTunnel) {
+        Unregister-DocentTaskIfPresent -TaskName 'docent-tunnel' -Match 'docent-tunnel'
+    }
 
     # docent-launcher-windows (always)
     $lnVbs = Join-Path $ConfigDir 'docent-launcher-hidden.vbs'

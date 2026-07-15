@@ -367,6 +367,66 @@ DOCENT_TUNNEL_BIN="$BIN_DIR/docent-tunnel"
 PLIST_DOCENTD="$LAUNCH_AGENTS/com.docent.docentd.plist"
 PLIST_TUNNEL="$LAUNCH_AGENTS/com.docent.docent-tunnel.plist"
 
+uid="$(id -u)"
+
+# unload_agent boots out a loaded LaunchAgent. Prefer the plist path when it
+# exists (works on older launchctl); fall back to domain/label.
+unload_agent() {
+  local label="$1" plist="${2:-}"
+  if ! launchctl print "gui/$uid/$label" &>/dev/null; then
+    return 0
+  fi
+  log "unloading launch agent $label"
+  if [ -n "$plist" ] && [ -f "$plist" ]; then
+    run launchctl bootout "gui/$uid" "$plist" 2>/dev/null \
+      || run launchctl unload "$plist" 2>/dev/null \
+      || run launchctl bootout "gui/$uid/$label" 2>/dev/null \
+      || true
+  else
+    run launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+  fi
+}
+
+# stop_previous_docent_services clears the way for a reinstall: unload any
+# LaunchAgent whose program is docentd/docent-tunnel, then kill stray processes
+# left from manual runs or a prior KeepAlive race.
+stop_previous_docent_services() {
+  local plist prog base label
+  log "stopping previous docentd / docent-tunnel services"
+
+  if [ -d "$LAUNCH_AGENTS" ]; then
+    for plist in "$LAUNCH_AGENTS"/*.plist; do
+      [ -f "$plist" ] || continue
+      prog="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist" 2>/dev/null)" || continue
+      base="$(basename "$prog")"
+      case "$base" in
+        docentd|docent-tunnel) ;;
+        *) continue ;;
+      esac
+      label="$(/usr/libexec/PlistBuddy -c 'Print :Label' "$plist" 2>/dev/null)" || continue
+      unload_agent "$label" "$plist"
+    done
+  fi
+
+  # Known labels even if their plists were already removed.
+  unload_agent com.docent.docentd "$PLIST_DOCENTD"
+  unload_agent com.docent.docent-tunnel "$PLIST_TUNNEL"
+
+  for name in docentd docent-tunnel; do
+    if pgrep -x "$name" >/dev/null 2>&1; then
+      log "stopping running $name process(es)"
+      run pkill -x "$name" || true
+    fi
+  done
+
+  # Give the listen port a moment to release after KeepAlive teardown.
+  if [ "$DRY_RUN" -eq 0 ]; then
+    sleep 0.5
+  fi
+}
+
+stop_previous_docent_services
+
 if [ "$SKIP_BUILD" -eq 0 ]; then
   if [ "$DOCENTD_MODE" = local ]; then
     run mkdir -p "$BIN_DIR"
@@ -455,12 +515,9 @@ if [ "$DOCENTD_MODE" = local ]; then
   configure_session_manager
 fi
 
-uid="$(id -u)"
 reload_agent() {
   local label="$1" plist="$2"
-  if launchctl print "gui/$uid/$label" &>/dev/null; then
-    run launchctl bootout "gui/$uid" "$plist" 2>/dev/null || run launchctl unload "$plist" 2>/dev/null || true
-  fi
+  unload_agent "$label" "$plist"
   run launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || run launchctl load "$plist"
 }
 
@@ -538,6 +595,23 @@ if [ "$INSTALL_LAUNCHD" -eq 1 ] && [ "$USE_TUNNEL" = 1 ]; then
 
   log "loading docent-tunnel launch agent"
   reload_agent com.docent.docent-tunnel "$PLIST_TUNNEL"
+fi
+
+# Drop LaunchAgent plists that don't belong in this mode so a leftover
+# local/tunnel install does not come back at next login.
+remove_unused_launch_agent() {
+  local label="$1" plist="$2"
+  unload_agent "$label" "$plist"
+  if [ -f "$plist" ]; then
+    log "removing unused launch agent $plist"
+    run rm -f "$plist"
+  fi
+}
+if [ "$DOCENTD_MODE" != local ]; then
+  remove_unused_launch_agent com.docent.docentd "$PLIST_DOCENTD"
+fi
+if [ "$USE_TUNNEL" != 1 ]; then
+  remove_unused_launch_agent com.docent.docent-tunnel "$PLIST_TUNNEL"
 fi
 
 install_hooks() {
