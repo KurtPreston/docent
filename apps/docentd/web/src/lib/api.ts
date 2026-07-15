@@ -168,3 +168,20 @@ export async function collectUnit(directive: string, mode: string): Promise<void
 export const fetchAutomations = (): Promise<AutomationsView> =>
   getJSON<AutomationsView>("/api/automations");
 
+// runAutomation fires one rule's actions immediately, bypassing its schedule and
+// cooldown (works even for disabled rules). The daemon records a job in the
+// history and returns it; we toast the outcome. Throws on transport failure so
+// the caller can toast and refresh.
+export async function runAutomation(id: string): Promise<void> {
+  const r = await docentFetch(`/api/automations/${encodeURIComponent(id)}/run`, {
+    method: "POST",
+  });
+  const d = (await r.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    job?: { status?: string; message?: string; error?: string };
+  };
+  if (r.ok && d.ok) toast("ran " + id + (d.job?.message ? ": " + d.job.message : ""));
+  else toast("run failed: " + (d.job?.error ?? d.error ?? r.status), true);
+}
+

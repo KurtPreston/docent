@@ -1,9 +1,38 @@
 import { useCallback, useEffect, useState } from "react";
 import { Layout } from "../components/Layout";
 import { DataTable, type Column } from "../components/DataTable";
-import { fetchAutomations } from "../lib/api";
+import { fetchAutomations, runAutomation } from "../lib/api";
 import type { AutomationJob, AutomationRule } from "../lib/types";
 import { errMsg } from "../lib/format";
+import { toast } from "../lib/toast";
+
+// RunCell triggers one rule immediately (bypassing schedule/cooldown) and
+// refreshes the job history so the resulting job shows up. RunRuleNow is
+// synchronous on the daemon, so keep the button disabled while it's in flight.
+function RunCell({ id, onRun }: { id: string; onRun: () => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      className="launch-btn"
+      disabled={busy}
+      title="Run this automation now (bypasses schedule and cooldown)"
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await runAutomation(id);
+        } catch (e) {
+          toast("run error: " + errMsg(e), true);
+        } finally {
+          setBusy(false);
+          onRun();
+        }
+      }}
+    >
+      {busy ? "Running…" : "Run"}
+    </button>
+  );
+}
 
 const jobColumns: Column<AutomationJob>[] = [
   {
@@ -94,6 +123,7 @@ export function Automations() {
                 <th>Enabled</th>
                 <th>Trigger</th>
                 <th>Actions</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -111,6 +141,9 @@ export function Automations() {
                     {r.trigger?.cron ? ` · ${r.trigger.cron}` : ""}
                   </td>
                   <td>{(r.actions ?? []).map((a) => a.type).join(", ")}</td>
+                  <td>
+                    <RunCell id={r.id} onRun={load} />
+                  </td>
                 </tr>
               ))}
             </tbody>
