@@ -5,17 +5,34 @@ import { Layout } from "../components/Layout";
 import { fetchReportMeta, startReport, fetchReportJob } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
-import type { ReportJob, ReportMeta, ReportRequest } from "../lib/types";
+import type { ReportJob, ReportMeta, ReportMode, ReportRequest } from "../lib/types";
 
 const POLL_MS = 2000;
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
+
+/** Prefill form fields from a mode's declared (or non-interactive) defaults. */
+function applyModeDefaults(
+  m: ReportMode,
+  set: {
+    days: (v: string) => void;
+    scope: (v: string) => void;
+    prompt: (v: string) => void;
+    collect: (v: string) => void;
+  },
+) {
+  set.days(m.lookbackKind === "days" && m.lookbackDays ? String(m.lookbackDays) : "");
+  set.scope(m.scope || "");
+  set.prompt(m.prompt ?? "");
+  set.collect(m.collect || "");
+}
 
 export function Report() {
   const [meta, setMeta] = useState<ReportMeta | null>(null);
   const [mode, setMode] = useState("");
   const [days, setDays] = useState("");
-  const [scope, setScope] = useState(""); // "" => mode default
+  const [scope, setScope] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [collect, setCollect] = useState("");
   const [job, setJob] = useState<ReportJob | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -36,7 +53,16 @@ export function Report() {
       try {
         const m = await fetchReportMeta();
         setMeta(m);
-        setMode((cur) => cur || m.modes[0]?.id || "");
+        const first = m.modes[0];
+        if (first) {
+          setMode(first.id);
+          applyModeDefaults(first, {
+            days: setDays,
+            scope: setScope,
+            prompt: setPrompt,
+            collect: setCollect,
+          });
+        }
       } catch (e) {
         toast("failed to load report options: " + errMsg(e), true);
       }
@@ -45,6 +71,23 @@ export function Report() {
 
   const selectedMode = meta?.modes.find((m) => m.id === mode);
   const promptRequired = selectedMode?.promptRequired ?? false;
+  const lookbackIsPreviousWeekday = selectedMode?.lookbackKind === "previous-weekday";
+
+  const selectMode = useCallback(
+    (id: string) => {
+      setMode(id);
+      const m = meta?.modes.find((x) => x.id === id);
+      if (m) {
+        applyModeDefaults(m, {
+          days: setDays,
+          scope: setScope,
+          prompt: setPrompt,
+          collect: setCollect,
+        });
+      }
+    },
+    [meta],
+  );
 
   const poll = useCallback(async (id: string) => {
     while (aliveRef.current && runIdRef.current === id) {
@@ -91,6 +134,7 @@ export function Report() {
       req.days = n;
     }
     if (scope) req.scope = scope;
+    if (collect) req.collect = collect;
     if (trimmedPrompt !== "") req.prompt = trimmedPrompt;
 
     setBusy(true);
@@ -104,7 +148,7 @@ export function Report() {
       setBusy(false);
       toast("failed to start report: " + errMsg(e), true);
     }
-  }, [mode, days, scope, prompt, promptRequired, poll]);
+  }, [mode, days, scope, collect, prompt, promptRequired, poll]);
 
   const download = useCallback(() => {
     if (!job?.markdown) return;
@@ -144,7 +188,11 @@ export function Report() {
         >
           <label className="field">
             <span className="field-label">Mode</span>
-            <select value={mode} onChange={(e) => setMode(e.target.value)} disabled={!meta || busy}>
+            <select
+              value={mode}
+              onChange={(e) => selectMode(e.target.value)}
+              disabled={!meta || busy}
+            >
               {meta?.modes.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
@@ -159,7 +207,7 @@ export function Report() {
               type="number"
               min={1}
               step={1}
-              placeholder="mode default"
+              placeholder={lookbackIsPreviousWeekday ? "previous weekday" : "days"}
               value={days}
               onChange={(e) => setDays(e.target.value)}
               disabled={busy}
@@ -169,7 +217,6 @@ export function Report() {
           <label className="field">
             <span className="field-label">Scope</span>
             <select value={scope} onChange={(e) => setScope(e.target.value)} disabled={busy}>
-              <option value="">mode default</option>
               {meta?.scopes.map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -178,13 +225,28 @@ export function Report() {
             </select>
           </label>
 
+          <label className="field">
+            <span className="field-label">Collect</span>
+            <select value={collect} onChange={(e) => setCollect(e.target.value)} disabled={busy}>
+              {meta?.collects.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <label className="field field-wide">
             <span className="field-label">
-              Prompt {promptRequired ? <em className="req">required</em> : <em className="muted">optional override</em>}
+              Prompt {promptRequired ? <em className="req">required</em> : <em className="muted">editable</em>}
             </span>
             <textarea
               rows={4}
-              placeholder={promptRequired ? "Describe what you want the model to produce…" : "Leave blank to use the mode's built-in prompt"}
+              placeholder={
+                promptRequired
+                  ? "Describe what you want the model to produce…"
+                  : "Mode default prompt"
+              }
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               disabled={busy}

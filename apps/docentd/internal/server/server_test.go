@@ -117,7 +117,7 @@ func TestAuth_healthAndStaticStayOpen(t *testing.T) {
 func TestReportJobLifecycle(t *testing.T) {
 	h := newTestServer(t, "")
 
-	// Meta lists modes, scopes, and the AI identity (rule-based by default).
+	// Meta lists modes (with defaults), scopes, collects, and the AI identity.
 	metaRR := doJSON(t, h, http.MethodGet, "/api/report/meta", "", "")
 	if metaRR.Code != http.StatusOK {
 		t.Fatalf("meta: got %d", metaRR.Code)
@@ -127,8 +127,14 @@ func TestReportJobLifecycle(t *testing.T) {
 			ID             string `json:"id"`
 			Name           string `json:"name"`
 			PromptRequired bool   `json:"promptRequired"`
+			LookbackKind   string `json:"lookbackKind"`
+			LookbackDays   int    `json:"lookbackDays"`
+			Scope          string `json:"scope"`
+			Prompt         string `json:"prompt"`
+			Collect        string `json:"collect"`
 		} `json:"modes"`
 		Scopes   []string `json:"scopes"`
+		Collects []string `json:"collects"`
 		Provider struct {
 			Label    string `json:"label"`
 			Provider string `json:"provider"`
@@ -144,8 +150,35 @@ func TestReportJobLifecycle(t *testing.T) {
 	if len(meta.Scopes) != 3 {
 		t.Fatalf("meta scopes: got %v", meta.Scopes)
 	}
+	if len(meta.Collects) != 3 {
+		t.Fatalf("meta collects: got %v", meta.Collects)
+	}
 	if meta.Provider.Provider != "rule-based" {
 		t.Fatalf("meta provider: got %q want rule-based", meta.Provider.Provider)
+	}
+	// recent-activity leaves lookback/scope unset → non-interactive defaults.
+	var foundRecent bool
+	for _, m := range meta.Modes {
+		if m.ID != "recent-activity" {
+			continue
+		}
+		foundRecent = true
+		if m.LookbackKind != "days" || m.LookbackDays != 7 {
+			t.Fatalf("recent-activity lookback: kind=%q days=%d want days/7", m.LookbackKind, m.LookbackDays)
+		}
+		if m.Scope != "involved" {
+			t.Fatalf("recent-activity scope: got %q want involved", m.Scope)
+		}
+		if m.Collect != "events" {
+			t.Fatalf("recent-activity collect: got %q want events", m.Collect)
+		}
+		if m.Prompt == "" || m.PromptRequired {
+			t.Fatalf("recent-activity prompt: required=%v prompt empty=%v", m.PromptRequired, m.Prompt == "")
+		}
+		break
+	}
+	if !foundRecent {
+		t.Fatal("meta: missing recent-activity mode")
 	}
 
 	// Start a report: rule-based provider + no directives => fast, deterministic.

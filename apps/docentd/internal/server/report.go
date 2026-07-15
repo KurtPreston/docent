@@ -17,10 +17,11 @@ import (
 const reportGenerateTimeout = 10 * time.Minute
 
 type reportRequest struct {
-	Mode   string `json:"mode"`
-	Days   int    `json:"days"`
-	Scope  string `json:"scope"`
-	Prompt string `json:"prompt"`
+	Mode    string `json:"mode"`
+	Days    int    `json:"days"`
+	Scope   string `json:"scope"`
+	Prompt  string `json:"prompt"`
+	Collect string `json:"collect"`
 }
 
 // reportStart handles POST /api/report: it validates the request, kicks off
@@ -40,9 +41,14 @@ func (s *Server) reportStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "mode is required"})
 		return
 	}
-	// Blank scope means "use the mode default"; anything else must be valid.
+	// Blank scope/collect means "use the mode default"; anything else must be valid.
 	scope := executionmode.Scope(strings.TrimSpace(req.Scope))
 	if err := scope.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	collect := executionmode.Collect(strings.TrimSpace(req.Collect))
+	if err := collect.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -57,6 +63,7 @@ func (s *Server) reportStart(w http.ResponseWriter, r *http.Request) {
 		Days:      req.Days,
 		Prompt:    strings.TrimSpace(req.Prompt),
 		Scope:     scope,
+		Collect:   collect,
 		ConfigDir: s.cfg.ConfigDir,
 	}
 
@@ -106,10 +113,50 @@ type reportModeMeta struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
 	PromptRequired bool   `json:"promptRequired"`
+	// Defaults mirror what executionmode.Resolve would use for a
+	// non-interactive caller so the /report form can prefill itself.
+	LookbackKind string `json:"lookbackKind"` // "days" | "previous-weekday"
+	LookbackDays int    `json:"lookbackDays,omitempty"`
+	Scope        string `json:"scope"`
+	Prompt       string `json:"prompt,omitempty"`
+	Collect      string `json:"collect"`
 }
 
-// reportMeta returns the modes, scopes, and AI identity the /report form needs
-// to render itself.
+// reportModeDefaults projects an ExecutionMode into the fields the Report
+// form shows, applying the same non-interactive fallbacks Resolve uses
+// (7-day lookback, involved scope, events collect) when a property is unset.
+func reportModeDefaults(m executionmode.ExecutionMode) reportModeMeta {
+	out := reportModeMeta{
+		ID:             m.ID,
+		Name:           m.Display(),
+		PromptRequired: m.Prompt == nil,
+	}
+	switch {
+	case m.Lookback == nil:
+		out.LookbackKind = executionmode.LookbackKindDays
+		out.LookbackDays = 7
+	default:
+		out.LookbackKind = m.Lookback.Kind
+		out.LookbackDays = m.Lookback.Days
+	}
+	if m.Scope == executionmode.ScopeUnset {
+		out.Scope = string(executionmode.ScopeInvolved)
+	} else {
+		out.Scope = string(m.Scope)
+	}
+	if m.Prompt != nil {
+		out.Prompt = m.Prompt.Instruction
+	}
+	if m.Collect == executionmode.CollectUnset {
+		out.Collect = string(executionmode.CollectEvents)
+	} else {
+		out.Collect = string(m.Collect)
+	}
+	return out
+}
+
+// reportMeta returns the modes, scopes, collects, and AI identity the /report
+// form needs to render and prefill itself.
 func (s *Server) reportMeta(w http.ResponseWriter, _ *http.Request) {
 	modes, err := executionmode.Load(executionmode.BuiltinModes(), s.cfg.ExecutionModes)
 	if err != nil {
@@ -118,9 +165,7 @@ func (s *Server) reportMeta(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := make([]reportModeMeta, 0, len(modes))
 	for _, m := range modes {
-		// A mode with no declared Prompt must be given one at run time
-		// (executionmode.Resolve errors otherwise for non-interactive callers).
-		out = append(out, reportModeMeta{ID: m.ID, Name: m.Display(), PromptRequired: m.Prompt == nil})
+		out = append(out, reportModeDefaults(m))
 	}
 	provider, model := aiIdentity(s.cfg.AI)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -129,6 +174,11 @@ func (s *Server) reportMeta(w http.ResponseWriter, _ *http.Request) {
 			string(executionmode.ScopeSelf),
 			string(executionmode.ScopeInvolved),
 			string(executionmode.ScopeAll),
+		},
+		"collects": []string{
+			string(executionmode.CollectEvents),
+			string(executionmode.CollectState),
+			string(executionmode.CollectBoth),
 		},
 		"provider": map[string]any{
 			"label":    providerLabel(provider, model),

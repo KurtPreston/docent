@@ -121,11 +121,17 @@ export type ReportMode = {
   id: string;
   name: string;
   promptRequired: boolean;
+  lookbackKind: "days" | "previous-weekday" | string;
+  lookbackDays?: number;
+  scope: string;
+  prompt?: string;
+  collect: string;
 };
 
 export type ReportMeta = {
   modes: ReportMode[];
   scopes: string[];
+  collects: string[];
   provider: {
     label: string;
     provider: string;
@@ -156,6 +162,7 @@ export type ReportRequest = {
   days?: number;
   scope?: string;
   prompt?: string;
+  collect?: string;
 };
 
 // Settings page: mirrors the docentd /api/config payloads.
