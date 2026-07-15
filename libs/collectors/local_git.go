@@ -79,45 +79,14 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		// A ticket derived from the checked-out branch (or the worktree
 		// directory name for salsa-style worktrees) anchors commits and
 		// reflog rows to the right work-item even when their own text
-		// doesn't name the ticket, and drives the "started" status via a
-		// branch-evidence entity below.
+		// doesn't name the ticket. We deliberately do NOT emit a kind=branch
+		// snapshot here: that is current state (every checkout under
+		// code_home), not an in-window event, and would flood recent-activity
+		// prompts with branch×1 noise for untouched repos.
 		branch := localGitCurrentBranch(ctx, abs, opts, directive.ID)
 		repoTicket := correlation.ScanTicketKey(branch, correlation.Config{})
 		if repoTicket == "" {
 			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), correlation.Config{})
-		}
-		if branch != "" {
-			fields := map[string]string{
-				"path":   abs,
-				"branch": branch,
-			}
-			if repoTicket != "" {
-				fields["ticket"] = repoTicket
-			}
-			summary := fmt.Sprintf("local branch %s", branch)
-			if repoTicket != "" {
-				summary = fmt.Sprintf("local branch %s -> %s", branch, repoTicket)
-			}
-			// A branch is a state signal we re-observe on every poll, so stamp
-			// it with the tip commit's date (the real "last activity on this
-			// branch") instead of the poll time. Otherwise every checked-out
-			// branch would perpetually report activity "just now" and dominate
-			// the dashboard's last-activity ordering. Zero (unresolved) means
-			// the branch contributes no activity time at all.
-			branchObserved := localGitHeadCommitTime(ctx, abs, opts, directive.ID)
-			out = append(out, StatusItem{
-				DirectiveID: directive.ID,
-				Repository:  repoLabel,
-				Source:      "local-git",
-				Kind:        "branch",
-				Title:       branch,
-				Summary:     summary,
-				Severity:    "info",
-				ObservedAt:  branchObserved.UTC(),
-				StableID:    "branch:" + repoLabel + ":" + branch,
-				IsSelf:      true,
-				Fields:      fields,
-			})
 		}
 
 		commits, err := collectLocalGitCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
@@ -407,22 +376,6 @@ func localGitReflogBranch(gd, gs string) string {
 		return ""
 	}
 	return strings.TrimSpace(rest[i+len(" to "):])
-}
-
-// localGitHeadCommitTime returns the committer date of the checked-out tip
-// commit. It backs the "last activity" timestamp for a branch state signal so
-// a branch never reports poll time; callers treat a zero result as "unknown"
-// (no activity contribution). Cheap: one `git log -1` per repo per collection.
-func localGitHeadCommitTime(ctx context.Context, abs string, opts *CollectOpts, directiveID string) time.Time {
-	out, err := gitOutput(ctx, abs, opts, directiveID, "log", "-1", "--format=%cI", "HEAD")
-	if err != nil {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(out))
-	if err != nil {
-		return time.Time{}
-	}
-	return t
 }
 
 // parseReflogTime extracts the reflog entry timestamp from a `%gd` selector

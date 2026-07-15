@@ -196,3 +196,51 @@ func TestLocalGitCollectSkipsEmptyRepo(t *testing.T) {
 		t.Errorf("expected at least one commit from the good repo, got items=%#v", items)
 	}
 }
+
+// TestLocalGitCollectEventsOmitsBranchSnapshot verifies that CollectEvents
+// does not emit a kind=branch status for the checked-out HEAD. Branch
+// snapshots are current state (every repo under code_home), not lookback
+// activity; emitting them flooded recent-activity prompts with branch×1 rows
+// for untouched clones.
+func TestLocalGitCollectEventsOmitsBranchSnapshot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	gitCmd := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_DATE=2020-01-01T00:00:00+00:00",
+			"GIT_COMMITTER_DATE=2020-01-01T00:00:00+00:00",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	gitCmd("init", "--initial-branch=main", ".")
+	gitCmd("config", "user.name", "Kurt")
+	gitCmd("config", "user.email", "kurt@example")
+	gitCmd("commit", "--allow-empty", "-m", "ancient tip")
+
+	directive := userdata.Directive{
+		ID: "lg", Name: "Local", Collector: "local-git", Enabled: true,
+		Paths: []string{dir},
+	}
+	clock := func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) }
+	c := LocalGitCollector{Clock: clock}
+
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
+		Since: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Until: clock(),
+		Scope: ScopeInvolved,
+	})
+	if err != nil {
+		t.Fatalf("CollectEvents: %v", err)
+	}
+	for _, it := range items {
+		if it.Kind == "branch" {
+			t.Fatalf("CollectEvents emitted branch snapshot: %+v", it)
+		}
+	}
+}
