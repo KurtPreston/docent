@@ -8,6 +8,7 @@ import { toast } from "../lib/toast";
 import type { ReportJob, ReportMeta, ReportMode, ReportRequest } from "../lib/types";
 
 const POLL_MS = 2000;
+const CUSTOM_PROMPT_MODE = "custom-prompt";
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 /** Prefill form fields from a mode's declared (or non-interactive) defaults. */
@@ -71,7 +72,11 @@ export function Report() {
 
   const selectedMode = meta?.modes.find((m) => m.id === mode);
   const promptRequired = selectedMode?.promptRequired ?? false;
-  const lookbackIsPreviousWeekday = selectedMode?.lookbackKind === "previous-weekday";
+  // After leaving a preset via form edits we keep the edited values but the
+  // mode id becomes custom-prompt, so the days placeholder should follow
+  // that mode (not the preset we left).
+  const lookbackIsPreviousWeekday =
+    mode !== CUSTOM_PROMPT_MODE && selectedMode?.lookbackKind === "previous-weekday";
 
   const selectMode = useCallback(
     (id: string) => {
@@ -87,6 +92,41 @@ export function Report() {
       }
     },
     [meta],
+  );
+
+  // Any tweak to lookback/scope/collect/prompt after loading a preset leaves
+  // the preset: switch mode to custom-prompt but keep the user's edits.
+  const bumpToCustom = useCallback(() => {
+    setMode((cur) => (cur && cur !== CUSTOM_PROMPT_MODE ? CUSTOM_PROMPT_MODE : cur));
+  }, []);
+
+  const onDaysChange = useCallback(
+    (value: string) => {
+      bumpToCustom();
+      setDays(value);
+    },
+    [bumpToCustom],
+  );
+  const onScopeChange = useCallback(
+    (value: string) => {
+      bumpToCustom();
+      setScope(value);
+    },
+    [bumpToCustom],
+  );
+  const onCollectChange = useCallback(
+    (value: string) => {
+      bumpToCustom();
+      setCollect(value);
+    },
+    [bumpToCustom],
+  );
+  const onPromptChange = useCallback(
+    (value: string) => {
+      bumpToCustom();
+      setPrompt(value);
+    },
+    [bumpToCustom],
   );
 
   const poll = useCallback(async (id: string) => {
@@ -209,14 +249,14 @@ export function Report() {
               step={1}
               placeholder={lookbackIsPreviousWeekday ? "previous weekday" : "days"}
               value={days}
-              onChange={(e) => setDays(e.target.value)}
+              onChange={(e) => onDaysChange(e.target.value)}
               disabled={busy}
             />
           </label>
 
           <label className="field">
             <span className="field-label">Scope</span>
-            <select value={scope} onChange={(e) => setScope(e.target.value)} disabled={busy}>
+            <select value={scope} onChange={(e) => onScopeChange(e.target.value)} disabled={busy}>
               {meta?.scopes.map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -227,7 +267,11 @@ export function Report() {
 
           <label className="field">
             <span className="field-label">Collect</span>
-            <select value={collect} onChange={(e) => setCollect(e.target.value)} disabled={busy}>
+            <select
+              value={collect}
+              onChange={(e) => onCollectChange(e.target.value)}
+              disabled={busy}
+            >
               {meta?.collects.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -248,7 +292,7 @@ export function Report() {
                   : "Mode default prompt"
               }
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => onPromptChange(e.target.value)}
               disabled={busy}
             />
           </label>
