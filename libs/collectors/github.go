@@ -40,11 +40,13 @@ type ghSearchActivityRow struct {
 // CheckRun (GitHub Actions etc.) and StatusContext (legacy commit
 // statuses) entries; see ghCheckRollupEntry. reviewDecision is one of
 // APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED (or "" when the repo
-// has no required reviews configured).
+// has no required reviews configured). mergeable is GitHub's merge-conflict
+// verdict: MERGEABLE / CONFLICTING / UNKNOWN.
 type ghPRView struct {
 	StatusCheckRollup []ghCheckRollupEntry `json:"statusCheckRollup"`
 	ReviewDecision    string               `json:"reviewDecision"`
 	HeadRefName       string               `json:"headRefName"`
+	Mergeable         string               `json:"mergeable"`
 }
 
 // ghCheckRollupEntry covers both shapes returned in statusCheckRollup.
@@ -448,8 +450,9 @@ func dedupeGitHubItems(items []StatusItem) []StatusItem {
 //
 // Each open PR becomes one StatusItem with Kind "pr_review_status" and
 // Fields: relation (authored|review_requested), is_draft, checks
-// (passing|failing|pending|none|unknown), review_decision, and ready
-// ("true" only when authored, not a draft, and checks are passing/none).
+// (passing|failing|pending|none|unknown), review_decision, mergeable
+// (mergeable|conflicting|unknown), and ready ("true" only when authored,
+// not a draft, and checks are passing/none).
 func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string, directive userdata.Directive, user, host string, opts *CollectOpts) ([]StatusItem, error) {
 	now := opts.windowEnd(c.Clock)
 
@@ -475,7 +478,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 
 	var items []StatusItem
 	for _, row := range authored {
-		checks, decision, headBranch := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
+		checks, decision, headBranch, mergeable := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
 		completed++
 		reportProgress(opts, DirectiveProgress{
 			DirectiveID: directive.ID,
@@ -486,11 +489,11 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 			Total:       totalSteps,
 		})
 		ready := !row.IsDraft && (checks == "passing" || checks == "none")
-		items = append(items, prReviewItem(directive, user, host, now, row, "authored", checks, decision, ready, headBranch))
+		items = append(items, prReviewItem(directive, user, host, now, row, "authored", checks, decision, ready, headBranch, mergeable))
 	}
 	for _, row := range reviewRequested {
 		headBranch := c.fetchPRHeadRef(ctx, env, row.URL, directive, opts)
-		items = append(items, prReviewItem(directive, user, host, now, row, "review_requested", "", "", false, headBranch))
+		items = append(items, prReviewItem(directive, user, host, now, row, "review_requested", "", "", false, headBranch, ""))
 	}
 	return dedupePRReviewItems(items), nil
 }
@@ -518,9 +521,9 @@ func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directiv
 }
 
 // prReviewItem builds one pr_review_status StatusItem for an open PR in the
-// given relationship. checks/decision/ready are only meaningful for
+// given relationship. checks/decision/ready/mergeable are only meaningful for
 // authored PRs; review-requested rows pass zero values.
-func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, relation, checks, decision string, ready bool, headBranch string) StatusItem {
+func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, relation, checks, decision string, ready bool, headBranch, mergeable string) StatusItem {
 	repo := strings.TrimSpace(row.Repository.NameWithOwner)
 	if repo == "" {
 		repo = gitHubOwnerRepoFromURL(row.URL)
@@ -540,6 +543,7 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		fields["checks"] = checks
 		fields["review_decision"] = decision
 		fields["ready"] = strconv.FormatBool(ready)
+		fields["mergeable"] = mergeable
 	}
 	// Prefer the PR's real last-updated time so an open PR reports when it was
 	// actually touched (opened / pushed / commented / reviewed) rather than the
@@ -555,7 +559,7 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		Source:      directive.Collector,
 		Kind:        "pr_review_status",
 		Title:       row.Title,
-		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s", relation, row.IsDraft, checks, decision),
+		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s mergeable=%s", relation, row.IsDraft, checks, decision, mergeable),
 		URL:         row.URL,
 		Severity:    "info",
 		ObservedAt:  obs.UTC(),
@@ -589,28 +593,44 @@ func dedupePRReviewItems(items []StatusItem) []StatusItem {
 	return out
 }
 
-// fetchPRStatus resolves the aggregate checks status, review decision, and
-// head branch for a single PR via `gh pr view --json ...`.
-// checks is one of "passing", "failing", "pending", "none", or "unknown"
-// (when the call fails or the payload can't be parsed). Failures are
-// non-fatal: an unknown status keeps the PR out of "ready" without aborting
-// the whole run.
-func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch string) {
+// fetchPRStatus resolves the aggregate checks status, review decision, head
+// branch, and merge-conflict verdict for a single PR via `gh pr view --json
+// ...`. checks is one of "passing", "failing", "pending", "none", or
+// "unknown" (when the call fails or the payload can't be parsed); mergeable is
+// one of "mergeable", "conflicting", or "unknown". Failures are non-fatal: an
+// unknown status keeps the PR out of "ready" without aborting the whole run.
+func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch, mergeable string) {
 	if strings.TrimSpace(prURL) == "" {
-		return "unknown", "", ""
+		return "unknown", "", "", "unknown"
 	}
-	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup,reviewDecision,headRefName"}
+	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup,reviewDecision,headRefName,mergeable"}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
-		return "unknown", "", ""
+		return "unknown", "", "", "unknown"
 	}
 	var view ghPRView
 	if err := json.Unmarshal(out, &view); err != nil {
-		return "unknown", "", ""
+		return "unknown", "", "", "unknown"
 	}
-	return rollupChecksState(view.StatusCheckRollup), strings.ToUpper(strings.TrimSpace(view.ReviewDecision)), strings.TrimSpace(view.HeadRefName)
+	return rollupChecksState(view.StatusCheckRollup), strings.ToUpper(strings.TrimSpace(view.ReviewDecision)), strings.TrimSpace(view.HeadRefName), normalizeMergeable(view.Mergeable)
+}
+
+// normalizeMergeable maps gh's mergeable enum (MERGEABLE / CONFLICTING /
+// UNKNOWN) to a lowercase label. GitHub computes mergeability asynchronously,
+// so a freshly pushed PR reports UNKNOWN until that settles; that (and any
+// unrecognized/empty value) collapses to "unknown" so a transient blip never
+// looks like a real conflict.
+func normalizeMergeable(raw string) string {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "MERGEABLE":
+		return "mergeable"
+	case "CONFLICTING":
+		return "conflicting"
+	default:
+		return "unknown"
+	}
 }
 
 // fetchPRHeadRef resolves only the PR head branch name. Used for
