@@ -7,6 +7,13 @@
 # the Windows/macOS host that connects here.
 set -euo pipefail
 
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "install-docent-linux.sh must be run on Linux (detected: $(uname -s))." >&2
+  echo "On macOS use: scripts/install-docent-macos.sh" >&2
+  echo "On Windows use: scripts/install-docent-windows.ps1" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${DOCENT_BIN_DIR:-$HOME/.local/bin}"
 CONFIG_DIR="${DOCENT_CONFIG_DIR:-$HOME/.config/docent}"

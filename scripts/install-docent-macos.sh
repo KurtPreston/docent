@@ -4,6 +4,13 @@
 # install it from https://github.com/KurtPreston/wsm (default port 39788).
 set -euo pipefail
 
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "install-docent-macos.sh must be run on macOS (detected: $(uname -s))." >&2
+  echo "On Linux use: scripts/install-docent-linux.sh" >&2
+  echo "On Windows use: scripts/install-docent-windows.ps1" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${DOCENT_BIN_DIR:-$HOME/.local/bin}"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
