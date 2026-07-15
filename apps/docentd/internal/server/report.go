@@ -132,9 +132,11 @@ func (s *Server) reportSub(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "report id required"})
 		return
 	}
-	if id, ok := strings.CutSuffix(rest, "/stream"); ok && id != "" && !strings.Contains(id, "/") {
-		s.reportStream(w, r, id)
-		return
+	if strings.HasSuffix(rest, "/stream") {
+		if id := strings.TrimSuffix(rest, "/stream"); id != "" && !strings.Contains(id, "/") {
+			s.reportStream(w, r, id)
+			return
+		}
 	}
 	if strings.Contains(rest, "/") {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such report"})
