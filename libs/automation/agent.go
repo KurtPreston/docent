@@ -12,6 +12,12 @@ import (
 
 const agentTimeout = 30 * time.Minute
 
+// worktreeAcquireTimeout bounds how long an agent action waits for a busy
+// worktree lock (see worktreelock.go) before giving up. Sized to comfortably
+// outlast one full run of whatever job is currently holding the lock (at
+// most agentTimeout for the agent itself, plus room for post-steps).
+const worktreeAcquireTimeout = 2 * agentTimeout
+
 // AgentRunner runs a write-capable coding agent in a provisioned workdir,
 // then optionally runs post-steps (validate / commit / push).
 type AgentRunner struct {
@@ -68,7 +74,28 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 		}
 	}
 
-	wd, err := ProvisionWorkdir(ctx, WorkdirRequest{
+	// Serialize with any other agent action targeting the same working
+	// directory (e.g. a different rule matching the same PR) so they don't
+	// provision/reset/clean up the same worktree concurrently. Wait on a
+	// budget detached from the incoming ctx so time spent blocked here isn't
+	// deducted from the run itself.
+	lockKey := worktreeLockKey(mode, actx.Repo, actx.Branch, actx.OpenPath)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), worktreeAcquireTimeout)
+	release, err := worktreeLocks.acquire(waitCtx, lockKey)
+	cancelWait()
+	if err != nil {
+		return fmt.Errorf("agent: gave up waiting for worktree %q: %w", lockKey, err)
+	}
+	defer release()
+
+	// Give this run its own full timeout budget starting now, rather than
+	// inheriting whatever remains of the caller's deadline (which may have
+	// been set at dispatch time and already partly spent waiting for the
+	// lock above).
+	runCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	defer cancel()
+
+	wd, err := ProvisionWorkdir(runCtx, WorkdirRequest{
 		Mode:      mode,
 		Repo:      actx.Repo,
 		Branch:    actx.Branch,
@@ -92,10 +119,10 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	if provider == "" {
 		provider = "cursor"
 	}
-	if err := r.runAgent(ctx, provider, wd.Path, prompt); err != nil {
+	if err := r.runAgent(runCtx, provider, wd.Path, prompt); err != nil {
 		return err
 	}
-	return r.runPost(ctx, action, actx, wd.Path)
+	return r.runPost(runCtx, action, actx, wd.Path)
 }
 
 func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string) error {
