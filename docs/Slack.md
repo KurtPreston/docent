@@ -9,7 +9,7 @@ rejects it explicitly because bot tokens cannot read your DMs or run
 
 ## What gets collected
 
-The signal set is driven by the run's [scope](../README.md#scope-semantics):
+The signal set is driven by the run's [scope](Reporting.md#scope-semantics):
 
 | Scope | Signals |
 |-------|---------|
@@ -48,7 +48,7 @@ Token Scopes"), add all of these:
 - `mpim:history`, `mpim:read`
 
 The `slackTokenScopesRemediation` constant in
-[`internal/collectors/slack.go`](../internal/collectors/slack.go) is the
+[`libs/collectors/slack.go`](../libs/collectors/slack.go) is the
 source of truth for this list — `docent-setup check` will print it back at
 you if a scope is missing.
 
@@ -203,7 +203,7 @@ rather always pull every DM directly, set `dm_discovery: off`.
 `scope: all` only collects extra messages when `config.followed_channels`
 is non-empty. Without it, `all` behaves like `involved` for this
 collector — same as the other forge/ticket collectors documented in
-[README › Following repos / projects in scope: all](../README.md#following-repos--projects-in-scope-all).
+[Reporting › Following repos / projects in scope: all](Reporting.md#following-repos--projects-in-scope-all).
 
 ## Common gotchas
 
