@@ -15,6 +15,7 @@
 #     command: cursor       # Cursor CLI binary
 #     host: my-dev-box      # ssh alias for remote deep links (defaults to sshHost)
 #     write_color: true     # sync work-item color into .vscode/settings.json (default true)
+#     poll_status: false    # skip cursor --status polling (recommended on macOS)
 # session_manager:
 #   provider: wsm
 #   wsm:

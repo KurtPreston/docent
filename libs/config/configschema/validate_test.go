@@ -111,6 +111,7 @@ session_manager:
     command: cursor
     host: dev-box
     write_color: false
+    poll_status: false
 `,
 		`
 session_manager:

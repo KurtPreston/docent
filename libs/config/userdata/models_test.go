@@ -26,6 +26,23 @@ func TestConfigValidateDirectives(t *testing.T) {
 	}
 }
 
+func TestSessionManagerCursorPollStatusEnabled(t *testing.T) {
+	var c SessionManagerCursor
+	if !c.PollStatusEnabled() {
+		t.Fatal("nil PollStatus should default to true")
+	}
+	yes := true
+	cYes := SessionManagerCursor{PollStatus: &yes}
+	if !cYes.PollStatusEnabled() {
+		t.Fatal("PollStatus true should enable polling")
+	}
+	no := false
+	cNo := SessionManagerCursor{PollStatus: &no}
+	if cNo.PollStatusEnabled() {
+		t.Fatal("PollStatus false should disable polling")
+	}
+}
+
 func TestAIProfilesAgainstSchema(t *testing.T) {
 	for _, p := range []string{"ollama", "cursor", "claude", "rule-based"} {
 		cfg := ConfigFile{AI: AIConfig{Provider: p}}

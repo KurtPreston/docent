@@ -1469,7 +1469,7 @@ func EnsureDirectives(d []userdata.Directive, sm userdata.SessionManagerConfig) 
 	sessionPoll := &userdata.ModeConfig{Poll: userdata.PollConfig{OnRequest: true, OnLoad: true}}
 	switch normalizeSessionProvider(sm.Provider) {
 	case "cursor":
-		if !hasCursor {
+		if sm.Cursor.PollStatusEnabled() && !hasCursor {
 			cfg := map[string]string{"machine": "local"}
 			if cmd := strings.TrimSpace(sm.Cursor.Command); cmd != "" {
 				cfg["command"] = cmd

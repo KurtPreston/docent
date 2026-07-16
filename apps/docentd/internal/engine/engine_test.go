@@ -744,3 +744,35 @@ func TestEngineNewDerivesProjectsFromJiraDirective(t *testing.T) {
 		t.Errorf("corrCfg.Projects = %v, want [SALSA]", e.corrCfg.Projects)
 	}
 }
+
+func TestEnsureDirectives_cursorPollStatusDisabled(t *testing.T) {
+	no := false
+	dirs := EnsureDirectives(nil, userdata.SessionManagerConfig{
+		Provider: "cursor",
+		Cursor:   userdata.SessionManagerCursor{PollStatus: &no},
+	})
+	for _, d := range dirs {
+		if d.Collector == "cursor" {
+			t.Fatalf("poll_status=false should not inject cursor collector, got %+v", d)
+		}
+	}
+	if !hasCollector(dirs, "webhook") {
+		t.Fatal("expected webhook directive to still be injected")
+	}
+}
+
+func TestEnsureDirectives_cursorPollStatusDefaultInjects(t *testing.T) {
+	dirs := EnsureDirectives(nil, userdata.SessionManagerConfig{Provider: "cursor"})
+	if !hasCollector(dirs, "cursor") {
+		t.Fatal("default poll_status should inject cursor collector")
+	}
+}
+
+func hasCollector(dirs []userdata.Directive, collector string) bool {
+	for _, d := range dirs {
+		if d.Collector == collector {
+			return true
+		}
+	}
+	return false
+}

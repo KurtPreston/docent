@@ -134,6 +134,10 @@ type SessionManagerCursor struct {
 	// repo's .vscode/settings.json. Nil means the default (true); set false to
 	// disable the color write entirely.
 	WriteColor *bool `yaml:"write_color,omitempty"`
+	// PollStatus controls whether docent polls `cursor --status` to list live
+	// windows. Nil means the default (true); set false to skip the poll (e.g. on
+	// macOS where --status briefly spawns a second Cursor GUI).
+	PollStatus *bool `yaml:"poll_status,omitempty"`
 }
 
 // SessionManagerWSM configures the wsm session provider.
@@ -148,6 +152,12 @@ type SessionManagerWSM struct {
 // into .vscode/settings.json. Defaults to true when unset.
 func (c SessionManagerCursor) WriteColorEnabled() bool {
 	return c.WriteColor == nil || *c.WriteColor
+}
+
+// PollStatusEnabled reports whether the cursor collector should poll
+// `cursor --status` for live windows. Defaults to true when unset.
+func (c SessionManagerCursor) PollStatusEnabled() bool {
+	return c.PollStatus == nil || *c.PollStatus
 }
 
 type ValidationError struct {

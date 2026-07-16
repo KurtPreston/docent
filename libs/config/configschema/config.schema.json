@@ -398,6 +398,13 @@
               "default": true,
               "x-docent-default": true,
               "x-docent-setup-skip-prompt": true
+            },
+            "poll_status": {
+              "type": "boolean",
+              "default": true,
+              "description": "Poll cursor --status to list live windows. Set false on macOS to avoid Dock bounce.",
+              "x-docent-default": true,
+              "x-docent-setup-skip-prompt": true
             }
           }
         },
