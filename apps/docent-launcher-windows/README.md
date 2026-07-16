@@ -1,19 +1,22 @@
 # docent-launcher-windows
 
 A Spotlight-style, always-on-top picker for docent on Windows, bound to a global
-hotkey (default **Ctrl+Alt+Space**). Type to fuzzy-filter your live Cursor
-sessions / JIRA tickets / GitHub PRs; **Enter** focuses the session window or
-opens the ticket/PR URL; **Esc** hides it. The **Open ↗** button pops the full
-dashboard out into your system browser — when `-Token` (or `DOCENT_TOKEN`) is
-set it is forwarded as a one-time `?token=` query param, which the dashboard
-caches in `sessionStorage` and strips from the address bar.
+hotkey (default **Ctrl+Alt+Space**). Type to fuzzy-filter dashboard **work
+items** (plus nested sessions / JIRA tickets / GitHub PRs); **Enter** opens or
+launches a work item, focuses a session window, or opens a ticket/PR URL;
+**Esc** hides it. The **Open ↗** button pops the full dashboard out into your
+system browser — when `-Token` (or `DOCENT_TOKEN`) is set it is forwarded as a
+one-time `?token=` query param, which the dashboard caches in `sessionStorage`
+and strips from the address bar.
 
 Built on WPF + Win32 `RegisterHotKey` (both ship with Windows) — no extra
 runtime, no admin. It is a faithful port of the legacy docent WPF launcher,
 adapted for the monorepo split:
 
-- **Session rows** come from docentd's `GET /sessions` (`-SessionsUrl`, which may
-  point at a **remote** docentd).
+- **Work-item rows** come from docentd's `GET /sessions` (`-SessionsUrl`, which
+  may point at a **remote** docentd) — one primary row per dashboard group.
+- **Opening a work item** POSTs `/api/workitems/{key}/open` (Cursor deep link)
+  or `/launch` on docentd.
 - **Focusing a session** POSTs to the **local** [wsm](https://github.com/KurtPreston/wsm)
   `/focus` (`-WsmUrl`, default `http://127.0.0.1:39788`) — the window manager that
   owns the windows on this machine.

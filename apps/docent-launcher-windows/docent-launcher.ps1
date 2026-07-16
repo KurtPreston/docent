@@ -2,20 +2,22 @@
 <#
 .SYNOPSIS
 docent launcher (Windows) -- a Spotlight-style, always-on-top picker bound to a
-global hotkey (default Ctrl+Alt+Space). Type to fuzzy-filter your sessions /
-tickets / PRs; Enter focuses the session window or opens the ticket/PR URL; Esc
-hides. The "Open ↗" button pops the full dashboard out into your system browser
-(forwarding the -Token as a one-time ?token= query param when set).
+global hotkey (default Ctrl+Alt+Space). Type to fuzzy-filter work items (plus
+nested sessions / tickets / PRs); Enter opens/launches a work item, focuses a
+session window, or opens a ticket/PR URL; Esc hides. The "Open ↗" button pops
+the full dashboard out into your system browser (forwarding the -Token as a
+one-time ?token= query param when set).
 
 .DESCRIPTION
 Built on WPF (PresentationFramework) + Win32 RegisterHotKey -- both ship with
 Windows, so there is no extra runtime to install and no admin required.
 
 Adapted from the legacy docent-powershell launcher for the monorepo split:
-session rows are pulled from docentd's GET /sessions (which may be a REMOTE
-docentd), while focusing a session POSTs to the LOCAL wsm /focus (the window
-manager, from https://github.com/KurtPreston/wsm, that actually owns the windows
-on this machine).
+work-item rows are pulled from docentd's GET /sessions (which may be a REMOTE
+docentd). Selecting a work item POSTs /api/workitems/{key}/open or /launch on
+docentd; focusing a session POSTs to the LOCAL wsm /focus (the window manager,
+from https://github.com/KurtPreston/wsm, that actually owns the windows on this
+machine).
 
 .PARAMETER SessionsUrl
 Base URL of docentd (serves /sessions). Default http://127.0.0.1:39787. Point
@@ -71,8 +73,38 @@ $script:FetchEntries = {
     catch { return @() }
 
     $entries = @()
+    $provider = $data.provider
     foreach ($g in @($data.groups)) {
         $ticket = if ($g.PSObject.Properties.Name -contains 'ticket') { $g.ticket } else { $null }
+
+        # One primary row per dashboard work-item group (repo/branch, ticket, etc.).
+        $wiLabel = if ($g.repo -and $g.branch) { "$($g.repo)  $($g.branch)" }
+                   elseif ($g.repo) { $g.repo }
+                   elseif ($ticket -and $g.summary) { "$ticket  $($g.summary)" }
+                   elseif ($ticket) { $ticket }
+                   elseif ($g.key) { $g.key }
+                   else { 'Work item' }
+        $wiSub = @()
+        if ($ticket -and $g.repo -and $g.branch) { $wiSub += $ticket }
+        if ($g.summary -and $g.repo -and $g.branch) { $wiSub += $g.summary }
+        if ($g.status) { $wiSub += $g.status }
+        if ($g.jiraStatus) { $wiSub += $g.jiraStatus }
+        if ($g.openPath) { $wiSub += $g.openPath }
+        $entries += [PSCustomObject]@{
+            Type     = 'workitem'
+            Label    = $wiLabel
+            Sub      = ($wiSub -join '  ·  ')
+            Name     = $null
+            Host     = $null
+            Url      = $null
+            Key      = $g.key
+            Provider = $provider
+            DeepLink = $g.deepLink
+            Color    = $g.color
+            Sort     = if ($g.needsFollowup) { 0 } else { 1 }
+            Search   = "$wiLabel $ticket $($g.summary) $($g.repo) $($g.branch) $($g.openPath) $($g.status)".ToLowerInvariant()
+        }
+
         foreach ($s in @($g.sessions)) {
             $label = $s.name
             $sub = @()
@@ -81,42 +113,51 @@ $script:FetchEntries = {
             if ($s.needsFollowup) { $sub += '● follow-up' }
             elseif (-not $s.live) { $sub += 'closed' }
             $entries += [PSCustomObject]@{
-                Type   = 'session'
-                Label  = $label
-                Sub    = ($sub -join '  ·  ')
-                Name   = $s.name
-                Host   = $s.host
-                Url    = $null
-                Color  = $s.color
-                Sort   = if ($s.needsFollowup) { 0 } elseif ($s.live) { 1 } else { 2 }
-                Search = "$label $ticket $($s.host)".ToLowerInvariant()
+                Type     = 'session'
+                Label    = $label
+                Sub      = ($sub -join '  ·  ')
+                Name     = $s.name
+                Host     = $s.host
+                Url      = $null
+                Key      = $null
+                Provider = $null
+                DeepLink = $null
+                Color    = $s.color
+                Sort     = if ($s.needsFollowup) { 2 } elseif ($s.live) { 3 } else { 4 }
+                Search   = "$label $ticket $($s.host)".ToLowerInvariant()
             }
         }
         foreach ($pr in @($g.prs)) {
             $label = "PR #$($pr.prNumber)  $($pr.title)"
             $entries += [PSCustomObject]@{
-                Type   = 'pr'
-                Label  = $label
-                Sub    = (@($ticket, $pr.repo, $pr.state) | Where-Object { $_ } ) -join '  ·  '
-                Name   = $null
-                Host   = $null
-                Url    = $pr.url
-                Color  = $g.color
-                Sort   = 3
-                Search = "$label $ticket $($pr.repo)".ToLowerInvariant()
+                Type     = 'pr'
+                Label    = $label
+                Sub      = (@($ticket, $pr.repo, $pr.state) | Where-Object { $_ } ) -join '  ·  '
+                Name     = $null
+                Host     = $null
+                Url      = $pr.url
+                Key      = $null
+                Provider = $null
+                DeepLink = $null
+                Color    = $g.color
+                Sort     = 5
+                Search   = "$label $ticket $($pr.repo)".ToLowerInvariant()
             }
         }
         if ($ticket -and @($g.sessions).Count -eq 0 -and @($g.prs).Count -eq 0 -and $g.jiraUrl) {
             $entries += [PSCustomObject]@{
-                Type   = 'ticket'
-                Label  = "$ticket  $($g.summary)"
-                Sub    = (@($g.jiraStatus) | Where-Object { $_ }) -join ''
-                Name   = $null
-                Host   = $null
-                Url    = $g.jiraUrl
-                Color  = $g.color
-                Sort   = 4
-                Search = "$ticket $($g.summary)".ToLowerInvariant()
+                Type     = 'ticket'
+                Label    = "$ticket  $($g.summary)"
+                Sub      = (@($g.jiraStatus) | Where-Object { $_ }) -join ''
+                Name     = $null
+                Host     = $null
+                Url      = $g.jiraUrl
+                Key      = $null
+                Provider = $null
+                DeepLink = $null
+                Color    = $g.color
+                Sort     = 6
+                Search   = "$ticket $($g.summary)".ToLowerInvariant()
             }
         }
     }
@@ -140,8 +181,8 @@ function Test-FuzzyMatch {
     return ($qi -ge $Query.Length)
 }
 
-# Activate the chosen entry: focus the session via the LOCAL wsm, or open
-# the ticket/PR URL in a browser.
+# Activate the chosen entry: open/launch a work item via docentd, focus a
+# session via the LOCAL wsm, or open a ticket/PR URL in a browser.
 function Invoke-LauncherEntry {
     param($Entry)
     if (-not $Entry) { return }
@@ -153,6 +194,37 @@ function Invoke-LauncherEntry {
                 -Body $body -TimeoutSec 5 | Out-Null
         }
         catch { }
+    }
+    elseif ($Entry.Type -eq 'workitem' -and $Entry.Key) {
+        $headers = @{ 'Content-Type' = 'application/json' }
+        if ($script:Token) { $headers['Authorization'] = "Bearer $($script:Token)" }
+        $keyEnc = [uri]::EscapeDataString($Entry.Key)
+        $tryOpen = ($Entry.Provider -eq 'cursor') -or [bool]$Entry.DeepLink
+
+        if ($tryOpen) {
+            $link = $Entry.DeepLink
+            try {
+                $resp = Invoke-RestMethod -Uri "$script:SessionsUrl/api/workitems/$keyEnc/open" `
+                    -Method Post -Headers $headers -TimeoutSec 10
+                if ($resp.deepLink) { $link = $resp.deepLink }
+            }
+            catch {
+                # Fall through to cached deepLink or /launch.
+            }
+            if ($link) {
+                try { Start-Process $link }
+                catch { Write-Warning "Could not open deep link '$link': $_" }
+                return
+            }
+        }
+
+        try {
+            Invoke-RestMethod -Uri "$script:SessionsUrl/api/workitems/$keyEnc/launch" `
+                -Method Post -Headers $headers -TimeoutSec 35 | Out-Null
+        }
+        catch {
+            Write-Warning "docent launch failed for '$($Entry.Key)': $_"
+        }
     }
     elseif ($Entry.Url) {
         Start-Process $Entry.Url
@@ -245,7 +317,8 @@ function New-StatusEntry {
     param([string]$Label)
     [PSCustomObject]@{
         Type = $null; Label = $Label; Sub = ''; Name = $null
-        Host = $null; Url = $null; Color = '#3A4060'; Search = ''
+        Host = $null; Url = $null; Key = $null; Provider = $null
+        DeepLink = $null; Color = '#3A4060'; Search = ''
     }
 }
 
@@ -270,7 +343,7 @@ function Update-Results {
     $q = $search.Text.ToLowerInvariant().Trim()
     $items = @($script:AllEntries | Where-Object { Test-FuzzyMatch -Query $q -Target $_.Search })
     if ($items.Count -eq 0 -and @($script:AllEntries).Count -eq 0) {
-        $results.ItemsSource = @(New-StatusEntry -Label 'No sessions (is docentd running?)')
+        $results.ItemsSource = @(New-StatusEntry -Label 'No work items (is docentd running?)')
         return
     }
     $results.ItemsSource = $items
