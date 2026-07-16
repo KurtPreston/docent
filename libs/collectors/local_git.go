@@ -151,9 +151,20 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				// Attribute the commit to the worktree that actually owns its
 				// branch — for both the open path and the disambiguating title
 				// prefix — instead of whichever worktree we scanned from.
-				commitDir := abs
-				if wt := worktrees[ci.branch]; ci.branch != "" && wt != "" {
-					commitDir = wt
+				// `git log --all` surfaces commits from every branch, including
+				// ones checked out in a sibling worktree or on no worktree at
+				// all (a merged/backport branch, a squash-merge reachable only
+				// from a release ref). In a grove-style repo the scanned dir is
+				// just the alphabetically-first sibling, so tagging those
+				// commits with it points the dashboard's "Open" at an unrelated
+				// worktree and makes every worktreeless branch look like it
+				// lives there. Only trust the scanned dir when there is a single
+				// worktree (an ordinary clone, whose one working tree is the
+				// home for all its branches); otherwise require a real worktree
+				// match and leave the path empty when the branch has none.
+				commitDir := worktrees[ci.branch]
+				if commitDir == "" && len(worktrees) <= 1 {
+					commitDir = abs
 				}
 				item := buildLocalGitCommitItem(directive.ID, repoLabel, commitDir, ci, dirs)
 				if t := localGitTicket(ci.subject, repoTicket); t != "" {
@@ -330,14 +341,14 @@ func localGitBranchHashes(ctx context.Context, repoDir, sinceISO string, opts *C
 	return set, nil
 }
 
-func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitCommit, allDirs []string) StatusItem {
+func buildLocalGitCommitItem(directiveID, repoLabel, commitDir string, ci localGitCommit, allDirs []string) StatusItem {
 	short := ci.hash
 	if len(ci.hash) > 7 {
 		short = ci.hash[:7]
 	}
 	title := ci.subject
 	if len(allDirs) > 1 {
-		title = fmt.Sprintf("(%s) %s", filepath.Base(abs), ci.subject)
+		title = fmt.Sprintf("(%s) %s", commitDisplayLabel(commitDir, ci.branch, repoLabel), ci.subject)
 	}
 	authorIdentity := ci.author
 	if ci.email != "" {
@@ -360,7 +371,6 @@ func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitComm
 		IsSelf:      ci.isSelf,
 		Fields: func() map[string]string {
 			fields := map[string]string{
-				"path":         abs,
 				"hash":         ci.hash,
 				"short_hash":   short,
 				"author":       ci.author,
@@ -368,12 +378,33 @@ func buildLocalGitCommitItem(directiveID, repoLabel, abs string, ci localGitComm
 				"iso":          ci.iso,
 				"subject":      ci.subject,
 			}
+			// Only carry a path when the commit resolves to a real worktree;
+			// an empty commitDir means the branch has no working directory to
+			// open, so the work item is left without an (incorrect) open path.
+			if commitDir != "" {
+				fields["path"] = commitDir
+			}
 			if ci.branch != "" {
 				fields["branch"] = ci.branch
 			}
 			return fields
 		}(),
 	}
+}
+
+// commitDisplayLabel picks the parenthetical disambiguator shown before a
+// commit subject when more than one repo/worktree is scanned together. It names
+// the owning worktree directory when known; for a commit whose branch has no
+// worktree it falls back to the branch name, then the repo label, rather than
+// borrowing an unrelated scanned worktree's name.
+func commitDisplayLabel(commitDir, branch, repoLabel string) string {
+	if commitDir != "" {
+		return filepath.Base(commitDir)
+	}
+	if branch != "" {
+		return branch
+	}
+	return filepath.Base(repoLabel)
 }
 
 // normalizeGitRef maps a git log --source ref to a local branch name, or ""

@@ -201,6 +201,91 @@ func TestLocalGitCollectResolvesWorktreePath(t *testing.T) {
 	}
 }
 
+// TestLocalGitCollectDropsPathForWorktreelessBranch covers the other half of
+// grove-style path attribution: a branch that has commits but is NOT checked
+// out in any worktree (e.g. its worktree was removed after merge, or it only
+// exists as a backport/squash ref). `git log --all` still surfaces its commits
+// when scanning a sibling worktree, and the collector used to tag them with
+// that arbitrary sibling's path — making unrelated tickets/branches all appear
+// to live in whichever worktree sorted first. Such a commit has no working
+// directory to open, so the collector must leave its path empty rather than
+// borrow a sibling's. (An ordinary single-worktree clone still tags its
+// branches with that one working tree; that is exercised elsewhere.)
+func TestLocalGitCollectDropsPathForWorktreelessBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	codeHome := t.TempDir()
+	// "aaa" sorts before "main", so it is the worktree the shared commit scan
+	// runs from — exactly the arbitrary sibling a worktreeless branch's commit
+	// must NOT be attributed to.
+	mainDir := codeHome + "/main"
+	siblingDir := codeHome + "/aaa"
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_DATE=2026-05-13T12:00:00+00:00",
+			"GIT_COMMITTER_DATE=2026-05-13T12:00:00+00:00",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	git(mainDir, "init", "--initial-branch=main", ".")
+	git(mainDir, "config", "user.name", "Kurt")
+	git(mainDir, "config", "user.email", "kurt@example")
+	git(mainDir, "commit", "--allow-empty", "-m", "initial on main")
+	// A persistent sibling worktree keeps this a multi-worktree (grove) repo.
+	git(mainDir, "worktree", "add", "-b", "aaa", siblingDir)
+	// Create a branch with a unique commit in a throwaway worktree, then remove
+	// that worktree — leaving the branch (and its commit) with no worktree and
+	// no checkout reflog in the surviving worktrees, just like a merged branch.
+	lonelyDir := filepath.Join(t.TempDir(), "lonely")
+	git(mainDir, "worktree", "add", "-b", "lonely", lonelyDir)
+	git(lonelyDir, "config", "user.name", "Kurt")
+	git(lonelyDir, "config", "user.email", "kurt@example")
+	git(lonelyDir, "commit", "--allow-empty", "-m", "work on lonely")
+	git(mainDir, "worktree", "remove", "--force", lonelyDir)
+
+	directive := userdata.Directive{
+		ID: "lg", Name: "Local", Collector: "local-git", Enabled: true,
+		CodeHome: codeHome,
+	}
+	clock := func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) }
+	c := LocalGitCollector{Clock: clock}
+	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
+		Since: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Until: clock(),
+		Scope: ScopeAll,
+	})
+	if err != nil {
+		t.Fatalf("CollectEvents: %v", err)
+	}
+
+	found := false
+	for _, it := range items {
+		if it.Kind != "commit" || it.Fields["subject"] != "work on lonely" {
+			continue
+		}
+		found = true
+		// The branch is still recorded (it groups the work item correctly);
+		// only the misleading sibling path must be gone.
+		if br := it.Fields["branch"]; br != "lonely" {
+			t.Errorf("lonely commit branch = %q, want %q", br, "lonely")
+		}
+		if p, ok := it.Fields["path"]; ok {
+			t.Errorf("worktreeless-branch commit carries path %q; want no path (a branch with no worktree has nothing to open)", p)
+		}
+	}
+	if !found {
+		t.Fatalf("expected a commit for the worktreeless 'lonely' branch, got items=%#v", items)
+	}
+}
+
 // TestLocalGitCollectDedupesSharedWorktreeCommits verifies the two halves of
 // how the collector treats grove-style worktrees that share one object store:
 // commits (visible in every worktree via `git log --all`) are scanned once and
