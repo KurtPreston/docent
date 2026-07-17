@@ -599,22 +599,55 @@ func dedupePRReviewItems(items []StatusItem) []StatusItem {
 // "unknown" (when the call fails or the payload can't be parsed); mergeable is
 // one of "mergeable", "conflicting", or "unknown". Failures are non-fatal: an
 // unknown status keeps the PR out of "ready" without aborting the whole run.
+//
+// The PR-level metadata (headRefName, reviewDecision, mergeable) and the
+// statusCheckRollup are fetched in two separate `gh pr view` calls on purpose.
+// statusCheckRollup needs read access to a PR's check results that fine-grained
+// PATs cannot grant on private repos — there is no fine-grained "checks"
+// permission — and gh fails the *entire* `pr view` when it can't read that one
+// field. Keeping statusCheckRollup out of the metadata call means a token that
+// can't read checks still resolves the head branch (which correlation needs to
+// anchor the PR to its repo), plus the review decision and mergeability; only
+// the checks status degrades to unknown.
 func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch, mergeable string) {
 	if strings.TrimSpace(prURL) == "" {
 		return "unknown", "", "", "unknown"
 	}
-	args := []string{"pr", "view", prURL, "--json", "statusCheckRollup,reviewDecision,headRefName,mergeable"}
+	view, err := c.fetchPRView(ctx, env, prURL, "reviewDecision,headRefName,mergeable", directive, opts)
+	if err != nil {
+		return "unknown", "", "", "unknown"
+	}
+	reviewDecision = strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
+	headBranch = strings.TrimSpace(view.HeadRefName)
+	mergeable = normalizeMergeable(view.Mergeable)
+
+	// Best-effort: a permission error (or any other failure) reading the
+	// check rollup leaves checks="unknown" rather than discarding the
+	// metadata resolved above.
+	checks = "unknown"
+	if rollup, err := c.fetchPRView(ctx, env, prURL, "statusCheckRollup", directive, opts); err == nil {
+		checks = rollupChecksState(rollup.StatusCheckRollup)
+	}
+	return checks, reviewDecision, headBranch, mergeable
+}
+
+// fetchPRView runs `gh pr view <url> --json <fields>` and parses the subset of
+// fields docent consumes. Splitting field sets across calls lets callers
+// isolate a field (like statusCheckRollup) that needs permissions a token may
+// lack, so one inaccessible field doesn't fail the whole lookup.
+func (c GitHubCollector) fetchPRView(ctx context.Context, env []string, prURL, fields string, directive userdata.Directive, opts *CollectOpts) (ghPRView, error) {
+	args := []string{"pr", "view", prURL, "--json", fields}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
-		return "unknown", "", "", "unknown"
+		return ghPRView{}, err
 	}
 	var view ghPRView
 	if err := json.Unmarshal(out, &view); err != nil {
-		return "unknown", "", "", "unknown"
+		return ghPRView{}, err
 	}
-	return rollupChecksState(view.StatusCheckRollup), strings.ToUpper(strings.TrimSpace(view.ReviewDecision)), strings.TrimSpace(view.HeadRefName), normalizeMergeable(view.Mergeable)
+	return view, nil
 }
 
 // normalizeMergeable maps gh's mergeable enum (MERGEABLE / CONFLICTING /
@@ -639,15 +672,8 @@ func (c GitHubCollector) fetchPRHeadRef(ctx context.Context, env []string, prURL
 	if strings.TrimSpace(prURL) == "" {
 		return ""
 	}
-	args := []string{"pr", "view", prURL, "--json", "headRefName"}
-	cmd := exec.CommandContext(ctx, "gh", args...)
-	cmd.Env = env
-	out, err := runAndLogExec(cmd, opts, directive.ID)
+	view, err := c.fetchPRView(ctx, env, prURL, "headRefName", directive, opts)
 	if err != nil {
-		return ""
-	}
-	var view ghPRView
-	if err := json.Unmarshal(out, &view); err != nil {
 		return ""
 	}
 	return strings.TrimSpace(view.HeadRefName)
