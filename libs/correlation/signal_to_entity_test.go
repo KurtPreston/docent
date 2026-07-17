@@ -7,7 +7,7 @@ import (
 )
 
 func TestSignalToEntityLinksTicket(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	s := model.Signal{
 		StableID: "jira:SALSA-42",
 		Source:   "jira",

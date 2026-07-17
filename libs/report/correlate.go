@@ -54,16 +54,18 @@ func Correlate(ctx context.Context, reg *collectors.Registry, cfg userdata.Confi
 
 func correlationConfigFrom(cfg userdata.ConfigFile, signals []collectors.StatusItem) correlation.Config {
 	var followed []string
+	allowGeneric := false
 	for _, d := range cfg.Directives {
 		if d.Collector != "jira" || !d.Enabled {
 			continue
 		}
+		allowGeneric = true
 		if v := strings.TrimSpace(d.Config["followed_projects"]); v != "" {
 			followed = append(followed, v)
 		}
 	}
 	seed := correlation.FollowedProjectsFromDirectives(followed)
-	return correlation.SeedProjectsFromSignals(signals, correlation.Config{}, seed)
+	return correlation.SeedProjectsFromSignals(signals, correlation.Config{AllowGeneric: allowGeneric}, seed)
 }
 
 // jiraAnnotationDirective returns the first enabled jira directive with a

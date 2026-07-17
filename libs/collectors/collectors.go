@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
 )
 
@@ -100,6 +101,11 @@ type CollectOpts struct {
 	// only see the small interfaces below to keep their dependency
 	// surface narrow.
 	RunLog RunLog
+	// CorrCfg is the engine/report ticket-matching config. Collectors that
+	// stamp ticket fields (local-git) must use this instead of a zero
+	// correlation.Config so generic scanning stays gated on JIRA /
+	// ticketProjects rather than inventing keys from Dependabot branches.
+	CorrCfg correlation.Config
 }
 
 // DirectiveLogger captures per-directive HTTP and subprocess

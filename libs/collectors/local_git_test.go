@@ -3,6 +3,8 @@ package collectors
 import (
 	"testing"
 	"time"
+
+	"github.com/KurtPreston/docent/libs/correlation"
 )
 
 func TestParseReflogTime(t *testing.T) {
@@ -23,20 +25,26 @@ func TestParseReflogTime(t *testing.T) {
 }
 
 func TestLocalGitTicket(t *testing.T) {
+	generic := correlation.Config{AllowGeneric: true}
+	restricted := correlation.Config{Projects: []string{"SALSA"}}
 	tests := []struct {
 		name       string
 		text       string
 		repoTicket string
+		cfg        correlation.Config
 		want       string
 	}{
-		{name: "subject has ticket", text: "Fix SALSA-7 leak", repoTicket: "SALSA-1", want: "SALSA-7"},
-		{name: "falls back to repo ticket", text: "misc cleanup", repoTicket: "SALSA-1", want: "SALSA-1"},
-		{name: "neither", text: "misc cleanup", repoTicket: "", want: ""},
-		{name: "reflog subject", text: "checkout: moving from main to salsa-42-x", repoTicket: "", want: "SALSA-42"},
+		{name: "subject has ticket", text: "Fix SALSA-7 leak", repoTicket: "SALSA-1", cfg: generic, want: "SALSA-7"},
+		{name: "falls back to repo ticket", text: "misc cleanup", repoTicket: "SALSA-1", cfg: generic, want: "SALSA-1"},
+		{name: "neither", text: "misc cleanup", repoTicket: "", cfg: generic, want: ""},
+		{name: "reflog subject", text: "checkout: moving from main to salsa-42-x", repoTicket: "", cfg: generic, want: "SALSA-42"},
+		{name: "no generic without allow", text: "fontawesome-free-7.3.0", repoTicket: "", cfg: correlation.Config{}, want: ""},
+		{name: "project restricted still matches", text: "Fix SALSA-7 leak", repoTicket: "", cfg: restricted, want: "SALSA-7"},
+		{name: "project restricted ignores free-7", text: "fontawesome-free-7.3.0", repoTicket: "", cfg: restricted, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := localGitTicket(tt.text, tt.repoTicket); got != tt.want {
+			if got := localGitTicket(tt.text, tt.repoTicket, tt.cfg); got != tt.want {
 				t.Errorf("localGitTicket(%q, %q) = %q, want %q", tt.text, tt.repoTicket, got, tt.want)
 			}
 		})

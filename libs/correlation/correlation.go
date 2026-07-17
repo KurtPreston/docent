@@ -12,32 +12,41 @@ import (
 // Config controls anchor resolution and grouping.
 type Config struct {
 	// TicketPattern is a regex whose first capture group is the ticket key
-	// (upper-cased). When set, it fully overrides Projects and the built-in
-	// default and is used exactly as supplied (existing behavior).
-	// Default when unset: ^([a-z]+-\d+)
+	// (upper-cased). When set, it fully overrides Projects / AllowGeneric and
+	// is used exactly as supplied (existing behavior).
 	TicketPattern string
 
 	// Projects restricts ticket-key matching to these JIRA project keys
 	// (e.g. "SALSA", "JASPER"), so generic hyphenated tokens that aren't
 	// really tickets — like "PR-7373" or "release-2026" — don't
-	// false-match. Case-insensitive. Ignored when TicketPattern is set;
-	// when empty (and TicketPattern is also empty), matching falls back to
-	// the fully generic DefaultTicketPattern.
+	// false-match. Case-insensitive. Ignored when TicketPattern is set.
 	Projects []string
+
+	// AllowGeneric enables the fully generic DefaultTicketPattern when
+	// TicketPattern is unset and Projects is empty. Callers that integrate
+	// with JIRA (docentd with a jira directive, report with an enabled jira
+	// directive) set this so zero-config ticket scanning still works before
+	// followed_projects / observed issue keys narrow matching. Without it,
+	// empty Projects means "match nothing", so Dependabot-style branch
+	// names like fontawesome-free-7 can't invent phantom tickets.
+	AllowGeneric bool
 }
 
 // DefaultTicketPattern matches JIRA-style keys like salsa-12345. Used only
-// when neither TicketPattern nor Projects is configured.
+// when AllowGeneric is set and neither TicketPattern nor Projects is configured.
 const DefaultTicketPattern = `^([a-z]+-\d+)`
 
 // defaultTicketCore is the unanchored, ungrouped core of DefaultTicketPattern,
 // reused when building the bracket-tolerant anchored pattern below.
 const defaultTicketCore = `[a-z]+-\d+`
 
+// neverMatchTicket is returned when ticket scanning is intentionally disabled
+// (no pattern, no projects, AllowGeneric false). It never matches.
+var neverMatchTicket = regexp.MustCompile(`a\A`)
+
 // ParseTicketKey extracts a ticket key from a name/title, or "" when none.
-// It anchors the configured pattern (default `^([a-z]+-\d+)`) to the start
-// of the string, which is the right behavior for session/branch leaf names
-// that begin with the ticket.
+// It anchors the configured pattern to the start of the string, which is the
+// right behavior for session/branch leaf names that begin with the ticket.
 func ParseTicketKey(name string, cfg Config) string {
 	re := ticketRegexp(cfg, false)
 	m := re.FindStringSubmatch(strings.TrimSpace(name))
@@ -65,16 +74,20 @@ func ScanTicketKey(name string, cfg Config) string {
 // ticketRegexp compiles the configured ticket pattern (case-insensitive).
 // An explicit cfg.TicketPattern fully overrides matching and is used as-is
 // (existing behavior: start-anchored, with "^" swapped for a word boundary
-// when scan is true). Otherwise the pattern is built from cfg.Projects (or
-// the fully generic default when Projects is empty), and the anchored form
-// additionally tolerates a leading "[" so "[TICKET] subject"-style titles
-// still parse when the ticket leads the string.
+// when scan is true). Otherwise the pattern is built from cfg.Projects, or
+// the fully generic default when Projects is empty and AllowGeneric is set.
+// With neither Projects nor AllowGeneric, matching is disabled. The anchored
+// form additionally tolerates a leading "[" so "[TICKET] subject"-style
+// titles still parse when the ticket leads the string.
 func ticketRegexp(cfg Config, scan bool) *regexp.Regexp {
 	if cfg.TicketPattern != "" {
 		return compileTicketPattern(cfg.TicketPattern, scan)
 	}
 	core := projectTicketCore(cfg.Projects)
 	if core == "" {
+		if !cfg.AllowGeneric {
+			return neverMatchTicket
+		}
 		core = defaultTicketCore
 	}
 	pattern := `\b(` + core + `)`
@@ -84,8 +97,11 @@ func ticketRegexp(cfg Config, scan bool) *regexp.Regexp {
 	re, err := regexp.Compile("(?i)" + pattern)
 	if err != nil {
 		// core is built from QuoteMeta'd project keys plus a fixed literal
-		// suffix, so this should not happen in practice; fall back to the
-		// fully generic core just in case.
+		// suffix, so this should not happen in practice. Prefer the generic
+		// core only when AllowGeneric is set; otherwise disable matching.
+		if !cfg.AllowGeneric {
+			return neverMatchTicket
+		}
 		fallback := `\b(` + defaultTicketCore + `)`
 		if !scan {
 			fallback = `^\[?\s*(` + defaultTicketCore + `)`

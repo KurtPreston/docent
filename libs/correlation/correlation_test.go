@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseTicketKey(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	tests := []struct {
 		in   string
 		want string
@@ -26,7 +26,7 @@ func TestParseTicketKey(t *testing.T) {
 }
 
 func TestBuildWorkItems_ticketGrouping(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "jira:SALSA-1", Kind: "ticket", Title: "Fix widget NPE", Coordinates: map[string]string{"ticket": "SALSA-1"}},
 		{ID: "pr:org/repo#5", Kind: "pr", Title: "salsa-1 fix", Coordinates: map[string]string{"ticket": "SALSA-1", "repo": "org/repo", "number": "5"}},
@@ -45,7 +45,7 @@ func TestBuildWorkItems_ticketGrouping(t *testing.T) {
 }
 
 func TestBuildWorkItems_reflogOnlyDropped(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "reflog:1", Kind: "reflog", Title: "checkout: moving from main to salsa-9-x", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x"}},
 	}
@@ -55,7 +55,7 @@ func TestBuildWorkItems_reflogOnlyDropped(t *testing.T) {
 }
 
 func TestBuildWorkItems_reflogWithEvidenceKept(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "reflog:1", Kind: "reflog", Title: "checkout: moving from main to salsa-9-x", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x"}},
 		{ID: "commit:1", Kind: "commit", Title: "salsa-9 do the thing", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x"}},
@@ -70,7 +70,7 @@ func TestBuildWorkItems_reflogWithEvidenceKept(t *testing.T) {
 }
 
 func TestBuildWorkItems_noTicketRepoFallback(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "pr:org/repo#9", Kind: "pr", Title: "quick fix", Coordinates: map[string]string{"repo": "org/repo", "number": "9"}},
 	}
@@ -84,7 +84,7 @@ func TestBuildWorkItems_noTicketRepoFallback(t *testing.T) {
 }
 
 func TestBuildWorkItems_multiTicketPrimary(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	// Entity with ticket in title uses that ticket as anchor.
 	entities := []model.Entity{
 		{ID: "pr:1", Kind: "pr", Title: "SALSA-2 and SALSA-3 combined", Coordinates: map[string]string{"repo": "org/r", "number": "1"}},
@@ -141,14 +141,29 @@ func TestScanTicketKey_projectRestricted(t *testing.T) {
 }
 
 func TestTicketKey_genericFallbackUnaffected(t *testing.T) {
-	// With no Projects and no TicketPattern configured, behavior must stay
+	// With AllowGeneric and no Projects / TicketPattern, behavior must stay
 	// exactly as before (generic [a-z]+-\d+ core).
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	if got := ParseTicketKey("salsa-12345-foo-bar", cfg); got != "SALSA-12345" {
 		t.Errorf("ParseTicketKey = %q, want SALSA-12345", got)
 	}
 	if got := ScanTicketKey("Fix SALSA-123 crash on load", cfg); got != "SALSA-123" {
 		t.Errorf("ScanTicketKey = %q, want SALSA-123", got)
+	}
+}
+
+func TestTicketKey_genericDisabledWithoutAllowGeneric(t *testing.T) {
+	cfg := Config{}
+	if got := ParseTicketKey("salsa-12345-foo-bar", cfg); got != "" {
+		t.Errorf("ParseTicketKey = %q, want \"\" when AllowGeneric is false", got)
+	}
+	if got := ScanTicketKey("fontawesome-free-7.3.0", cfg); got != "" {
+		t.Errorf("ScanTicketKey = %q, want \"\" when AllowGeneric is false", got)
+	}
+	// Explicit Projects still match without AllowGeneric.
+	cfg.Projects = []string{"SALSA"}
+	if got := ParseTicketKey("salsa-9-x", cfg); got != "SALSA-9" {
+		t.Errorf("ParseTicketKey with Projects = %q, want SALSA-9", got)
 	}
 }
 
@@ -162,7 +177,7 @@ func TestTicketKey_explicitPatternOverridesProjects(t *testing.T) {
 }
 
 func TestScanTicketKey(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	tests := []struct {
 		in   string
 		want string
@@ -185,7 +200,7 @@ func TestScanTicketKey(t *testing.T) {
 }
 
 func TestSignalToEntity_commitFallback(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	// A commit whose subject embeds the ticket mid-string should still
 	// correlate via the ScanTicketKey fallback.
 	ent := SignalToEntity(model.Signal{
@@ -218,7 +233,7 @@ func TestSignalToEntity_commitFallback(t *testing.T) {
 }
 
 func TestGroupKey_branchAnchor(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	ent := model.Entity{
 		ID:    "commit:1",
 		Kind:  "commit",
@@ -235,7 +250,7 @@ func TestGroupKey_branchAnchor(t *testing.T) {
 }
 
 func TestBuildWorkItems_branchAnchoredWithTicketAttachment(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "jira:SALSA-1", Kind: "issue", Title: "SALSA-1 Fix widget NPE", URL: "https://jira/SALSA-1", Coordinates: map[string]string{"ticket": "SALSA-1", "key": "SALSA-1"}, State: map[string]string{"status": "In Progress"}},
 		{ID: "commit:1", Kind: "commit", Title: "fix", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-1-fix", "ticket": "SALSA-1"}, State: map[string]string{"observedAt": "2026-06-01T12:00:00Z"}},
@@ -261,7 +276,7 @@ func TestBuildWorkItems_branchAnchoredWithTicketAttachment(t *testing.T) {
 }
 
 func TestBuildWorkItems_reviewRequestedPRBranchUnit(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "pr:rr", Kind: "pr_review_status", Title: "their feature", Coordinates: map[string]string{
 			"repo": "org/repo", "head_branch": "feature-x", "relation": "review_requested",
@@ -277,7 +292,7 @@ func TestBuildWorkItems_reviewRequestedPRBranchUnit(t *testing.T) {
 }
 
 func TestBuildWorkItems_orphanTicketStaysStandalone(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "jira:SALSA-9", Kind: "issue", Title: "SALSA-9 Unstarted task", Coordinates: map[string]string{"ticket": "SALSA-9"}, State: map[string]string{"status": "Assigned"}},
 	}
@@ -288,7 +303,7 @@ func TestBuildWorkItems_orphanTicketStaysStandalone(t *testing.T) {
 }
 
 func TestBuildWorkItems_multipleBranchesShareTicket(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "jira:SALSA-1", Kind: "issue", Title: "SALSA-1 Shared", Coordinates: map[string]string{"ticket": "SALSA-1"}},
 		{ID: "c1", Kind: "commit", Title: "a", Coordinates: map[string]string{"repo": "org/r", "branch": "salsa-1-a", "ticket": "SALSA-1"}},
@@ -437,7 +452,7 @@ func TestTicketFromEntity_rejectsBogusExplicitCoordinate(t *testing.T) {
 }
 
 func TestBuildWorkItems_branchWithNoTickets(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{
 		{ID: "c1", Kind: "commit", Title: "misc", Coordinates: map[string]string{"repo": "org/r", "branch": "misc-cleanup"}},
 	}
@@ -451,7 +466,7 @@ func TestBuildWorkItems_branchWithNoTickets(t *testing.T) {
 }
 
 func TestSignalsToEntities_session(t *testing.T) {
-	cfg := Config{}
+	cfg := Config{AllowGeneric: true}
 	signals := []model.Signal{
 		{
 			Source: "wsm",

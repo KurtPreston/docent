@@ -206,7 +206,7 @@ for a starting point.
 | `wsmUrl` | `http://127.0.0.1:39788` | Local wsm daemon URL injected into the dashboard. |
 | `onClickScript` | `~/.config/docent/onclick.sh` | Hook run by `POST /api/workitems/{key}/launch`; see below. `DOCENT_ONCLICK` env var overrides. |
 | `sshHost` | unset | SSH alias for remote-open, passed to the hook as `DOCENT_HOST`. |
-| `ticketProjects` | auto-detected | Restricts ticket-key matching (branch names, PR/commit titles, JIRA issue keys) to these project keys, e.g. `[SALSA, JASPER]`, so generic hyphenated tokens like `PR-7373` or `release-2026` can't false-match as tickets. The engine also auto-widens matching with any project key observed on collected JIRA issues (and each jira directive's `config.followed_projects`), so this mainly matters when no jira directive is configured at all. |
+| `ticketProjects` | auto-detected | Restricts ticket-key matching (branch names, PR/commit titles, JIRA issue keys) to these project keys, e.g. `[SALSA, JASPER]`. Without a jira directive, generic `WORD-digits` scanning is disabled (so Dependabot branches like `fontawesome-free-7` don't invent phantom tickets); set `ticketProjects` (or `ticketPattern`) to opt into matching. With jira enabled, matching starts generic and the engine auto-widens/narrows via `followed_projects` and observed issue keys. |
 | `ticketPattern` | unset | Fully overrides ticket matching with a custom regex (first capture group is the key) instead of `ticketProjects`. |
 
 ### Launch hook (`onClickScript`)

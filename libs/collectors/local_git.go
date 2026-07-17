@@ -90,9 +90,10 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		// code_home), not an in-window event, and would flood recent-activity
 		// prompts with branch×1 noise for untouched repos.
 		branch := localGitCurrentBranch(ctx, abs, opts, directive.ID)
-		repoTicket := correlation.ScanTicketKey(branch, correlation.Config{})
+		corrCfg := collectCorrCfg(opts)
+		repoTicket := correlation.ScanTicketKey(branch, corrCfg)
 		if repoTicket == "" {
-			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), correlation.Config{})
+			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), corrCfg)
 		}
 		// When this repo has sibling worktrees sharing its refs (grove-style
 		// layouts), a commit surfaced by `git log --all` may belong to a
@@ -167,7 +168,7 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 					commitDir = abs
 				}
 				item := buildLocalGitCommitItem(directive.ID, repoLabel, commitDir, ci, dirs)
-				if t := localGitTicket(ci.subject, repoTicket); t != "" {
+				if t := localGitTicket(ci.subject, repoTicket, corrCfg); t != "" {
 					item.Fields["ticket"] = t
 				}
 				out = append(out, item)
@@ -242,7 +243,7 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			// Reflog subjects like "checkout: moving from main to salsa-123"
 			// carry the branch (and thus ticket); fall back to the repo's
 			// current-branch ticket otherwise.
-			if t := localGitTicket(gs, repoTicket); t != "" {
+			if t := localGitTicket(gs, repoTicket, corrCfg); t != "" {
 				fields["ticket"] = t
 			}
 			out = append(out, StatusItem{
@@ -547,11 +548,18 @@ func localGitCurrentBranch(ctx context.Context, abs string, opts *CollectOpts, d
 // localGitTicket prefers a ticket scanned from the commit/reflog text and
 // falls back to the repo's branch-derived ticket, so rows whose own text
 // omits the key still correlate to the branch they were made on.
-func localGitTicket(text, repoTicket string) string {
-	if t := correlation.ScanTicketKey(text, correlation.Config{}); t != "" {
+func localGitTicket(text, repoTicket string, cfg correlation.Config) string {
+	if t := correlation.ScanTicketKey(text, cfg); t != "" {
 		return t
 	}
 	return repoTicket
+}
+
+func collectCorrCfg(opts *CollectOpts) correlation.Config {
+	if opts == nil {
+		return correlation.Config{}
+	}
+	return opts.CorrCfg
 }
 
 // localGitRepositoryKey prefers remote.origin URL (owner/repo or nested path) so local-git

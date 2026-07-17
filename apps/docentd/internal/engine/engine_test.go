@@ -22,7 +22,12 @@ func newTestEngine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(config.DaemonConfig{}, store)
+	// Most engine unit tests use SALSA-* fixtures without wiring a jira
+	// directive; enable generic ticket scanning so those keys still parse.
+	// Tests that assert the no-jira gate construct Engine via New directly.
+	e := New(config.DaemonConfig{}, store)
+	e.corrCfg.AllowGeneric = true
+	return e
 }
 
 // fakeCollector is registered into the engine's registry to drive collection
@@ -742,6 +747,29 @@ func TestEngineNewDerivesProjectsFromJiraDirective(t *testing.T) {
 	}, store)
 	if len(e.corrCfg.Projects) != 1 || e.corrCfg.Projects[0] != "SALSA" {
 		t.Errorf("corrCfg.Projects = %v, want [SALSA]", e.corrCfg.Projects)
+	}
+	if !e.corrCfg.AllowGeneric {
+		t.Errorf("corrCfg.AllowGeneric = false, want true when a jira directive is enabled")
+	}
+}
+
+func TestEngineNewDisablesGenericTicketsWithoutJira(t *testing.T) {
+	store, err := registry.NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(config.DaemonConfig{
+		Directives: []userdata.Directive{
+			{Collector: "local-git", Enabled: true},
+			{Collector: "github", Enabled: true},
+			{Collector: "jira", Enabled: false},
+		},
+	}, store)
+	if e.corrCfg.AllowGeneric {
+		t.Errorf("corrCfg.AllowGeneric = true, want false when no enabled jira directive")
+	}
+	if got := correlation.ScanTicketKey("fontawesome-free-7.3.0", e.corrCfg); got != "" {
+		t.Errorf("ScanTicketKey = %q, want \"\" without jira generic scanning", got)
 	}
 }
 

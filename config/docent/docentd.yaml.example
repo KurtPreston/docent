@@ -16,16 +16,16 @@ wsmUrl: http://127.0.0.1:39788
 # bindHost: 0.0.0.0
 
 # Ticket-key matching (branch names, PR/commit titles, JIRA issue keys, etc.).
-# ticketProjects restricts matching to these JIRA project keys, so generic
-# hyphenated tokens like "PR-7373" or "release-2026" don't false-match as
-# tickets. The engine also auto-adds any project key observed on collected
-# jira issues (including a jira directive's config.followed_projects), so
-# this is usually only needed when no jira directive is configured at all.
+# Without a jira directive, generic WORD-digits scanning is off so tokens like
+# "free-7" in Dependabot branches don't invent phantom tickets. With jira
+# enabled, matching starts generic and narrows via followed_projects / observed
+# issue keys. ticketProjects restricts matching to these keys (and also enables
+# scanning when you have no jira directive), e.g. [SALSA, JASPER].
 # ticketProjects: [SALSA, JASPER]
 #
 # ticketPattern fully overrides ticket-key matching with a custom regex
 # (first capture group is the key); leave unset to use ticketProjects /
-# the auto-detected projects, or a fully generic [a-z]+-\d+ pattern.
+# auto-detected projects, or (with jira) the generic [a-z]+-\d+ pattern.
 # ticketPattern: "^([A-Z]+-\\d+)"
 
 # Directives, optional ai, and secrets live alongside this file:

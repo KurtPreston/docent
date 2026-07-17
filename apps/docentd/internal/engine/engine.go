@@ -226,6 +226,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		corrCfg: correlation.Config{
 			TicketPattern: cfg.TicketPattern,
 			Projects:      deriveTicketProjects(cfg),
+			AllowGeneric:  hasJiraCollector(cfg),
 		},
 		collecting:       map[unitKey]bool{},
 		entityWorkItem:   map[string]string{},
@@ -258,6 +259,19 @@ func jiraBaseURL(cfg config.DaemonConfig) string {
 		}
 	}
 	return ""
+}
+
+// hasJiraCollector reports whether any enabled jira directive is configured.
+// Generic ticket-key scanning (matching any WORD-digits token) is only
+// enabled when this is true, so Dependabot / package-version branches don't
+// invent phantom tickets for dashboards that never talk to JIRA.
+func hasJiraCollector(cfg config.DaemonConfig) bool {
+	for _, d := range cfg.Directives {
+		if d.Collector == "jira" && d.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // ticketBrowseURL builds a JIRA browse URL for a ticket key, or "" when no jira
@@ -613,6 +627,7 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 		Until:       now,
 		Scope:       collectors.ScopeInvolved,
 		Mode:        u.mode,
+		CorrCfg:     e.corrCfg,
 	}
 	cutoff := now.Add(-u.lookback)
 	if u.mode == collectors.ModeEvents {
