@@ -254,6 +254,69 @@ func TestDedupePRReviewItemsAuthoredWins(t *testing.T) {
 	}
 }
 
+func TestIsChecksPermissionError(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{
+			name:   "fine-grained PAT statusCheckRollup denial",
+			stderr: "GraphQL: Resource not accessible by personal access token (repository.pullRequest.statusCheckRollup.nodes.0.commit.statusCheckRollup.contexts.nodes.0)",
+			want:   true,
+		},
+		{
+			name:   "denial on an unrelated field is not a checks issue",
+			stderr: "GraphQL: Resource not accessible by personal access token (repository.pullRequest.author)",
+			want:   false,
+		},
+		{
+			name:   "statusCheckRollup mentioned without permission phrase",
+			stderr: "some other error touching statusCheckRollup",
+			want:   false,
+		},
+		{name: "empty", stderr: "", want: false},
+		{name: "unrelated network error", stderr: "dial tcp: lookup api.github.com: no such host", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isChecksPermissionError(tc.stderr); got != tc.want {
+				t.Fatalf("isChecksPermissionError(%q) = %v, want %v", tc.stderr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFirstLine(t *testing.T) {
+	cases := map[string]string{
+		"":                  "",
+		"  single  ":        "single",
+		"first\nsecond":     "first",
+		"\n\nlead\ntrail\n": "lead",
+	}
+	for in, want := range cases {
+		if got := firstLine(in); got != want {
+			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTruncateMessage(t *testing.T) {
+	if got := truncateMessage("hello", 10); got != "hello" {
+		t.Errorf("no truncation expected, got %q", got)
+	}
+	if got := truncateMessage("hello world", 5); got != "hello…" {
+		t.Errorf("truncateMessage cut = %q, want %q", got, "hello…")
+	}
+	if got := truncateMessage("anything", 0); got != "" {
+		t.Errorf("max<=0 should yield empty, got %q", got)
+	}
+	// Multi-byte runes must not be split mid-character.
+	if got := truncateMessage("héllo", 2); got != "hé…" {
+		t.Errorf("multibyte truncate = %q, want %q", got, "hé…")
+	}
+}
+
 func containsArg(args []string, want string) bool {
 	for _, a := range args {
 		if strings.EqualFold(a, want) {

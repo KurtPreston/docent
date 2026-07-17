@@ -30,11 +30,22 @@ func runDoctor(args []string) {
 		fmt.Println("doctor: all enabled directives PASS")
 		return
 	}
+	failed := false
 	for _, iss := range issues {
-		fmt.Printf("FAIL %s (%s): %s\n", iss.DirectiveID, iss.Collector, iss.Message)
+		label := "FAIL"
+		if iss.Severity == "warning" {
+			label = "WARN"
+		} else {
+			failed = true
+		}
+		fmt.Printf("%s %s (%s): %s\n", label, iss.DirectiveID, iss.Collector, iss.Message)
 		if iss.Remediation != "" {
 			fmt.Printf("  -> %s\n", iss.Remediation)
 		}
 	}
-	os.Exit(1)
+	if failed {
+		os.Exit(1)
+	}
+	// Only non-fatal warnings remain; report success but leave them visible.
+	fmt.Println("doctor: no blocking issues (warnings above are non-fatal)")
 }

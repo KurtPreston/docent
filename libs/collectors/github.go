@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -604,11 +605,11 @@ func dedupePRReviewItems(items []StatusItem) []StatusItem {
 // statusCheckRollup are fetched in two separate `gh pr view` calls on purpose.
 // statusCheckRollup needs read access to a PR's check results that fine-grained
 // PATs cannot grant on private repos — there is no fine-grained "checks"
-// permission — and gh fails the *entire* `pr view` when it can't read that one
-// field. Keeping statusCheckRollup out of the metadata call means a token that
-// can't read checks still resolves the head branch (which correlation needs to
-// anchor the PR to its repo), plus the review decision and mergeability; only
-// the checks status degrades to unknown.
+// permission (see ValidateDirective's probe) — and gh fails the *entire*
+// `pr view` when it can't read that one field. Keeping statusCheckRollup out of
+// the metadata call means a token that can't read checks still resolves the
+// head branch (which correlation needs to anchor the PR to its repo), plus the
+// review decision and mergeability; only the checks status degrades to unknown.
 func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch, mergeable string) {
 	if strings.TrimSpace(prURL) == "" {
 		return "unknown", "", "", "unknown"
@@ -756,6 +757,17 @@ func (c GitHubCollector) ValidateDirective(ctx context.Context, directive userda
 		}
 	}
 
+	env := os.Environ()
+	if tokenVal != "" {
+		env = append(env, "GITHUB_TOKEN="+tokenVal)
+	}
+	// `gh` (other than `gh auth`/`gh api`) targets the host from GH_HOST, so
+	// mirror ghContext here to keep the probes below pointed at an enterprise
+	// host when configured.
+	if host != "" && host != "github.com" {
+		env = append(env, "GH_HOST="+host)
+	}
+
 	args := []string{"auth", "status"}
 	if host != "" && host != "github.com" {
 		args = append(args, "--hostname", host)
@@ -763,10 +775,6 @@ func (c GitHubCollector) ValidateDirective(ctx context.Context, directive userda
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, "gh", args...)
-	env := os.Environ()
-	if tokenVal != "" {
-		env = append(env, "GITHUB_TOKEN="+tokenVal)
-	}
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		remediation := "run `gh auth login`"
@@ -778,8 +786,113 @@ func (c GitHubCollector) ValidateDirective(ctx context.Context, directive userda
 			Message:     fmt.Sprintf("`gh %s` failed: %s", strings.Join(args, " "), strings.TrimSpace(string(out))),
 			Remediation: remediation,
 		})
+		// Auth is broken; the token-permission probe would only produce
+		// noise on top of the real problem, so stop here.
+		return issues
 	}
+
+	// Auth works, but the token may still lack permissions the collector
+	// relies on. Probe the one that silently breaks the dashboard: reading a
+	// PR's check rollup (statusCheckRollup). Fine-grained PATs cannot grant
+	// this on private repos — there is no fine-grained "checks" permission —
+	// and gh fails the whole `pr view` when it can't read that field, which
+	// (before the split in fetchPRStatus) also cost the PR its head branch and
+	// therefore its repo attribution on the dashboard.
+	user := strings.TrimSpace(directive.Target["username"])
+	if user == "" {
+		user = "@me"
+	}
+	issues = append(issues, probeGitHubTokenPermissions(ctx, env, user)...)
 	return issues
+}
+
+// probeGitHubTokenPermissions checks whether the configured token can read a
+// PR's check rollup, which is the permission gap most likely to silently
+// degrade the dashboard. It returns a warning-severity issue when the token
+// can't (rather than a hard failure), since docent still works without it.
+// Returns nil when there's no open PR to probe against or the token can read
+// checks fine.
+func probeGitHubTokenPermissions(ctx context.Context, env []string, user string) []ValidationIssue {
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	prURL := ghSampleAuthoredPRURL(probeCtx, env, user)
+	if prURL == "" {
+		// No open authored PR to exercise the checks path; nothing to probe.
+		return nil
+	}
+
+	// statusCheckRollup in isolation, so any permission error is unambiguously
+	// about reading checks.
+	cmd := exec.CommandContext(probeCtx, "gh", "pr", "view", prURL, "--json", "statusCheckRollup")
+	cmd.Env = env
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if isChecksPermissionError(stderr.String()) {
+			return []ValidationIssue{{
+				Field:       "gh token permissions",
+				Severity:    "warning",
+				Message:     "GitHub token cannot read PR check status (statusCheckRollup): " + truncateMessage(firstLine(stderr.String()), 200),
+				Remediation: "known fine-grained PAT limitation (there is no fine-grained \"checks\" permission); the dashboard still resolves PRs but their checks show as unknown. Use a classic PAT with `repo` scope if you need check status.",
+			}}
+		}
+		// Any other failure (network blip, rate limit, an unrelated gh error)
+		// isn't a token-permission problem; don't report it to avoid noisy
+		// false positives in `docent doctor`.
+	}
+	return nil
+}
+
+// ghSampleAuthoredPRURL returns the URL of one open PR authored by user, or ""
+// when none is found (or the lookup fails). Used only to give the permission
+// probe a real PR to test against.
+func ghSampleAuthoredPRURL(ctx context.Context, env []string, user string) string {
+	cmd := exec.CommandContext(ctx, "gh", "search", "prs", "--author", user, "--state", "open", "--limit", "1", "--json", "url")
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	var rows []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(out, &rows); err != nil || len(rows) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(rows[0].URL)
+}
+
+// isChecksPermissionError reports whether gh stderr indicates the token lacks
+// access to a PR's statusCheckRollup (the fine-grained PAT limitation). GitHub
+// returns "Resource not accessible by personal access token" with the offending
+// GraphQL field path; we require the statusCheckRollup path so unrelated
+// permission errors don't match.
+func isChecksPermissionError(stderr string) bool {
+	s := strings.ToLower(stderr)
+	return strings.Contains(s, "resource not accessible by personal access token") &&
+		strings.Contains(s, "statuscheckrollup")
+}
+
+// firstLine returns the first non-empty line of s, trimmed.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// truncateMessage caps s at max runes, appending an ellipsis when it had to cut.
+func truncateMessage(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 func hostname(raw string) string {

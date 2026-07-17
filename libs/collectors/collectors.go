@@ -277,6 +277,11 @@ type ValidationIssue struct {
 	Field       string // optional pointer to the offending config field
 	Message     string
 	Remediation string
+	// Severity distinguishes a hard failure that blocks collection from a
+	// non-fatal degradation. "warning" marks an issue that a caller (e.g.
+	// `docent doctor`) should surface but not treat as a failure; an empty
+	// value (or "error") is a blocking problem.
+	Severity string
 }
 
 // ValidateOpts mirrors the parts of CollectOpts validators need (env lookup
