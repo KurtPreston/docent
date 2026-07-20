@@ -75,8 +75,11 @@ Options:
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
   --ssh-host HOST   SSH host for the docent-tunnel forward to a remote docentd
-                    (default: the host in the remote URL)
-  --ssh-identity P  SSH private key for the forward (else ssh-agent)
+                    (default: the host in the remote URL). Aliases from
+                    ~/.ssh/config are resolved to their real HostName via
+                    `ssh -G`, since the tunnel does not read ssh_config.
+  --ssh-identity P  SSH private key for the forward (default: the IdentityFile
+                    from `ssh -G`, else ssh-agent)
   --no-tunnel       Don't set up the SSH forward; hit the remote URL directly
   --dry-run         Print actions without changing the system
   -h, --help        Show this help
@@ -270,6 +273,41 @@ url_host() {
   printf '%s' "$u"
 }
 
+# expand_tilde expands a leading ~ / ~/ to $HOME.
+expand_tilde() {
+  case "$1" in
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${1#"~/"}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# ssh_effective resolves a host through `ssh -G` and prints "HOSTNAME\tIDENTITY".
+# docent-tunnel dials the host directly and does NOT read ~/.ssh/config, so an
+# SSH alias like `desktop` must be turned into its real HostName here (and its
+# configured IdentityFile picked up) or the tunnel can never connect. Falls back
+# to the input host and an empty identity when ssh is unavailable.
+ssh_effective() {
+  local host="$1" key val rhost="" ident="" expanded
+  if ! command -v ssh >/dev/null 2>&1; then
+    printf '%s\t%s\n' "$host" ""
+    return 0
+  fi
+  while IFS=' ' read -r key val; do
+    case "$key" in
+      hostname) [ -n "$val" ] && rhost="$val" ;;
+      identityfile)
+        if [ -z "$ident" ]; then
+          expanded="$(expand_tilde "$val")"
+          [ -f "$expanded" ] && ident="$expanded"
+        fi
+        ;;
+    esac
+  done < <(ssh -G "$host" 2>/dev/null)
+  [ -n "$rhost" ] || rhost="$host"
+  printf '%s\t%s\n' "$rhost" "$ident"
+}
+
 # resolve_tunnel sets up the launcher/dashboard to reach a remote docentd through
 # a local SSH forward (docent-tunnel). This is the default in remote mode; pass
 # --no-tunnel to hit the remote URL directly instead. It sets USE_TUNNEL to 1/0
@@ -279,16 +317,120 @@ resolve_tunnel() {
     return 0
   fi
   USE_TUNNEL=1
-  if [ -z "$SSH_HOST" ]; then
-    local default_host; default_host="$(url_host "$DOCENTD_URL")"
-    if [ "$DRY_RUN" -eq 1 ] || [ ! -t 0 ]; then
-      SSH_HOST="$default_host"
-    else
-      printf "SSH host for the dev box [%s]: " "$default_host"
-      read -r SSH_HOST
-      SSH_HOST="${SSH_HOST:-$default_host}"
-    fi
+
+  local raw_host="$SSH_HOST"
+  [ -n "$raw_host" ] || raw_host="$(url_host "$DOCENTD_URL")"
+
+  if [ "$DRY_RUN" -eq 0 ] && [ -t 0 ] && [ -z "$SSH_HOST" ]; then
+    local host_in
+    printf "SSH host for the dev box [%s]: " "$raw_host"
+    read -r host_in
+    raw_host="${host_in:-$raw_host}"
   fi
+
+  # Turn SSH aliases into the real hostname/identity — the tunnel can't use ssh_config.
+  local resolved ident
+  IFS=$'\t' read -r resolved ident < <(ssh_effective "$raw_host")
+  if [ "$resolved" != "$raw_host" ]; then
+    log "resolved SSH host $raw_host -> $resolved (via ssh -G)"
+  fi
+  SSH_HOST="$resolved"
+  [ -n "$SSH_IDENTITY" ] || SSH_IDENTITY="$ident"
+}
+
+# remote_connection_ok returns 0 when the launcher can actually reach the remote
+# docentd. In tunnel mode it runs `docent-tunnel -check` (the exact SSH + auth +
+# host-key path the daemon uses); in direct mode it curls /health then an authed
+# endpoint, treating 401 as a bad token. Diagnostics go to stderr.
+remote_connection_ok() {
+  if [ "$USE_TUNNEL" = 1 ]; then
+    if [ ! -x "$DOCENT_TUNNEL_BIN" ]; then
+      echo "  docent-tunnel binary not found at $DOCENT_TUNNEL_BIN" >&2
+      return 1
+    fi
+    local -a args=(-check -host "$SSH_HOST" -local "127.0.0.1:$DOCENT_PORT" -remote "127.0.0.1:$DOCENT_PORT")
+    [ -n "$SSH_IDENTITY" ] && args+=(-identity "$SSH_IDENTITY")
+    DOCENT_TUNNEL_TOKEN="$DOCENTD_TOKEN" "$DOCENT_TUNNEL_BIN" "${args[@]}"
+    return $?
+  fi
+  if ! curl -sf --max-time 8 "$DOCENTD_URL/health" >/dev/null 2>&1; then
+    echo "  $DOCENTD_URL/health not reachable" >&2
+    return 1
+  fi
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $DOCENTD_TOKEN" "$DOCENTD_URL/api/config" 2>/dev/null)"
+  if [ "$code" = "401" ]; then
+    echo "  $DOCENTD_URL rejected the bearer token (401)" >&2
+    return 1
+  fi
+  return 0
+}
+
+# reprompt_tunnel / reprompt_direct re-collect connection details after a failed
+# validation attempt, re-resolving aliases so a corrected host takes effect.
+reprompt_tunnel() {
+  local host_in ident_in token_in resolved ident
+  printf "SSH host for the dev box [%s]: " "$SSH_HOST"
+  read -r host_in
+  [ -n "$host_in" ] && SSH_HOST="$host_in"
+  IFS=$'\t' read -r resolved ident < <(ssh_effective "$SSH_HOST")
+  SSH_HOST="$resolved"
+  printf "SSH identity key [%s]: " "${SSH_IDENTITY:-${ident:-ssh-agent}}"
+  read -r ident_in
+  SSH_IDENTITY="${ident_in:-${SSH_IDENTITY:-$ident}}"
+  printf "Bearer token [%s]: " "$([ -n "$DOCENTD_TOKEN" ] && echo 'keep current' || echo none)"
+  read -r token_in
+  [ -n "$token_in" ] && DOCENTD_TOKEN="$token_in"
+}
+
+reprompt_direct() {
+  local url_in token_in
+  printf "Remote docentd base URL [%s]: " "$DOCENTD_URL"
+  read -r url_in
+  [ -n "$url_in" ] && DOCENTD_URL="${url_in%/}"
+  printf "Bearer token [%s]: " "$([ -n "$DOCENTD_TOKEN" ] && echo 'keep current' || echo none)"
+  read -r token_in
+  [ -n "$token_in" ] && DOCENTD_TOKEN="$token_in"
+}
+
+# validate_remote_connection blocks the wizard until the remote docentd is
+# actually reachable, so an install can never finish in a broken state. Only
+# interactive TTY runs loop; dry-run / non-interactive do a single best-effort
+# check and warn (keeping CI/automation non-blocking).
+validate_remote_connection() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "dry-run: skipping remote connection check"
+    return 0
+  fi
+  local interactive=1
+  [ -t 0 ] || interactive=0
+
+  log "verifying connection to remote docentd"
+  while :; do
+    if remote_connection_ok; then
+      log "remote docentd connection verified"
+      return 0
+    fi
+    if [ "$interactive" -eq 0 ]; then
+      echo "  WARNING: could not verify the remote docentd connection (continuing non-interactively)" >&2
+      return 0
+    fi
+    echo ""
+    echo "Could not connect to the remote docentd yet."
+    echo "  1) Re-enter connection details and retry [default]"
+    echo "  2) Skip the SSH forward; connect to the URL directly (--no-tunnel)"
+    echo "  3) Continue anyway (write config without a verified connection)"
+    echo "  4) Abort"
+    printf "Choice [1]: "
+    local choice
+    read -r choice
+    case "${choice:-1}" in
+      2) USE_TUNNEL=0; reprompt_direct ;;
+      3) echo "  continuing without a verified connection" >&2; return 0 ;;
+      4) echo "aborted." >&2; exit 1 ;;
+      *) if [ "$USE_TUNNEL" = 1 ]; then reprompt_tunnel; else reprompt_direct; fi ;;
+    esac
+  done
 }
 
 write_remote_config() {
@@ -364,7 +506,8 @@ resolve_docentd_location
 if [ "$DOCENTD_MODE" = remote ]; then
   prompt_remote_endpoint
   resolve_tunnel
-  write_remote_config
+  # write_remote_config is deferred until after the tunnel binary is built and
+  # the connection is validated (see below), so we never persist broken config.
 else
   USE_TUNNEL=0 # a local docentd is already on this machine's loopback
 fi
@@ -450,6 +593,13 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   fi
 else
   log "skipping build (--no-build)"
+fi
+
+# With the tunnel binary in place, block until the remote docentd is actually
+# reachable (or the user opts to skip/abort), then persist the validated config.
+if [ "$DOCENTD_MODE" = remote ]; then
+  validate_remote_connection
+  write_remote_config
 fi
 
 bootstrap_docent_config() {

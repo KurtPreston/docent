@@ -191,6 +191,16 @@ the SSH host (it otherwise defaults to the host in the remote URL). This mirrors
 the reverse tunnel wsm owns for its own port, in the opposite direction — the two
 projects share the pattern but not code.
 
+Because `docent-tunnel` dials the host directly with Go's SSH library, it does
+**not** read `~/.ssh/config`. The installers therefore run `ssh -G <host>` to
+resolve an SSH alias (e.g. `desktop`) to its real `HostName` and to pick up the
+configured `IdentityFile`, then pass those to the tunnel. Before finishing, the
+wizard verifies the connection end-to-end (a one-shot `docent-tunnel -check` that
+performs the same SSH dial + `known_hosts` check + an authenticated request,
+including the bearer token) and will not complete until it succeeds — so a bad
+alias, missing key, untrusted host key, or wrong token is caught during install
+rather than surfacing later as `ERR_CONNECTION_REFUSED`.
+
 ## docentd.yaml reference
 
 The dashboard/daemon reads `docentd.yaml` (separate from the reporter's

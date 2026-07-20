@@ -3,3 +3,9 @@
 # docentd dashboard (Vite/React) build system
 /apps/docentd/web/node_modules/
 /apps/docentd/web/dist/
+
+# Go build artifacts left in the repo root when building with `go build ./apps/<name>`
+/docent-tunnel
+/docentd
+/docent-setup
+/docent-reporter

@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -101,6 +102,99 @@ func Serve(ctx context.Context, cfg Config) {
 				backoff = maxBackoff
 			}
 		}
+	}
+}
+
+// Check performs a one-shot connectivity check using the exact same SSH client
+// configuration (identity/agent auth + known_hosts verification) and dial the
+// daemon uses, so a passing check guarantees Serve will connect. It dials the
+// remote docentd loopback over SSH and, when a token is supplied, issues an
+// authed HTTP GET against checkPath to confirm the token is accepted. Errors are
+// mapped to actionable messages. Check never listens locally and never blocks.
+func Check(ctx context.Context, cfg Config, token, checkPath string) error {
+	clientCfg, err := clientConfig(cfg)
+	if err != nil {
+		return err
+	}
+	sshAddr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	client, err := ssh.Dial("tcp", sshAddr, clientCfg)
+	if err != nil {
+		return mapSSHDialError(cfg, sshAddr, err)
+	}
+	defer client.Close()
+
+	// Confirm the remote docentd loopback accepts connections over the tunnel.
+	remote, err := client.Dial("tcp", cfg.RemoteAddr)
+	if err != nil {
+		return fmt.Errorf("connected to %s but could not reach docentd at %s on the dev box: %w (is docentd running and listening on that loopback port?)", sshAddr, cfg.RemoteAddr, err)
+	}
+	_ = remote.Close()
+
+	// An HTTP probe through the tunnel verifies docentd answers and, on an authed
+	// path, that the bearer token is accepted.
+	httpClient := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return client.Dial("tcp", cfg.RemoteAddr)
+			},
+		},
+	}
+
+	if err := probe(ctx, httpClient, "/health", ""); err != nil {
+		return fmt.Errorf("docentd reachable over SSH but /health failed: %w", err)
+	}
+
+	path := checkPath
+	if path == "" {
+		path = "/api/config"
+	}
+	if err := probe(ctx, httpClient, path, token); err != nil {
+		return err
+	}
+	return nil
+}
+
+// probe issues a single GET to a docentd path over the provided client. The host
+// in the URL is irrelevant because the transport always dials the tunnel target.
+func probe(ctx context.Context, client *http.Client, path, token string) error {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docentd"+path, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("GET %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("GET %s returned 401 Unauthorized — the bearer token is missing or incorrect", path)
+	case resp.StatusCode >= 400:
+		return fmt.Errorf("GET %s returned unexpected status %s", path, resp.Status)
+	}
+	return nil
+}
+
+// mapSSHDialError turns raw ssh.Dial failures into actionable guidance.
+func mapSSHDialError(cfg Config, sshAddr string, err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no such host"):
+		return fmt.Errorf("dial %s: %w (this host must be resolvable by name/IP — SSH config aliases are not honored here)", sshAddr, err)
+	case strings.Contains(msg, "knownhosts") || strings.Contains(msg, "key is unknown") || strings.Contains(msg, "host key"):
+		return fmt.Errorf("dial %s: %w (host key not trusted — run `ssh %s` once to add it to known_hosts)", sshAddr, err, cfg.Host)
+	case strings.Contains(msg, "unable to authenticate"):
+		return fmt.Errorf("dial %s: %w (no accepted SSH key — pass -identity <key> or load one into ssh-agent)", sshAddr, err)
+	default:
+		return fmt.Errorf("dial %s: %w", sshAddr, err)
 	}
 }
 

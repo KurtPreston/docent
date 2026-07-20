@@ -20,6 +20,8 @@ import (
 
 func main() {
 	var cfg forward.Config
+	var check bool
+	var token, checkPath string
 	flag.StringVar(&cfg.Host, "host", env("DOCENT_TUNNEL_HOST", ""), "SSH host of the dev box running docentd (required)")
 	flag.IntVar(&cfg.Port, "port", envInt("DOCENT_TUNNEL_SSH_PORT", 22), "SSH port on the dev box")
 	flag.StringVar(&cfg.User, "user", env("DOCENT_TUNNEL_USER", ""), "SSH user (default: current OS user)")
@@ -28,12 +30,24 @@ func main() {
 	flag.StringVar(&cfg.LocalAddr, "local", env("DOCENT_TUNNEL_LOCAL", "127.0.0.1:39787"), "local listen address")
 	flag.StringVar(&cfg.RemoteAddr, "remote", env("DOCENT_TUNNEL_REMOTE", "127.0.0.1:39787"), "remote docentd address (dev-box loopback)")
 	flag.IntVar(&cfg.KeepAliveSec, "keepalive", envInt("DOCENT_TUNNEL_KEEPALIVE", 30), "SSH keepalive interval in seconds")
+	flag.BoolVar(&check, "check", false, "run a one-shot connectivity check (SSH + remote docentd) and exit non-zero on failure")
+	flag.StringVar(&token, "token", env("DOCENT_TUNNEL_TOKEN", ""), "bearer token for the -check authed request (DOCENT_TUNNEL_TOKEN also works)")
+	flag.StringVar(&checkPath, "check-path", "/api/config", "authed docentd path to probe during -check")
 	flag.Parse()
 
 	if cfg.Host == "" {
 		log.Fatal("docent-tunnel: -host is required (the dev box running docentd; DOCENT_TUNNEL_HOST also works)")
 	}
 	cfg.ApplyDefaults()
+
+	if check {
+		if err := forward.Check(context.Background(), cfg, token, checkPath); err != nil {
+			log.Printf("docent-tunnel: check failed: %v", err)
+			os.Exit(1)
+		}
+		log.Printf("docent-tunnel: check ok — %s@%s:%d reaches docentd at %s", cfg.User, cfg.Host, cfg.Port, cfg.RemoteAddr)
+		return
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

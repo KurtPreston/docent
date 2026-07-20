@@ -18,8 +18,9 @@ manager (wsm) has its own installer in the wsm repo.
 
 On first run it asks whether docentd runs on THIS machine (local) or on a REMOTE
 host. Local builds docentd.exe, runs docent-setup, and registers a docentd task.
-Remote only verifies the remote /health is reachable and points the launcher +
-dashboard at it. On a re-run it first offers to reuse the config from the last
+Remote verifies the connection to the remote docentd (through docent-tunnel, or
+directly with -NoTunnel) -- including the bearer token -- before finishing, and
+points the launcher + dashboard at it. On a re-run it first offers to reuse the config from the last
 install (the local/remote choice, plus the remote URL/token saved in
 ConfigDir\.env), so updating never forces you to re-pick the deployment or
 retype credentials; pass -RemoteUrl / -Token to override.
@@ -38,10 +39,13 @@ Bearer token for the remote docentd (optional).
 
 .PARAMETER SshHost
 SSH host for the docent-tunnel forward to a remote docentd (default: the host
-parsed from -RemoteUrl). Remote mode uses the forward unless -NoTunnel.
+parsed from -RemoteUrl). Aliases from ~/.ssh/config are resolved to their real
+HostName via `ssh -G`, since the tunnel does not read ssh_config. Remote mode
+uses the forward unless -NoTunnel.
 
 .PARAMETER SshIdentity
-SSH private key for the docent-tunnel forward (otherwise ssh-agent is used).
+SSH private key for the docent-tunnel forward (default: the IdentityFile from
+`ssh -G`, otherwise ssh-agent is used).
 
 .PARAMETER NoTunnel
 Don't set up the SSH forward; point the launcher directly at the remote URL.
@@ -163,6 +167,31 @@ function Get-SavedRemoteConfig {
     return $result
 }
 
+# --- ssh alias resolution ----------------------------------------------------
+# docent-tunnel dials the host directly and does NOT read ~/.ssh/config, so an
+# SSH alias like `desktop` must be turned into its real HostName here (and its
+# configured IdentityFile picked up) via `ssh -G` or the tunnel can't connect.
+# Falls back to the input host and empty identity when ssh is unavailable.
+function Resolve-SshEffective {
+    param([string]$SshHostArg)
+    $result = [pscustomobject]@{ HostName = $SshHostArg; Identity = '' }
+    if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) { return $result }
+    $lines = try { & ssh -G $SshHostArg 2>$null } catch { @() }
+    foreach ($line in $lines) {
+        if ($line -match '^hostname\s+(.+)$') {
+            $h = $Matches[1].Trim()
+            if ($h) { $result.HostName = $h }
+        }
+        elseif ($line -match '^identityfile\s+(.+)$' -and -not $result.Identity) {
+            $p = $Matches[1].Trim()
+            if ($p.StartsWith('~')) { $p = Join-Path $HOME ($p.Substring(1).TrimStart('/', '\')) }
+            $p = [Environment]::ExpandEnvironmentVariables($p)
+            if (Test-Path -LiteralPath $p) { $result.Identity = $p }
+        }
+    }
+    return $result
+}
+
 # --- resolve docentd location ------------------------------------------------
 $Mode = $null
 $Sessions = $null
@@ -228,42 +257,26 @@ if ($Mode -eq 'remote') {
 
     # Remote mode reaches docentd through a local SSH forward (docent-tunnel) by
     # default; -NoTunnel opts out and points the launcher at the remote URL.
+    # The actual connection is verified later (Invoke-RemoteValidation), after
+    # the tunnel binary is built, so a broken install can't finish silently.
     $UseTunnel = -not $NoTunnel
-    if ($UseTunnel -and -not $SshHost) {
-        $defaultHost = ''
-        if ($RemoteUrl -match '^[a-zA-Z]+://([^:/]+)') { $defaultHost = $Matches[1] }
-        if ($DryRun) { $SshHost = $defaultHost }
-        else {
-            $inp = Read-Host "SSH host for the dev box [$defaultHost]"
-            $SshHost = if ($inp) { $inp } else { $defaultHost }
-        }
-        if (-not $SshHost) { throw "an SSH host is required for docent-tunnel (pass -SshHost, or -NoTunnel to skip)" }
-    }
-
     if ($UseTunnel) {
+        $rawHost = $SshHost
+        if (-not $rawHost -and $RemoteUrl -match '^[a-zA-Z]+://([^:/]+)') { $rawHost = $Matches[1] }
+        if (-not $DryRun -and -not $SshHost) {
+            $inp = Read-Host "SSH host for the dev box [$rawHost]"
+            if ($inp) { $rawHost = $inp }
+        }
+        if (-not $rawHost) { throw "an SSH host is required for docent-tunnel (pass -SshHost, or -NoTunnel to skip)" }
+        # Resolve SSH aliases / identity — the tunnel can't read ssh_config.
+        $eff = Resolve-SshEffective -SshHostArg $rawHost
+        if ($eff.HostName -ne $rawHost) { Log "resolved SSH host $rawHost -> $($eff.HostName) (via ssh -G)" }
+        $SshHost = $eff.HostName
+        if (-not $SshIdentity) { $SshIdentity = $eff.Identity }
         $Sessions = "http://127.0.0.1:$Port"
         Log "reaching remote docentd $RemoteUrl through docent-tunnel -> $SshHost (local 127.0.0.1:$Port)"
     }
     else {
-        Log "verifying remote docentd at $RemoteUrl/health"
-        if (-not $DryRun) {
-            $headers = @{}
-            if ($Token) { $headers['Authorization'] = "Bearer $Token" }
-            try {
-                Invoke-WebRequest -UseBasicParsing -Uri "$RemoteUrl/health" -Headers $headers -TimeoutSec 8 | Out-Null
-                Write-Host "  docentd     $RemoteUrl  ok"
-            }
-            catch {
-                Write-Host ""
-                Write-Error @"
-could not reach $RemoteUrl/health.
-  - Is docentd running on the remote host?
-  - If it binds 127.0.0.1 only, re-run with -SshHost <host> to set up docent-tunnel,
-    or add a tunnel yourself (e.g. ssh -L $Port`:127.0.0.1:$Port desktop).
-"@
-                exit 1
-            }
-        }
         $Sessions = $RemoteUrl
     }
 }
@@ -371,6 +384,104 @@ if ($UseTunnel -and -not $NoBuild) {
 }
 elseif ($UseTunnel) {
     Log "skipping docent-tunnel build (-NoBuild)"
+}
+
+# --- validate remote connection ----------------------------------------------
+# Test-RemoteConnection returns $true when the launcher can actually reach the
+# remote docentd. In tunnel mode it runs `docent-tunnel -check` (the exact SSH +
+# auth + host-key path the daemon uses); in direct mode it probes /health then an
+# authed endpoint, treating 401 as a bad token.
+function Test-RemoteConnection {
+    if ($UseTunnel) {
+        if (-not (Test-Path -LiteralPath $DocentTunnelBin)) {
+            Write-Host "  docent-tunnel.exe not found at $DocentTunnelBin" -ForegroundColor Yellow
+            return $false
+        }
+        $checkArgs = @('-check', '-host', $SshHost, '-local', "127.0.0.1:$Port", '-remote', "127.0.0.1:$Port")
+        if ($SshIdentity) { $checkArgs += @('-identity', $SshIdentity) }
+        $prev = $env:DOCENT_TUNNEL_TOKEN
+        $env:DOCENT_TUNNEL_TOKEN = $Token
+        try { & $DocentTunnelBin @checkArgs } finally { $env:DOCENT_TUNNEL_TOKEN = $prev }
+        return ($LASTEXITCODE -eq 0)
+    }
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$RemoteUrl/health" -TimeoutSec 8 | Out-Null
+    }
+    catch {
+        Write-Host "  $RemoteUrl/health not reachable" -ForegroundColor Yellow
+        return $false
+    }
+    try {
+        $headers = @{}
+        if ($Token) { $headers['Authorization'] = "Bearer $Token" }
+        Invoke-WebRequest -UseBasicParsing -Uri "$RemoteUrl/api/config" -Headers $headers -TimeoutSec 8 | Out-Null
+    }
+    catch {
+        $resp = $_.Exception.Response
+        if ($resp -and [int]$resp.StatusCode -eq 401) {
+            Write-Host "  $RemoteUrl rejected the bearer token (401)" -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
+}
+
+# Invoke-RemoteValidation blocks the wizard until the remote docentd is actually
+# reachable (or the user opts to skip/abort). Only interactive runs loop; dry-run
+# and non-interactive runs do a single best-effort check and warn.
+function Invoke-RemoteValidation {
+    if ($DryRun) { Log "dry-run: skipping remote connection check"; return }
+    $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    Log "verifying connection to remote docentd"
+    while ($true) {
+        if (Test-RemoteConnection) { Log "remote docentd connection verified"; return }
+        if (-not $interactive) {
+            Write-Warning "could not verify the remote docentd connection (continuing non-interactively)"
+            return
+        }
+        Write-Host ""
+        Write-Host "Could not connect to the remote docentd yet."
+        Write-Host "  1) Re-enter connection details and retry [default]"
+        Write-Host "  2) Skip the SSH forward; connect to the URL directly (-NoTunnel)"
+        Write-Host "  3) Continue anyway (write config without a verified connection)"
+        Write-Host "  4) Abort"
+        $choice = Read-Host "Choice [1]"
+        switch ($choice) {
+            '2' {
+                $script:UseTunnel = $false
+                $u = Read-Host "Remote docentd base URL [$script:RemoteUrl]"
+                if ($u) { $script:RemoteUrl = $u.TrimEnd('/') }
+                $script:Sessions = $script:RemoteUrl
+                $t = Read-Host "Bearer token [$(if ($script:Token) { 'keep current' } else { 'none' })]"
+                if ($t) { $script:Token = $t }
+            }
+            '3' { Write-Host "  continuing without a verified connection"; return }
+            '4' { Write-Error "aborted."; exit 1 }
+            default {
+                if ($script:UseTunnel) {
+                    $h = Read-Host "SSH host for the dev box [$script:SshHost]"
+                    if ($h) { $script:SshHost = $h }
+                    $eff = Resolve-SshEffective -SshHostArg $script:SshHost
+                    $script:SshHost = $eff.HostName
+                    $idDefault = if ($script:SshIdentity) { $script:SshIdentity } elseif ($eff.Identity) { $eff.Identity } else { 'ssh-agent' }
+                    $i = Read-Host "SSH identity key [$idDefault]"
+                    if ($i) { $script:SshIdentity = $i } elseif (-not $script:SshIdentity -and $eff.Identity) { $script:SshIdentity = $eff.Identity }
+                    $t = Read-Host "Bearer token [$(if ($script:Token) { 'keep current' } else { 'none' })]"
+                    if ($t) { $script:Token = $t }
+                }
+                else {
+                    $u = Read-Host "Remote docentd base URL [$script:RemoteUrl]"
+                    if ($u) { $script:RemoteUrl = $u.TrimEnd('/'); $script:Sessions = $script:RemoteUrl }
+                    $t = Read-Host "Bearer token [$(if ($script:Token) { 'keep current' } else { 'none' })]"
+                    if ($t) { $script:Token = $t }
+                }
+            }
+        }
+    }
+}
+
+if ($Mode -eq 'remote') {
+    Invoke-RemoteValidation
 }
 
 # --- config bootstrap --------------------------------------------------------
