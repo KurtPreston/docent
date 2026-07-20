@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/automation"
@@ -191,8 +192,8 @@ func (e *Engine) wireAutomationConnectors() {
 			}
 			return e.reg.PostMessage(ctx, dir, opts, channel, body)
 		}),
-		Generator: automation.ReportGeneratorFunc(func(ctx context.Context, modeID string, days int) (string, error) {
-			return e.generateReport(ctx, modeID, days)
+		Generator: automation.ReportGeneratorFunc(func(ctx context.Context, req automation.ReportRequest) (string, error) {
+			return e.generateReport(ctx, req)
 		}),
 	})
 }
@@ -246,7 +247,7 @@ func firstDirective(dirs []userdata.Directive, collector string) (userdata.Direc
 	return userdata.Directive{}, false
 }
 
-func (e *Engine) generateReport(ctx context.Context, modeID string, days int) (string, error) {
+func (e *Engine) generateReport(ctx context.Context, req automation.ReportRequest) (string, error) {
 	cfg := userdata.ConfigFile{
 		AI:             e.cfg.AI,
 		Directives:     e.cfg.Directives,
@@ -254,12 +255,14 @@ func (e *Engine) generateReport(ctx context.Context, modeID string, days int) (s
 		OutputDir:      e.cfg.OutputDir,
 	}
 	opts := report.Options{
-		ModeID:    modeID,
-		Days:      days,
-		ConfigDir: e.cfg.ConfigDir,
-		Registry:  e.reg,
+		ModeID:        req.ModeID,
+		Days:          req.Days,
+		ConfigDir:     e.cfg.ConfigDir,
+		Registry:      e.reg,
+		Prompt:        strings.TrimSpace(req.Prompt),
+		PromptContext: strings.TrimSpace(req.Context),
 	}
-	if modeID == "goal-alignment" {
+	if req.ModeID == "goal-alignment" {
 		gf, err := goals.Load(goals.Path(e.cfg.ConfigDir))
 		if err != nil {
 			return "", fmt.Errorf("load goals: %w", err)
@@ -268,8 +271,13 @@ func (e *Engine) generateReport(ctx context.Context, modeID string, days int) (s
 		if len(active) == 0 {
 			return "", fmt.Errorf("no active goals in goals.yaml")
 		}
-		opts.Prompt = goals.AlignmentPrompt(active)
-		if days <= 0 {
+		// A custom prompt on the action fully overrides the goal-alignment
+		// prompt; otherwise build it from goals.yaml. Either way, action
+		// context (opts.PromptContext) is layered on in Resolve.
+		if opts.Prompt == "" {
+			opts.Prompt = goals.AlignmentPrompt(active)
+		}
+		if req.Days <= 0 {
 			opts.Days = 7
 		}
 		// Fall back to recent-activity collection shape when no custom mode exists.

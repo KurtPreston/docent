@@ -118,6 +118,11 @@ type Action struct {
 	Deliver string `yaml:"deliver,omitempty" json:"deliver,omitempty"` // file | slack | webhook
 	OutPath string `yaml:"out_path,omitempty" json:"out_path,omitempty"`
 	Days    int    `yaml:"days,omitempty" json:"days,omitempty"`
+	// Context is appended to the resolved report prompt (a built-in mode's
+	// instruction or the goal-alignment prompt) without replacing it. The
+	// shared Prompt field, by contrast, fully overrides the mode's
+	// instruction for this report.
+	Context string `yaml:"context,omitempty" json:"context,omitempty"`
 }
 
 // Event is a matched rule ready to dispatch.

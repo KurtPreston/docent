@@ -37,6 +37,12 @@ type ResolveOpts struct {
 	// non-empty it replaces mode.Prompt.Instruction for this run.
 	PromptOverride string
 
+	// PromptContext is appended to the resolved instruction (after the mode
+	// prompt or PromptOverride), separated by a blank line. Empty adds
+	// nothing. It lets callers layer extra guidance onto a built-in prompt
+	// without replacing it.
+	PromptContext string
+
 	// ScopeOverride forces the collection scope for this run regardless of
 	// what the mode pinned. Precedence: override > mode-pinned > interactive
 	// prompt / default (involved). ScopeUnset ("") means "no override".
@@ -115,6 +121,13 @@ func Resolve(mode ExecutionMode, opts ResolveOpts) (ResolvedRun, error) {
 	instruction, err := resolveInstruction(mode.Prompt, opts)
 	if err != nil {
 		return ResolvedRun{}, err
+	}
+	if extra := strings.TrimSpace(opts.PromptContext); extra != "" {
+		if instruction != "" {
+			instruction += "\n\n" + extra
+		} else {
+			instruction = extra
+		}
 	}
 
 	formatter := strings.TrimSpace(mode.Formatter)

@@ -37,6 +37,11 @@ type Options struct {
 	// Prompt is the instruction override. Empty uses the mode default;
 	// modes that require a prompt error when both are empty.
 	Prompt string
+	// PromptContext is appended to the resolved instruction (after the mode
+	// prompt or Prompt override), separated by a blank line. Empty adds
+	// nothing. It layers extra guidance onto a built-in prompt without
+	// replacing it.
+	PromptContext string
 	// Scope forces the collection scope. ScopeUnset ("") uses the mode
 	// default (which is ScopeInvolved for non-interactive callers).
 	Scope executionmode.Scope
@@ -135,6 +140,7 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		Now:                     now,
 		DaysOverride:            opts.Days,
 		PromptOverride:          opts.Prompt,
+		PromptContext:           opts.PromptContext,
 		ScopeOverride:           opts.Scope,
 		CollectOverride:         opts.Collect,
 		TimeOfDay:               opts.TimeOfDay,

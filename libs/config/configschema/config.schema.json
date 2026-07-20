@@ -157,7 +157,8 @@
         "mode": { "type": "string" },
         "deliver": { "type": "string", "enum": ["file", "slack", "webhook"] },
         "out_path": { "type": "string" },
-        "days": { "type": "integer", "minimum": 1 }
+        "days": { "type": "integer", "minimum": 1 },
+        "context": { "type": "string" }
       }
     },
     "executionMode": {

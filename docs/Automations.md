@@ -89,7 +89,7 @@ Optional gates evaluated after the trigger matches, before any action runs:
 | `shell` | Run a local command | `command`, `args`, `cwd`; the process gets `DOCENT_*` env vars (see Templating). Times out after 5 minutes. |
 | `jira-comment` | Post a JIRA comment | `issue` (defaults to the matched ticket key), `body` (required). Uses the first enabled `jira` directive. |
 | `slack-post` | Post a Slack message | `channel`, `body` (required). Uses the first enabled `slack` directive. |
-| `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`. See [Report delivery](#report-delivery). |
+| `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`, and the optional prompt controls `prompt` / `context` (see [Report delivery](#report-delivery)). |
 | `agent` | Run a write-capable coding agent (`cursor` or `claude`) in a provisioned workdir | `provider`, `workdir` (`worktree` default, or `open_path`), `prompt` (required), `post` (see below). **Queued** to the [`docent-automations`](#the-docent-automations-worker) worker — see that section. |
 | `agent-inline` | Same as `agent`, but runs in-process instead of queuing | Same fields as `agent`; used by tests or setups that don't run the worker. |
 | `open` | Open a path in the editor via the configured [session manager](Dashboard.md#session-manager-cursor--wsm--none) | An optional templated `cwd`. Only available when `session_manager` is configured. |
@@ -131,6 +131,31 @@ mode](Reporting.md#modes)): it loads active goals from
 [`goals.yaml`](../README.md#goals) and asks the AI provider to review recent
 `recent-activity`-shaped activity against them, instead of running a
 configured mode's own prompt.
+
+Two optional fields tune the prompt for any `report` action (built-in mode or
+`goal-alignment`):
+
+- **`context`** — extra guidance appended to the resolved prompt (after a
+  blank line) without replacing it. Use this to layer team- or workflow-
+  specific notes onto a shared prompt, e.g. telling the model how to interpret
+  a particular JIRA status. This keeps such specifics out of the built-in
+  prompts, which stay generic.
+- **`prompt`** — a full instruction that *replaces* the mode's prompt for this
+  run. For `goal-alignment`, supplying `prompt` overrides the generated
+  alignment prompt (goals are then not injected automatically); leave it empty
+  to keep the goals-driven prompt and only add `context`.
+
+```yaml
+      - type: report
+        mode: goal-alignment
+        days: 7
+        deliver: file
+        context: |-
+          When interpreting JIRA tickets, a ticket that has reached the "Q/A"
+          status (or any later status) is complete as far as this developer is
+          concerned: their responsibility ends at handing work to the QA team.
+          Do not describe such tickets as unfinished or stalled.
+```
 
 ### Templating
 

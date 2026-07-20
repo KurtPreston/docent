@@ -9,16 +9,29 @@ import (
 	"time"
 )
 
-// ReportGenerator produces markdown for an execution mode.
+// ReportRequest carries the per-run report parameters a ReportGenerator needs.
+type ReportRequest struct {
+	// ModeID selects the execution mode (or the special "goal-alignment").
+	ModeID string
+	// Days is the lookback override; <=0 uses the mode/default.
+	Days int
+	// Prompt fully overrides the mode's instruction when non-empty.
+	Prompt string
+	// Context is appended to the resolved instruction when non-empty,
+	// layering extra guidance onto a built-in prompt without replacing it.
+	Context string
+}
+
+// ReportGenerator produces markdown for a report request.
 type ReportGenerator interface {
-	Generate(ctx context.Context, modeID string, days int) (markdown string, err error)
+	Generate(ctx context.Context, req ReportRequest) (markdown string, err error)
 }
 
 // ReportGeneratorFunc adapts a function to ReportGenerator.
-type ReportGeneratorFunc func(ctx context.Context, modeID string, days int) (string, error)
+type ReportGeneratorFunc func(ctx context.Context, req ReportRequest) (string, error)
 
-func (f ReportGeneratorFunc) Generate(ctx context.Context, modeID string, days int) (string, error) {
-	return f(ctx, modeID, days)
+func (f ReportGeneratorFunc) Generate(ctx context.Context, req ReportRequest) (string, error) {
+	return f(ctx, req)
 }
 
 // ReportRunner runs an execution mode and delivers the markdown.
@@ -40,8 +53,12 @@ func (r ReportRunner) Run(ctx context.Context, action Action, ev Event) error {
 	if mode == "" {
 		return fmt.Errorf("report: mode is required")
 	}
-	days := action.Days
-	md, err := r.Generator.Generate(ctx, mode, days)
+	md, err := r.Generator.Generate(ctx, ReportRequest{
+		ModeID:  mode,
+		Days:    action.Days,
+		Prompt:  strings.TrimSpace(action.Prompt),
+		Context: strings.TrimSpace(action.Context),
+	})
 	if err != nil {
 		return fmt.Errorf("report generate: %w", err)
 	}
