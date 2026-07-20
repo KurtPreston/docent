@@ -36,6 +36,26 @@ local function authHeaders(extra)
   return headers
 end
 
+-- Render a rounded colored square for a work item's hex color as an hs.image,
+-- shown as each chooser row's leading icon. Cached by hex so repeated summons
+-- don't rebuild canvases.
+local swatchCache = {}
+local function swatchImage(hex)
+  if not hex or hex == "" then hex = "#3A4060" end
+  if swatchCache[hex] then return swatchCache[hex] end
+  local c = hs.canvas.new({ x = 0, y = 0, w = 16, h = 16 })
+  c[1] = {
+    type = "rectangle",
+    action = "fill",
+    fillColor = { hex = hex },
+    roundedRectRadii = { xRadius = 4, yRadius = 4 },
+  }
+  local img = c:imageFromCanvas()
+  c:delete()
+  swatchCache[hex] = img
+  return img
+end
+
 local function workItemLabel(g)
   if g.repo and g.branch then return g.repo .. "  " .. g.branch end
   if g.repo then return g.repo end
@@ -70,6 +90,7 @@ local function buildChoices(data, cb)
       key = g.key,
       provider = data.provider,
       deepLink = g.deepLink,
+      image = swatchImage(g.color),
       sort = g.needsFollowup and 0 or 1,
     })
     for _, s in ipairs(g.sessions or {}) do
@@ -81,21 +102,22 @@ local function buildChoices(data, cb)
       table.insert(choices, {
         text = s.name,
         subText = table.concat(subParts, "  ·  "),
-        kind = "session", name = s.name, host = s.host, sort = s.needsFollowup and 2 or (s.live and 3 or 4),
+        kind = "session", name = s.name, host = s.host, image = swatchImage(s.color),
+        sort = s.needsFollowup and 2 or (s.live and 3 or 4),
       })
     end
     for _, pr in ipairs(g.prs or {}) do
       table.insert(choices, {
         text = "PR #" .. tostring(pr.prNumber) .. "  " .. (pr.title or ""),
         subText = table.concat({ ticket or "", pr.repo or "", pr.state or "" }, "  ·  "),
-        kind = "url", url = pr.url, sort = 5,
+        kind = "url", url = pr.url, image = swatchImage(g.color), sort = 5,
       })
     end
     if ticket and #(g.sessions or {}) == 0 and #(g.prs or {}) == 0 and g.jiraUrl then
       table.insert(choices, {
         text = ticket .. "  " .. (g.summary or ""),
         subText = g.jiraStatus or "",
-        kind = "url", url = g.jiraUrl, sort = 6,
+        kind = "url", url = g.jiraUrl, image = swatchImage(g.color), sort = 6,
       })
     end
   end

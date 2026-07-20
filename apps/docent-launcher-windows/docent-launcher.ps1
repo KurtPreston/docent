@@ -285,7 +285,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
         <ListBox.ItemTemplate>
           <DataTemplate>
             <StackPanel Orientation="Horizontal" Margin="4,5">
-              <Border Width="10" Height="10" CornerRadius="3" Margin="2,0,10,0"
+              <Border Width="14" Height="14" CornerRadius="4" Margin="2,0,10,0"
                       Background="{Binding Color}" VerticalAlignment="Center"/>
               <StackPanel>
                 <TextBlock Text="{Binding Label}" FontWeight="SemiBold"/>
