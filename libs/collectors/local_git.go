@@ -8,12 +8,60 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 )
+
+// gitSem bounds concurrent git subprocesses across all collector goroutines, so
+// many repos (or a pathological partial clone that lazy-fetches) cannot stampede
+// the remote at once. Overridable via DOCENT_GIT_CONCURRENCY (default 4).
+var gitSem = make(chan struct{}, gitConcurrencyLimit())
+
+func gitConcurrencyLimit() int {
+	if v := strings.TrimSpace(os.Getenv("DOCENT_GIT_CONCURRENCY")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 4
+}
+
+// runGit runs a git subprocess through the shared exec logger with the two
+// safety rails every collector git call needs: GIT_NO_LAZY_FETCH=1 so a
+// read-only command never triggers an implicit promisor fetch (docent must never
+// fetch), and the global concurrency cap above. The semaphore acquire honors
+// ctx so a caller whose deadline fires while queued behind busy slots returns
+// promptly instead of waiting for a slot it will never use.
+func runGit(ctx context.Context, cmd *exec.Cmd, opts *CollectOpts, directiveID string) ([]byte, error) {
+	prepareGitCmd(cmd)
+	if err := acquireGitSlot(ctx); err != nil {
+		return nil, err
+	}
+	defer func() { <-gitSem }()
+	return runAndLogExec(cmd, opts, directiveID)
+}
+
+// acquireGitSlot blocks until a git concurrency slot is free or ctx is done.
+func acquireGitSlot(ctx context.Context) error {
+	select {
+	case gitSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// prepareGitCmd sets GIT_NO_LAZY_FETCH=1 on a git command's environment.
+func prepareGitCmd(cmd *exec.Cmd) {
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1")
+}
 
 type LocalGitCollector struct {
 	Clock func() time.Time
@@ -802,7 +850,16 @@ func (c LocalGitCollector) ValidateDirective(ctx context.Context, directive user
 		// (safe.directory ownership errors, empty repos with no commits,
 		// corrupt refs, permission denials).
 		cmd := exec.CommandContext(probeCtx, "git", "-C", dir, "log", "--all", "--max-count=1", "--format=%H")
-		out, err := cmd.CombinedOutput()
+		prepareGitCmd(cmd)
+		// CombinedOutput (not runGit) so stderr is folded into the diagnostic
+		// below; still take a concurrency slot, releasing it panic-safely.
+		out, err := func() ([]byte, error) {
+			if err := acquireGitSlot(probeCtx); err != nil {
+				return nil, err
+			}
+			defer func() { <-gitSem }()
+			return cmd.CombinedOutput()
+		}()
 		if err == nil {
 			continue
 		}
@@ -883,7 +940,7 @@ func gitConfigValue(ctx context.Context, repoDir string, scope, key string, opts
 	}
 	args = append(args, "--get", key)
 	cmd := exec.CommandContext(ctx, "git", args...)
-	out, err := runAndLogExec(cmd, opts, directiveID)
+	out, err := runGit(ctx, cmd, opts, directiveID)
 	if err != nil {
 		return ""
 	}
@@ -912,7 +969,7 @@ func currentOSUsername() string {
 // subsequent `git log` call in Collect can resurface the real error.
 func localGitRepoHasCommits(ctx context.Context, repoDir string, opts *CollectOpts, directiveID string) bool {
 	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "rev-parse", "--verify", "--quiet", "HEAD")
-	_, err := runAndLogExec(cmd, opts, directiveID)
+	_, err := runGit(ctx, cmd, opts, directiveID)
 	if err == nil {
 		return true
 	}
@@ -925,7 +982,7 @@ func localGitRepoHasCommits(ctx context.Context, repoDir string, opts *CollectOp
 func gitOutput(ctx context.Context, dir string, opts *CollectOpts, directiveID string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	out, err := runAndLogExec(cmd, opts, directiveID)
+	out, err := runGit(ctx, cmd, opts, directiveID)
 	if err != nil {
 		// Surface git's stderr so callers (and the user) don't see an opaque
 		// `exit status 128`; the stderr typically explains the actual cause

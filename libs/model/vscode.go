@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// vscodeGitTimeout bounds each git call below so a hung git (e.g. one lazy-
+// fetching from a broken partial clone) cannot block indefinitely.
+const vscodeGitTimeout = 30 * time.Second
 
 // vscodeColorCustomizations returns the workbench.colorCustomizations keys
 // docent owns. They mirror grove's editor theming so a repo opened by either
@@ -115,12 +121,18 @@ func addLocalGitExclude(dir, pattern string) {
 }
 
 func gitQuiet(dir string, args ...string) bool {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), vscodeGitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1")
 	return cmd.Run() == nil
 }
 
 func gitOut(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), vscodeGitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1")
 	var buf strings.Builder
 	cmd.Stdout = &buf
 	cmd.Stderr = io.Discard

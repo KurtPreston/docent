@@ -114,6 +114,10 @@ const (
 	defaultPollInterval = 15 * time.Minute
 	defaultLookback     = 7 * 24 * time.Hour
 	onRequestTimeout    = 15 * time.Second
+	// backgroundCollectTimeout bounds a single scheduled collection so a wedged
+	// git subprocess (e.g. one hung fetching from a broken partial clone) cannot
+	// run forever and pile up across ticks.
+	backgroundCollectTimeout = 60 * time.Second
 )
 
 // unitKey identifies a collection unit: a (directive, mode) pair.
@@ -566,7 +570,9 @@ func (e *Engine) tick(ctx context.Context, initial bool) {
 	e.mu.Unlock()
 	for _, u := range due {
 		go func(u *unit) {
-			e.collectUnit(ctx, u)
+			cctx, cancel := context.WithTimeout(ctx, backgroundCollectTimeout)
+			defer cancel()
+			e.collectUnit(cctx, u)
 			e.mu.Lock()
 			delete(e.collecting, u.key)
 			e.mu.Unlock()
