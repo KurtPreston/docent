@@ -40,9 +40,20 @@ root="$(json_get '.workspace_roots[0]')"
 [ -z "$root" ] && exit 0
 name="$(basename "$root")"
 
-# ideHost is the machine Cursor runs on; targetHost is the remote it edits (if
-# any). These mirror the docent IDE extension so both pipelines share identity.
-ide_host="$(hostname 2>/dev/null || true)"
+# ideHost identifies the machine the editor's GUI runs on. For a Remote-SSH
+# window this hook runs on the *remote* box, so `hostname` would be wrong and
+# the ssh alias is unknown; Cursor sets CURSOR_CODE_REMOTE=true in that case, so
+# we report ideHost as the boolean true ("remote, host unknown") and let docentd
+# bind the event to the client-side extension's window record. For a local
+# session the hostname is correct. targetHost is only sent when Cursor happens
+# to expose the ssh alias (usually unset here).
+ide_host=""
+remote=0
+if [ "${CURSOR_CODE_REMOTE:-}" = "true" ]; then
+  remote=1
+else
+  ide_host="$(hostname 2>/dev/null || true)"
+fi
 target_host="${CURSOR_REMOTE_SSH_HOST:-}"
 
 token="${DOCENT_TOKEN:-}"
@@ -69,15 +80,22 @@ fi
 if [ "$have_jq" -eq 1 ]; then
   payload="$(jq -nc \
     --arg ide "cursor" \
+    --argjson remote "$remote" \
     --arg ideHost "$ide_host" \
     --arg targetHost "$target_host" \
     --arg path "$root" \
     --arg name "$name" \
     --arg event "$event" \
-    '{ide:$ide, ideHost:$ideHost, path:$path, name:$name, event:$event}
+    '{ide:$ide, path:$path, name:$name, event:$event}
+     + (if $remote == 1 then {ideHost:true} else {ideHost:$ideHost} end)
      + (if $targetHost != "" then {targetHost:$targetHost} else {} end)')"
 else
-  payload="{\"ide\":\"cursor\",\"ideHost\":\"${ide_host}\",\"path\":\"${root}\",\"name\":\"${name}\",\"event\":\"${event}\"}"
+  if [ "$remote" -eq 1 ]; then
+    ide_host_json="true"
+  else
+    ide_host_json="\"${ide_host}\""
+  fi
+  payload="{\"ide\":\"cursor\",\"ideHost\":${ide_host_json},\"path\":\"${root}\",\"name\":\"${name}\",\"event\":\"${event}\"}"
 fi
 
 if [ -n "$token" ]; then
