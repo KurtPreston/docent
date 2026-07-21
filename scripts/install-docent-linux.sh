@@ -404,7 +404,57 @@ configure_ide_extension() {
   done
 }
 
+# ide_server_dir maps an editor CLI to its Remote-SSH *server* data directory on
+# this box (created when a client first connects over Remote-SSH).
+ide_server_dir() {
+  case "$1" in
+    cursor) printf '%s' "$HOME/.cursor-server" ;;
+    code)   printf '%s' "$HOME/.vscode-server" ;;
+  esac
+}
+
+# seed_remote_machine_settings points the docent extension at the local docentd
+# for Cursor/VS Code *Remote-SSH* windows. Such a window runs its extension host
+# HERE (on the dev box), and reads machine-scoped settings from the server's
+# data/Machine/settings.json — the "Remote [SSH: host]" tab — which overrides the
+# client's User settings. Without this, the remote extension host inherits the
+# client's docent.url (often an SSH alias like `desktop:39787` that resolves on
+# the laptop but NOT here), so its session POSTs silently fail and remote windows
+# never show up in docentd. docentd is always local to this box, so 127.0.0.1 is
+# unconditionally correct here.
+seed_remote_machine_settings() {
+  local editor server dir file url token tmp
+  url="http://127.0.0.1:$DOCENT_PORT"
+  token="${DOCENT_TOKEN:-}"
+  if [ -z "$token" ] && [ -f "$CONFIG_DIR/.env" ]; then
+    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r')"
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "  jq not found; set docent.url in the Remote-SSH machine settings manually" >&2
+    return 0
+  fi
+  for editor in cursor code; do
+    server="$(ide_server_dir "$editor")"
+    # Only seed servers that exist (i.e. you have connected here via Remote-SSH).
+    [ -d "$server" ] || continue
+    dir="$server/data/Machine"
+    file="$dir/settings.json"
+    run mkdir -p "$dir"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      run printf '%s\n' "write docent.url/docent.token into $file (Remote-SSH machine settings)"
+      continue
+    fi
+    [ -f "$file" ] || echo '{}' >"$file"
+    tmp="$(mktemp)"
+    jq --arg url "$url" --arg token "$token" \
+      '. + {"docent.url": $url} + (if $token != "" then {"docent.token": $token} else {} end)' \
+      "$file" >"$tmp" && mv "$tmp" "$file"
+    log "wrote docent Remote-SSH machine settings to $file"
+  done
+}
+
 configure_ide_extension
+seed_remote_machine_settings
 
 # --- systemd --user service ---------------------------------------------------
 if [ "$INSTALL_SYSTEMD" -eq 1 ]; then

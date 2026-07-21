@@ -759,7 +759,11 @@ function Install-DocentExtension {
         if (-not (Test-Path $vsix) -and -not $DryRun) { Write-Host '  extension build failed; skipping'; return }
     }
 
-    $url = if ($Mode -eq 'local') { "http://127.0.0.1:$Port" } else { $RemoteUrl.TrimEnd('/') }
+    # $Sessions already resolves to the right endpoint: 127.0.0.1 for a local or
+    # tunneled docentd (the only value that also works for a Cursor Remote-SSH
+    # window whose extension host runs on the dev box), and the raw remote URL
+    # only for a direct -NoTunnel install.
+    $url = $Sessions
     foreach ($e in $editors) {
         Log "installing docent extension into $e"
         Step "$e --install-extension" { & $e --install-extension $vsix --force | Out-Null }

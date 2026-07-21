@@ -856,8 +856,15 @@ ide_user_dir() {
   esac
 }
 
+# docent_url_for_settings picks the docent.url the IDE extension should post to.
+# It mirrors write_remote_config's sessions_url: when docentd is local, or reached
+# through docent-tunnel's loopback forward, that endpoint is 127.0.0.1 — which is
+# also the ONLY value that works for both a Mac-local editor window and a Cursor
+# Remote-SSH window, whose extension host runs on the dev box (where the remote
+# URL's hostname — often an SSH alias like `desktop` — may not even resolve).
+# Only a direct (--no-tunnel) remote install falls back to the raw remote URL.
 docent_url_for_settings() {
-  if [ "${DOCENTD_MODE:-local}" = remote ] && [ -n "${DOCENTD_URL:-}" ]; then
+  if [ "${DOCENTD_MODE:-local}" = remote ] && [ "${USE_TUNNEL:-0}" != 1 ] && [ -n "${DOCENTD_URL:-}" ]; then
     printf '%s' "${DOCENTD_URL%/}"
   else
     printf 'http://127.0.0.1:%s' "$DOCENT_PORT"
