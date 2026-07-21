@@ -347,7 +347,11 @@ write_ide_settings() {
   url="http://127.0.0.1:$DOCENT_PORT"
   token="${DOCENT_TOKEN:-}"
   if [ -z "$token" ] && [ -f "$CONFIG_DIR/.env" ]; then
-    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r')"
+    # `|| true`: a missing DOCENT_TOKEN is expected (the daemon token may live
+    # in docentd.yaml instead), and under `set -euo pipefail` a no-match grep
+    # would otherwise abort the whole install — leaving docentd stopped since
+    # the service was already halted above.
+    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r' || true)"
   fi
   run mkdir -p "$dir"
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -427,7 +431,11 @@ seed_remote_machine_settings() {
   url="http://127.0.0.1:$DOCENT_PORT"
   token="${DOCENT_TOKEN:-}"
   if [ -z "$token" ] && [ -f "$CONFIG_DIR/.env" ]; then
-    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r')"
+    # `|| true`: a missing DOCENT_TOKEN is expected (the daemon token may live
+    # in docentd.yaml instead), and under `set -euo pipefail` a no-match grep
+    # would otherwise abort the whole install — leaving docentd stopped since
+    # the service was already halted above.
+    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r' || true)"
   fi
   if ! command -v jq >/dev/null 2>&1; then
     echo "  jq not found; set docent.url in the Remote-SSH machine settings manually" >&2
