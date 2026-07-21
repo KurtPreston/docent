@@ -2,8 +2,8 @@
 -- Install: copy to ~/.hammerspoon/docent.lua and `require("docent")` from init.lua
 --
 -- Spotlight-style chooser (default Ctrl+Alt+Space). Enter focuses a session or
--- opens a ticket/PR URL; Esc hides. The "Open ↗" toolbar button pops the full
--- dashboard into your system browser — when DOCENT.token is set it is forwarded
+-- opens a ticket/PR URL; Esc hides. The dashboard toolbar button (top-right)
+-- pops the full dashboard into your system browser — when DOCENT.token is set it is forwarded
 -- as a one-time ?token= query param, which the dashboard caches in
 -- sessionStorage and strips from the address bar.
 
@@ -53,6 +53,55 @@ local function swatchImage(hex)
   local img = c:imageFromCanvas()
   c:delete()
   swatchCache[hex] = img
+  return img
+end
+
+-- "Open in new window" glyph for the dashboard toolbar button: a small window
+-- with an arrow leaving its top-right corner, drawn in accent blue on a
+-- transparent background. macOS renders the toolbar item's own (light) button
+-- chrome; we just supply the glyph rather than nesting a colored disc inside it.
+local openIconCache = nil
+local function openIconImage()
+  if openIconCache then return openIconCache end
+  local d = 44
+  local fg = { hex = "#007AFF" }
+  local w = 3
+  local inset = d * 0.24
+  local ax = d - inset
+  local c = hs.canvas.new({ x = 0, y = 0, w = d, h = d })
+  -- window body (bottom-left)
+  c[1] = {
+    type = "rectangle",
+    action = "stroke",
+    strokeColor = fg,
+    strokeWidth = w,
+    strokeJoinStyle = "round",
+    roundedRectRadii = { xRadius = d * 0.07, yRadius = d * 0.07 },
+    frame = { x = inset, y = inset + d * 0.08, w = d - 2 * inset, h = d - 2 * inset - d * 0.08 },
+  }
+  -- arrow shaft, from inside the window out past the top-right corner
+  c[2] = {
+    type = "segments",
+    action = "stroke",
+    strokeColor = fg,
+    strokeWidth = w,
+    strokeCapStyle = "round",
+    strokeJoinStyle = "round",
+    coordinates = { { x = d * 0.46, y = d * 0.54 }, { x = ax, y = inset } },
+  }
+  -- arrowhead at the top-right
+  c[3] = {
+    type = "segments",
+    action = "stroke",
+    strokeColor = fg,
+    strokeWidth = w,
+    strokeCapStyle = "round",
+    strokeJoinStyle = "round",
+    coordinates = { { x = ax - d * 0.16, y = inset }, { x = ax, y = inset }, { x = ax, y = inset + d * 0.16 } },
+  }
+  local img = c:imageFromCanvas()
+  c:delete()
+  openIconCache = img
   return img
 end
 
@@ -216,16 +265,20 @@ local function show()
             { id = "NSToolbarFlexibleSpaceItem" },
             {
               id = "openDashboard",
-              label = "Open ↗",
+              -- `label = false` removes the caption that would otherwise stack
+              -- *below* the button, so the whole button is the clickable target
+              -- (discoverable via the tooltip on hover).
+              label = false,
+              image = openIconImage(),
               tooltip = "Open the dashboard in your system browser",
               fn = function() openDashboard() end,
             },
           })
-        -- Label-only so the text itself is the clickable button; the default
-        -- mode renders an (empty, since we set no image) icon slot on top with
-        -- the label below it, leaving only the icon slot clickable.
-        :displayMode("label")
-        :sizeMode("small")
+        :displayMode("icon")
+        :sizeMode("regular")
+        -- Unified single-row header (toolbar next to the title): compact, with
+        -- the tightest native button chrome around the glyph.
+        :toolbarStyle("unified")
       chooser:attachedToolbar(toolbar)
     end
     chooser:choices(choices)
