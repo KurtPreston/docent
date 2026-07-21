@@ -98,15 +98,16 @@ export function canLaunchSession(s: SessionLaunchTarget): boolean {
 }
 
 // launchSession opens/focuses the IDE for a raw registry session. For cursor it
-// prefers the work item's /open flow (which also syncs the title-bar color)
-// when the session is correlated, else navigates the session's own deep link.
-// For wsm it focuses the exact window by name.
+// navigates the session's own deep link (its exact path + host) so Cursor
+// reveals the existing window rather than opening a mismatched new one; it only
+// falls back to the work item's /open flow when the session itself has no deep
+// link. For wsm it focuses the exact window by name.
 export async function launchSession(s: SessionLaunchTarget): Promise<void> {
   if (s.provider === "cursor") {
-    if (s.workItemKey) {
-      await openViaDeepLink({ key: s.workItemKey, deepLink: s.deepLink });
-    } else if (s.deepLink) {
+    if (s.deepLink) {
       window.location.href = s.deepLink;
+    } else if (s.workItemKey) {
+      await openViaDeepLink({ key: s.workItemKey });
     } else {
       toast("no editor deep link for this session", true);
     }

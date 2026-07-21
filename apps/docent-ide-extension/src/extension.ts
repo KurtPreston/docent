@@ -46,20 +46,57 @@ function deriveIDE(): string {
   return "vscode";
 }
 
-// targetHost is the remote server the window edits, when this is a remote
-// window (Remote-SSH, containers, WSL). Empty for a local window.
-function deriveTargetHost(): string {
-  return (vscode.env.remoteName || "").trim();
+// A folder this window has open, paired with the remote host it lives on.
+interface FolderTarget {
+  path: string;
+  targetHost: string;
 }
 
-// currentPaths returns the workspace folder paths this window has open. A
-// window with no folder yields a single empty path so it is still tracked.
-function currentPaths(): string[] {
+// targetHostFor derives the remote server a folder lives on ("" for a local
+// folder). Remote windows (Remote-SSH, containers, WSL) expose a vscode-remote
+// URI whose authority encodes the remote as "<resolver>+<host>"
+// (e.g. "ssh-remote+desktop"); local folders have no authority. We read the URI
+// authority rather than vscode.env.remoteName because remoteName only reports
+// the resolver *kind* ("ssh-remote"), not which host. Using the real host makes
+// the target-host column meaningful and lets docentd build a cursor:// deep
+// link that focuses the existing window instead of opening a mismatched new one
+// (matching the ssh alias `cursor --status` shows as "[SSH: <host>]").
+function targetHostFor(uri: vscode.Uri): string {
+  if (uri.scheme !== "vscode-remote" || !uri.authority) {
+    return "";
+  }
+  return hostFromRemoteAuthority(uri.authority);
+}
+
+// hostFromRemoteAuthority extracts the target host from a remote authority of
+// the form "<resolver>+<host>" (e.g. "ssh-remote+desktop", "wsl+Ubuntu"). Some
+// editor builds hex-encode the host segment; decode it when it round-trips to a
+// printable label, otherwise keep the raw segment.
+function hostFromRemoteAuthority(authority: string): string {
+  const plus = authority.indexOf("+");
+  const seg = plus >= 0 ? authority.slice(plus + 1) : authority;
+  if (seg.length >= 4 && seg.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(seg)) {
+    try {
+      const decoded = Buffer.from(seg, "hex").toString("utf8");
+      if (/^[\x20-\x7E]+$/.test(decoded)) {
+        return decoded;
+      }
+    } catch {
+      /* fall through to the raw segment */
+    }
+  }
+  return seg;
+}
+
+// currentFolders returns the workspace folders this window has open, each with
+// its remote host. A window with no folder yields a single empty entry so it is
+// still tracked.
+function currentFolders(): FolderTarget[] {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
-    return [""];
+    return [{ path: "", targetHost: "" }];
   }
-  return folders.map((f) => f.uri.fsPath);
+  return folders.map((f) => ({ path: f.uri.fsPath, targetHost: targetHostFor(f.uri) }));
 }
 
 function leaf(p: string): string {
@@ -127,9 +164,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const send = (event: SessionEvent): void => {
     const cfg = readConfig();
-    const targetHost = deriveTargetHost();
-    for (const p of currentPaths()) {
-      postEvent(cfg, ide, ideHost, targetHost, p, event);
+    for (const f of currentFolders()) {
+      postEvent(cfg, ide, ideHost, f.targetHost, f.path, event);
     }
   };
 
@@ -152,12 +188,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders((e) => {
       const cfg = readConfig();
-      const targetHost = deriveTargetHost();
       for (const added of e.added) {
-        postEvent(cfg, ide, ideHost, targetHost, added.uri.fsPath, "open");
+        postEvent(cfg, ide, ideHost, targetHostFor(added.uri), added.uri.fsPath, "open");
       }
       for (const removed of e.removed) {
-        postEvent(cfg, ide, ideHost, targetHost, removed.uri.fsPath, "close");
+        postEvent(cfg, ide, ideHost, targetHostFor(removed.uri), removed.uri.fsPath, "close");
       }
     }),
   );
@@ -181,8 +216,7 @@ export function deactivate(): void {
   const cfg = readConfig();
   const ide = deriveIDE();
   const ideHost = os.hostname();
-  const targetHost = deriveTargetHost();
-  for (const p of currentPaths()) {
-    postEvent(cfg, ide, ideHost, targetHost, p, "close");
+  for (const f of currentFolders()) {
+    postEvent(cfg, ide, ideHost, f.targetHost, f.path, "close");
   }
 }

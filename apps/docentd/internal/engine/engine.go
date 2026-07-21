@@ -323,19 +323,18 @@ func (e *Engine) Provider() string {
 }
 
 // SessionDeepLink returns the provider deep link that opens a session's own
-// workspace path, targeting its remote host when set (falling back to
-// docentd's ssh alias for local sessions), or "" when the provider has no deep
-// link or the path is empty. Unlike deepLinkFor this keys off the session's
-// path/host directly, so it works even for sessions not tied to a work item.
+// workspace path on its own host, or "" when the provider has no deep link or
+// the path is empty. Unlike deepLinkFor it keys off the session's exact
+// path+targetHost (rather than a work item's openPath and the daemon's ssh
+// alias), so a launch focuses that specific window: a remote session yields an
+// ssh-remote link to its targetHost, while a local session (no targetHost)
+// yields a local file link. This is what makes the Sessions-page launch reveal
+// the existing window instead of opening a mismatched new one.
 func (e *Engine) SessionDeepLink(path, targetHost string) string {
 	if e.sessionLinker == nil || path == "" {
 		return ""
 	}
-	host := targetHost
-	if host == "" {
-		host = e.cfg.SSHHost
-	}
-	return e.sessionLinker.DeepLink(path, host)
+	return e.sessionLinker.DeepLink(path, targetHost)
 }
 
 // WorkItemKeyForSession resolves the key of the work item that surfaces the
