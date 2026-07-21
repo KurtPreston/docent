@@ -11,6 +11,14 @@ import { URL } from "url";
 //
 // A session's identity is the composite of ide + ideHost + targetHost + path,
 // matching docentd's registry key.
+//
+// This is declared as a UI extension ("extensionKind": ["ui"] in package.json),
+// so it always runs in the client-side (local) extension host — the machine
+// with the GUI — even for Remote-SSH windows. That makes os.hostname() the host
+// you actually sit at (the ideHost), while the remote server being edited is
+// derived separately from the workspace folder's remote authority (targetHost).
+// Reaching docentd still works from the client because docent.url points at a
+// tunnel/loopback that forwards to the daemon.
 
 type SessionEvent =
   | "open"
