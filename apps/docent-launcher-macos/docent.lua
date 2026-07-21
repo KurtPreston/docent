@@ -221,6 +221,11 @@ local function show()
               fn = function() openDashboard() end,
             },
           })
+        -- Label-only so the text itself is the clickable button; the default
+        -- mode renders an (empty, since we set no image) icon slot on top with
+        -- the label below it, leaving only the icon slot clickable.
+        :displayMode("label")
+        :sizeMode("small")
       chooser:attachedToolbar(toolbar)
     end
     chooser:choices(choices)
