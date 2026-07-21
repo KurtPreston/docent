@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -94,15 +95,76 @@ func (c JiraCollector) CollectEvents(ctx context.Context, directive userdata.Dir
 		return nil, err
 	}
 	email := strings.TrimSpace(directive.Config["email"])
+	tierByStatus := jiraStatusTierFromQueries(directive)
 	items := make([]StatusItem, 0, len(parsed.Issues))
 	for _, iss := range parsed.Issues {
 		obs, err := jiraParseUpdated(iss.Fields.Updated)
 		if err != nil || obs.Before(since) || obs.After(now) {
 			continue
 		}
-		items = append(items, buildJiraItem(directive, base, iss, "issue_activity", obs, jiraIsSelf(iss, scope, email)))
+		item := buildJiraItem(directive, base, iss, "issue_activity", obs, jiraIsSelf(iss, scope, email))
+		// Events run the involved-scope JQL, not the per-tier queries, so
+		// tag each issue with the phase its status maps to (from the
+		// started_query / assigned_query config) for the report pipeline.
+		if tier := tierByStatus[strings.ToLower(strings.TrimSpace(iss.Fields.Status.Name))]; tier != "" {
+			item.Fields["status_tier"] = tier
+		}
+		items = append(items, item)
 	}
 	return items, nil
+}
+
+var (
+	jiraStatusEqRe  = regexp.MustCompile(`(?i)status\s*=\s*"([^"]+)"`)
+	jiraStatusInRe  = regexp.MustCompile(`(?i)status\s+in\s*\(([^)]*)\)`)
+	jiraQuotedTexts = regexp.MustCompile(`"([^"]+)"`)
+)
+
+// jiraStatusTierFromQueries builds a status-name -> tier ("started" |
+// "assigned") lookup from the directive's started_query / assigned_query
+// config. Daily-plan events run the involved-scope JQL rather than the
+// per-tier queries, so this lets the report pipeline still tell which issues
+// sit in the user's "started" phase. "started" wins when a status appears in
+// both. Matching is case-insensitive.
+func jiraStatusTierFromQueries(directive userdata.Directive) map[string]string {
+	index := map[string]string{}
+	for _, name := range parseJiraStatusNames(directive.Config["assigned_query"]) {
+		index[strings.ToLower(name)] = "assigned"
+	}
+	for _, name := range parseJiraStatusNames(directive.Config["started_query"]) {
+		index[strings.ToLower(name)] = "started"
+	}
+	return index
+}
+
+// parseJiraStatusNames extracts the status name(s) referenced by simple
+// `status = "X"` or `status in ("X", "Y")` clauses in a JQL string. It is a
+// best-effort helper for tagging event issues with a phase tier; anything it
+// cannot parse yields no names, so the issue simply carries no tier.
+func parseJiraStatusNames(jql string) []string {
+	jql = strings.TrimSpace(jql)
+	if jql == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[strings.ToLower(s)] {
+			return
+		}
+		seen[strings.ToLower(s)] = true
+		out = append(out, s)
+	}
+	for _, m := range jiraStatusEqRe.FindAllStringSubmatch(jql, -1) {
+		add(m[1])
+	}
+	for _, m := range jiraStatusInRe.FindAllStringSubmatch(jql, -1) {
+		for _, q := range jiraQuotedTexts.FindAllStringSubmatch(m[1], -1) {
+			add(q[1])
+		}
+	}
+	return out
 }
 
 // CollectState runs JQL for the current set of issues matching the directive's

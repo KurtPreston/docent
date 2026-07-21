@@ -29,6 +29,7 @@ type ghSearchActivityRow struct {
 	URL        string `json:"url"`
 	State      string `json:"state"`
 	IsDraft    bool   `json:"isDraft"`
+	CreatedAt  string `json:"createdAt"`
 	UpdatedAt  string `json:"updatedAt"`
 	ClosedAt   string `json:"closedAt"`
 	Repository struct {
@@ -214,7 +215,7 @@ func buildGitHubSearchSpecs(scope Scope, user, dateStr string, followedRepos []s
 		args:         []string{"--author", user, "--updated", updatedFilter},
 		summary:      fmt.Sprintf("author:%s updated:>=%s", user, dateStr),
 		itemKind:     "authored_pr",
-		jsonFields:   "title,url,state,updatedAt,closedAt,repository",
+		jsonFields:   "title,url,state,isDraft,createdAt,updatedAt,closedAt,repository",
 		userAnchored: true,
 	}
 	authoredCommits := ghCommitSearchSpec{
@@ -280,7 +281,7 @@ func buildGitHubSearchSpecs(scope Scope, user, dateStr string, followedRepos []s
 				args:       []string{"--repo", repo, "--updated", updatedFilter},
 				summary:    fmt.Sprintf("repo:%s is:pull-request updated:>=%s", repo, dateStr),
 				itemKind:   "repo_pr",
-				jsonFields: "title,url,state,updatedAt,closedAt,repository",
+				jsonFields: "title,url,state,isDraft,createdAt,updatedAt,closedAt,repository",
 			},
 			ghSearchSpec{
 				queryType:  "issues",
@@ -337,18 +338,33 @@ func runGitHubSearch(ctx context.Context, env []string, spec ghSearchSpec, direc
 			ObservedAt:  obs.UTC(),
 			Author:      user,
 			IsSelf:      spec.userAnchored,
-			Fields: map[string]string{
-				"query":      spec.summary,
-				"username":   user,
-				"host":       host,
-				"repo":       repo,
-				"state":      row.State,
-				"updated_at": row.UpdatedAt,
-				"closed_at":  row.ClosedAt,
-			},
+			Fields: buildGitHubSearchFields(spec, user, host, repo, row),
 		})
 	}
 	return items, nil
+}
+
+// buildGitHubSearchFields assembles the Fields map for a search row. For PR
+// queries it additionally records is_draft and created_at (only present when
+// the query requested them, i.e. authored_pr / repo_pr) so the report pipeline
+// can tell an opened-in-window draft from an existing PR merely updated.
+func buildGitHubSearchFields(spec ghSearchSpec, user, host, repo string, row ghSearchActivityRow) map[string]string {
+	fields := map[string]string{
+		"query":      spec.summary,
+		"username":   user,
+		"host":       host,
+		"repo":       repo,
+		"state":      row.State,
+		"updated_at": row.UpdatedAt,
+		"closed_at":  row.ClosedAt,
+	}
+	if spec.queryType == "prs" {
+		fields["is_draft"] = strconv.FormatBool(row.IsDraft)
+		if strings.TrimSpace(row.CreatedAt) != "" {
+			fields["created_at"] = row.CreatedAt
+		}
+	}
+	return fields
 }
 
 func runGitHubCommitSearch(ctx context.Context, env []string, spec ghCommitSearchSpec, directive userdata.Directive, user, host string, since, now time.Time, opts *CollectOpts) ([]StatusItem, error) {
@@ -504,7 +520,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 // {"--author", user} or {"--review-requested", user}.
 func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directive userdata.Directive, opts *CollectOpts, relationArgs ...string) ([]ghSearchActivityRow, error) {
 	args := append([]string{"search", "prs"}, relationArgs...)
-	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,repository,updatedAt")
+	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,createdAt,repository,updatedAt")
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
@@ -536,6 +552,11 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		"state":    "open",
 		"relation": relation,
 		"is_draft": strconv.FormatBool(row.IsDraft),
+	}
+	// created_at lets the report tell a PR opened in-window from a pre-existing
+	// one merely updated (open authored PRs surface here, not as authored_pr).
+	if ca := strings.TrimSpace(row.CreatedAt); ca != "" {
+		fields["created_at"] = ca
 	}
 	if headBranch != "" {
 		fields["head_branch"] = headBranch

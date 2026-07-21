@@ -426,6 +426,10 @@ func buildLocalGitCommitItem(directiveID, repoLabel, commitDir string, ci localG
 				"author_email": ci.email,
 				"iso":          ci.iso,
 				"subject":      ci.subject,
+				// is_self distinguishes the user's own commits from others'
+				// (e.g. CI bots) that land on branches they have checked out,
+				// so the report only credits genuinely-authored work.
+				"is_self": strconv.FormatBool(ci.isSelf),
 			}
 			// Only carry a path when the commit resolves to a real worktree;
 			// an empty commitDir means the branch has no working directory to

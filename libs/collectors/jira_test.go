@@ -14,6 +14,56 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
+func TestParseJiraStatusNames(t *testing.T) {
+	cases := []struct {
+		name string
+		jql  string
+		want []string
+	}{
+		{name: "empty", jql: "", want: nil},
+		{name: "single equals", jql: `assignee = currentUser() AND status = "In Development"`, want: []string{"In Development"}},
+		{name: "in list", jql: `assignee = currentUser() AND status in ("To Do", "Backlog")`, want: []string{"To Do", "Backlog"}},
+		{name: "no status clause", jql: `assignee = currentUser()`, want: nil},
+		{name: "dedupes case-insensitively", jql: `status = "Done" OR status = "done"`, want: []string{"Done"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseJiraStatusNames(tc.jql)
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("parseJiraStatusNames(%q) = %v, want %v", tc.jql, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestJiraStatusTierFromQueries(t *testing.T) {
+	dir := userdata.Directive{Config: map[string]string{
+		"started_query":  `assignee = currentUser() AND status = "In Development"`,
+		"assigned_query": `assignee = currentUser() AND status in ("To Do", "Backlog")`,
+	}}
+	index := jiraStatusTierFromQueries(dir)
+	if index["in development"] != "started" {
+		t.Errorf("In Development tier = %q, want started", index["in development"])
+	}
+	if index["to do"] != "assigned" || index["backlog"] != "assigned" {
+		t.Errorf("assigned statuses not indexed: %v", index)
+	}
+	if _, ok := index["code review"]; ok {
+		t.Errorf("unconfigured status should have no tier: %v", index)
+	}
+}
+
+func TestJiraStatusTierStartedWinsOverAssigned(t *testing.T) {
+	dir := userdata.Directive{Config: map[string]string{
+		"started_query":  `status = "In Progress"`,
+		"assigned_query": `status = "In Progress"`,
+	}}
+	index := jiraStatusTierFromQueries(dir)
+	if index["in progress"] != "started" {
+		t.Errorf("started should win when a status is in both, got %q", index["in progress"])
+	}
+}
+
 func TestBuildJiraTierJQL(t *testing.T) {
 	if got := buildJiraTierJQL(""); got != "" {
 		t.Errorf("empty query should yield empty JQL, got %q", got)

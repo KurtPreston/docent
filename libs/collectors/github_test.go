@@ -92,6 +92,54 @@ func TestBuildGitHubSearchSpecsAllWithFollowedRepos(t *testing.T) {
 	}
 }
 
+func TestBuildGitHubSearchFieldsPR(t *testing.T) {
+	var row ghSearchActivityRow
+	row.State = "open"
+	row.IsDraft = true
+	row.CreatedAt = "2026-05-01T10:00:00Z"
+	row.UpdatedAt = "2026-05-02T10:00:00Z"
+	spec := ghSearchSpec{queryType: "prs", summary: "author:alice"}
+
+	fields := buildGitHubSearchFields(spec, "alice", "github.com", "o/r", row)
+	if fields["is_draft"] != "true" {
+		t.Errorf("is_draft = %q, want true", fields["is_draft"])
+	}
+	if fields["created_at"] != "2026-05-01T10:00:00Z" {
+		t.Errorf("created_at = %q", fields["created_at"])
+	}
+	if fields["state"] != "open" || fields["updated_at"] != "2026-05-02T10:00:00Z" {
+		t.Errorf("unexpected base fields: %v", fields)
+	}
+}
+
+func TestBuildGitHubSearchFieldsIssueOmitsPRFields(t *testing.T) {
+	var row ghSearchActivityRow
+	row.State = "open"
+	spec := ghSearchSpec{queryType: "issues", summary: "involves:alice"}
+
+	fields := buildGitHubSearchFields(spec, "alice", "github.com", "o/r", row)
+	if _, ok := fields["is_draft"]; ok {
+		t.Errorf("issue rows should not carry is_draft: %v", fields)
+	}
+	if _, ok := fields["created_at"]; ok {
+		t.Errorf("issue rows should not carry created_at: %v", fields)
+	}
+}
+
+func TestBuildGitHubSearchFieldsPROmitsEmptyCreatedAt(t *testing.T) {
+	var row ghSearchActivityRow
+	row.State = "closed"
+	spec := ghSearchSpec{queryType: "prs", summary: "author:alice"}
+
+	fields := buildGitHubSearchFields(spec, "alice", "github.com", "o/r", row)
+	if _, ok := fields["created_at"]; ok {
+		t.Errorf("empty createdAt should be omitted: %v", fields)
+	}
+	if fields["is_draft"] != "false" {
+		t.Errorf("is_draft = %q, want false", fields["is_draft"])
+	}
+}
+
 func TestDedupeGitHubItems(t *testing.T) {
 	now := time.Now().UTC()
 	items := []StatusItem{
@@ -186,6 +234,7 @@ func TestPrReviewItemFields(t *testing.T) {
 	row.Title = "feat: thing"
 	row.URL = "https://github.com/o/r/pull/7"
 	row.IsDraft = true
+	row.CreatedAt = "2026-05-04T09:00:00Z"
 	row.Repository.NameWithOwner = "o/r"
 
 	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "authored", "passing", "APPROVED", true, "feature-branch", "conflicting")
@@ -196,6 +245,7 @@ func TestPrReviewItemFields(t *testing.T) {
 		"relation": "authored", "is_draft": "true", "checks": "passing",
 		"review_decision": "APPROVED", "ready": "true", "repo": "o/r",
 		"head_branch": "feature-branch", "mergeable": "conflicting",
+		"created_at": "2026-05-04T09:00:00Z",
 	} {
 		if authored.Fields[k] != want {
 			t.Errorf("authored field %q = %q, want %q", k, authored.Fields[k], want)
