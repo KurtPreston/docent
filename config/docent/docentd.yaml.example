@@ -4,7 +4,7 @@ wsmUrl: http://127.0.0.1:39788
 
 # Shared secret (optional). Set this (or the DOCENT_TOKEN env var, which wins) to
 # require an "Authorization: Bearer <token>" header on every data endpoint
-# (/sessions, /api/*). /health and the static dashboard shell stay open.
+# (/api/*). /health and the static dashboard shell stay open.
 # IMPORTANT: setting a token also makes docentd bind ALL interfaces (0.0.0.0) by
 # default, so it is reachable off the loopback. With no token docentd stays
 # bound to 127.0.0.1 and serves openly (localhost only).

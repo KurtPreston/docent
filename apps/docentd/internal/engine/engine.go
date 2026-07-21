@@ -20,7 +20,7 @@ import (
 	"github.com/KurtPreston/docent/libs/workitem"
 )
 
-// Dashboard matches the legacy docent /sessions payload for the web UI.
+// Dashboard is the dashboard payload for the web UI, served by GET /api/workitems.
 type Dashboard struct {
 	GeneratedAt  string `json:"generatedAt"`
 	Backend      string `json:"backend"`

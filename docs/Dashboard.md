@@ -27,7 +27,7 @@ route, all served by `docentd` itself:
 
 ## Binding + auth
 
-`docentd` serves the live dashboard and its data APIs (`/sessions`, `/api/*`).
+`docentd` serves the live dashboard and its data APIs (`/api/*`).
 By default it binds **`127.0.0.1` only and serves openly** — fine for localhost
 or when reached over an SSH tunnel / Cursor Remote-SSH port forward.
 
@@ -71,7 +71,7 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/health` | Liveness probe; always open. |
-| `GET` | `/sessions`, `/api/workitems` | Dashboard payload (work-item groups); triggers an on-request refresh of any collectors flagged `onRequest`. Both paths hit the same handler. |
+| `GET` | `/api/workitems` | Dashboard payload (work-item groups); triggers an on-request refresh of any collectors flagged `onRequest`. |
 | `GET` | `/api/workitems/{key}` | One work item's full detail (sessions, PRs, JIRA, entities, signals). |
 | `POST` | `/api/workitems/{key}/launch` | Runs the [`onClickScript`](#docentdyaml-reference) hook with `DOCENT_*` env vars describing the work item. |
 | `POST` | `/api/workitems/{key}/open` | Cursor session manager only: syncs the work item's color into `.vscode/settings.json`, then returns a `cursor://` deep link for the client to navigate. |
@@ -245,7 +245,7 @@ Prints where `docentd` resolves its config from (`docentd.yaml`,
 
 The dashboard is a **Vite + React + TypeScript** single-page app under
 [`apps/docentd/web`](../apps/docentd/web). It's a pure client of docentd's JSON API
-(`/sessions`, `/api/*`) and is embedded into the `docentd` binary at build time,
+(`/api/*`) and is embedded into the `docentd` binary at build time,
 so a released binary is self-contained. Requires **Node >= 18**.
 
 - **Dev** (hot reload) — run a `docentd` (default `127.0.0.1:39787`), then:
@@ -253,7 +253,7 @@ so a released binary is self-contained. Requires **Node >= 18**.
   ```bash
   cd apps/docentd/web
   npm install
-  npm run dev     # http://localhost:5173; proxies /api,/sessions,/ingest,/health to docentd
+  npm run dev     # http://localhost:5173; proxies /api,/ingest,/health to docentd
   ```
 
   Point the proxy at a non-default docentd with `DOCENTD_URL=http://host:port npm run dev`.

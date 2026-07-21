@@ -200,7 +200,7 @@ local function activate(choice)
 end
 
 local function show()
-  hs.http.asyncGet(base .. "/sessions", authHeaders(), function(status, body, _)
+  hs.http.asyncGet(base .. "/api/workitems", authHeaders(), function(status, body, _)
     local choices = {}
     if status == 200 and body then
       local ok, data = pcall(hs.json.decode, body)

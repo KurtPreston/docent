@@ -27,7 +27,7 @@ Environment (or `~/.config/docent/launcher.lua` written by install script):
 - `DOCENT_PORT` — local docentd (default 39787)
 - `WSM_PORT` — local wsm window manager (default 39788)
 
-Focus actions go to wsm; session list comes from docentd `/sessions`.
+Focus actions go to wsm; session list comes from docentd `/api/workitems`.
 
 ## doctor
 

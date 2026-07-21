@@ -13,7 +13,7 @@ Built on WPF + Win32 `RegisterHotKey` (both ship with Windows) — no extra
 runtime, no admin. It is a faithful port of the legacy docent WPF launcher,
 adapted for the monorepo split:
 
-- **Work-item rows** come from docentd's `GET /sessions` (`-SessionsUrl`, which
+- **Work-item rows** come from docentd's `GET /api/workitems` (`-SessionsUrl`, which
   may point at a **remote** docentd) — one primary row per dashboard group.
 - **Opening a work item** POSTs `/api/workitems/{key}/open` (Cursor deep link)
   or `/launch` on docentd.

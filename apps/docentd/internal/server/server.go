@@ -44,8 +44,7 @@ func (s *Server) Handler() http.Handler {
 	// docentd to a non-loopback interface only exposes data to bearers of the
 	// configured token. With no token set, requireAuth is a pass-through.
 	mux.HandleFunc("/health", s.health)
-	mux.HandleFunc("/sessions", s.requireAuth(s.sessions))
-	mux.HandleFunc("/api/workitems", s.requireAuth(s.sessions))
+	mux.HandleFunc("/api/workitems", s.requireAuth(s.workItems))
 	mux.HandleFunc("/api/workitems/", s.requireAuth(s.workItemDetail))
 	mux.HandleFunc("/api/signals", s.requireAuth(s.signalsAPI))
 	mux.HandleFunc("/api/collectors", s.requireAuth(s.collectorsAPI))
@@ -80,7 +79,9 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
+// workItems serves the dashboard payload (work-item groups) and triggers an
+// on-request refresh of any collectors flagged onRequest.
+func (s *Server) workItems(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

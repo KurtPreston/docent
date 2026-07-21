@@ -23,7 +23,7 @@ async function getJSON<T>(url: string): Promise<T> {
   return (await r.json()) as T;
 }
 
-export const fetchDashboard = (): Promise<Dashboard> => getJSON<Dashboard>("/sessions");
+export const fetchDashboard = (): Promise<Dashboard> => getJSON<Dashboard>("/api/workitems");
 export const fetchSignals = (): Promise<SignalsView> => getJSON<SignalsView>("/api/signals");
 export const fetchCollectors = (): Promise<CollectorsView> => getJSON<CollectorsView>("/api/collectors");
 

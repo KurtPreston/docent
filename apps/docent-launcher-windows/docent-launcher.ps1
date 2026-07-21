@@ -13,14 +13,14 @@ Built on WPF (PresentationFramework) + Win32 RegisterHotKey -- both ship with
 Windows, so there is no extra runtime to install and no admin required.
 
 Adapted from the legacy docent-powershell launcher for the monorepo split:
-work-item rows are pulled from docentd's GET /sessions (which may be a REMOTE
+work-item rows are pulled from docentd's GET /api/workitems (which may be a REMOTE
 docentd). Selecting a work item POSTs /api/workitems/{key}/open or /launch on
 docentd; focusing a session POSTs to the LOCAL wsm /focus (the window manager,
 from https://github.com/KurtPreston/wsm, that actually owns the windows on this
 machine).
 
 .PARAMETER SessionsUrl
-Base URL of docentd (serves /sessions). Default http://127.0.0.1:39787. Point
+Base URL of docentd (serves /api/workitems). Default http://127.0.0.1:39787. Point
 this at your remote docentd when docentd runs elsewhere.
 
 .PARAMETER WsmUrl
@@ -29,13 +29,13 @@ http://127.0.0.1:39788.
 
 .PARAMETER Token
 Optional bearer token for docentd (only needed if your docentd authenticates
-GET /sessions; the default docentd leaves it open).
+GET /api/workitems; the default docentd leaves it open).
 
 .PARAMETER Hotkey
 Modifier+key string, e.g. "Ctrl+Alt+Space" (default) or "Win+Space".
 
 .PARAMETER SelfTest
-Fetch + flatten /sessions and print the entries, then exit (no window).
+Fetch + flatten /api/workitems and print the entries, then exit (no window).
 
 .EXAMPLE
 pwsh -File docent-launcher.ps1
@@ -57,18 +57,18 @@ $script:SessionsUrl = $SessionsUrl.TrimEnd('/')
 $script:WsmUrl = $WsmUrl.TrimEnd('/')
 $script:Token = $Token
 
-# --- data: flatten /sessions into pickable entries -------------------------
+# --- data: flatten /api/workitems into pickable entries --------------------
 # Self-contained so it can run inside a background runspace (no access to the
 # parent session's $script: vars or functions): everything it needs is passed in.
 $script:FetchEntries = {
     param([string]$SessionsUrl, [string]$Token)
-    # Tolerate older/variant /sessions payloads: a group missing jiraUrl, prs,
+    # Tolerate older/variant /api/workitems payloads: a group missing jiraUrl, prs,
     # sessions, etc. should yield $null on access, not throw under StrictMode.
     Set-StrictMode -Off
     try {
         $headers = @{}
         if ($Token) { $headers['Authorization'] = "Bearer $Token" }
-        $data = Invoke-RestMethod -Uri "$SessionsUrl/sessions" -Headers $headers -TimeoutSec 5
+        $data = Invoke-RestMethod -Uri "$SessionsUrl/api/workitems" -Headers $headers -TimeoutSec 5
     }
     catch { return @() }
 
@@ -233,7 +233,7 @@ function Invoke-LauncherEntry {
 
 if ($SelfTest) {
     $e = @(Get-LauncherEntries)
-    Write-Host "launcher self-test: $($e.Count) entries from $script:SessionsUrl/sessions (focus -> $script:WsmUrl/focus)"
+    Write-Host "launcher self-test: $($e.Count) entries from $script:SessionsUrl/api/workitems (focus -> $script:WsmUrl/focus)"
     $e | Select-Object -First 12 | ForEach-Object { "  [$($_.Type)] $($_.Label)  ($($_.Sub))" }
     $f = @($e | Where-Object { Test-FuzzyMatch -Query 'slk' -Target $_.Search })
     Write-Host "fuzzy 'slk' matches: $($f.Count)"
@@ -350,7 +350,7 @@ function Update-Results {
     if ($items.Count -gt 0) { $results.SelectedIndex = 0 }
 }
 
-# Poll handler for the async /sessions fetch. Defined at top level so it runs in
+# Poll handler for the async /api/workitems fetch. Defined at top level so it runs in
 # the script scope (and can see $script: state + Update-Results), unlike a
 # GetNewClosure block which would get its own private $script: scope. Runs on the
 # UI thread (DispatcherTimer), so touching the ListBox here is safe.
@@ -369,7 +369,7 @@ $script:OnFetchTick = {
     Update-Results
 }
 
-# Fetch /sessions off the UI thread so the window paints instantly. Cancels any
+# Fetch /api/workitems off the UI thread so the window paints instantly. Cancels any
 # in-flight fetch first so a slow request can't clobber a newer summon.
 function Start-LauncherFetch {
     if ($script:FetchTimer) { $script:FetchTimer.Stop() }

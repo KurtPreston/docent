@@ -151,7 +151,7 @@ or `DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sen
 Spotlight-style pickers bound to a global hotkey; type to fuzzy-filter your
 sessions / tickets / PRs, **Enter** focuses the session or opens the URL,
 **Esc** dismisses. Both launchers share the same data flow: session/ticket/PR
-rows come from `docentd`'s `GET /sessions` (which may point at a **remote**
+rows come from `docentd`'s `GET /api/workitems` (which may point at a **remote**
 `docentd`, typically through [`docent-tunnel`](docs/Dashboard.md#reaching-a-remote-docentd-docent-tunnel)),
 while focusing a session POSTs to the **local** wsm `/focus` — the window
 manager on the machine you're sitting at. An **Open ↗** toolbar button pops
