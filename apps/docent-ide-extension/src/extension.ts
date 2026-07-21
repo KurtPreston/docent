@@ -23,6 +23,7 @@ import { URL } from "url";
 type SessionEvent =
   | "open"
   | "close"
+  | "focus"
   | "heartbeat";
 
 interface Config {
@@ -182,12 +183,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   let timer: NodeJS.Timeout = setInterval(() => send("heartbeat"), readConfig().heartbeatMs);
 
-  // A focus change is a strong liveness signal; also re-arm the heartbeat timer
-  // in case the interval config changed.
+  // Focusing the window means the user has seen it: report a "focus" event so
+  // docentd can clear a pending needs-followup (it also counts as liveness).
   context.subscriptions.push(
     vscode.window.onDidChangeWindowState((state) => {
       if (state.focused) {
-        send("heartbeat");
+        send("focus");
       }
     }),
   );

@@ -253,6 +253,11 @@ func (s *Store) ApplyEvent(id Identity, event, name, color string) (string, erro
 		rec.LastPromptAt = now
 	case "agent_response_received":
 		rec.LastAgentStopAt = now
+	case "focus":
+		// A focus is the signal that the user has seen the window, clearing a
+		// pending needs-followup (see SessionStatus). It is also liveness, so
+		// LastHeartbeatAt is refreshed above.
+		rec.LastFocusedAt = now
 	case "heartbeat":
 		// heartbeat only refreshes LastHeartbeatAt (already set above).
 	}
@@ -300,19 +305,6 @@ func IsFresh(r Record, ttl time.Duration, now time.Time) bool {
 		return false
 	}
 	return now.Sub(hb) <= ttl
-}
-
-// SetFocused stamps the focus timestamp for a composite key.
-func (s *Store) SetFocused(key string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.data[key]
-	if !ok {
-		return nil
-	}
-	rec.LastFocusedAt = nowISO()
-	s.data[key] = rec
-	return s.save()
 }
 
 // SessionStatus derives activity status from timestamps.

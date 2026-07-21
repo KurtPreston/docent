@@ -275,6 +275,7 @@ type SessionEventResponse struct {
 var validSessionEvents = map[string]bool{
 	"open":                    true,
 	"close":                   true,
+	"focus":                   true,
 	"agent_request_sent":      true,
 	"agent_response_received": true,
 	"heartbeat":               true,

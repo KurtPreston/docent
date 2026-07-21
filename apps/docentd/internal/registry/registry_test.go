@@ -62,6 +62,28 @@ func TestApplyEventAndClose(t *testing.T) {
 	}
 }
 
+func TestFocusClearsNeedsFollowup(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{IDE: "cursor", IDEHost: "mac", Path: "/code/proj"}
+	if _, err := store.ApplyEvent(id, "agent_response_received", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := store.Get(id.Key())
+	if got := SessionStatus(rec); got != "needs-followup" {
+		t.Fatalf("after agent stop: got %q, want needs-followup", got)
+	}
+	if _, err := store.ApplyEvent(id, "focus", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = store.Get(id.Key())
+	if got := SessionStatus(rec); got != "idle" {
+		t.Fatalf("after focus: got %q, want idle", got)
+	}
+}
+
 func TestRemoteEventBindsToExtensionRecord(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
 	if err != nil {
