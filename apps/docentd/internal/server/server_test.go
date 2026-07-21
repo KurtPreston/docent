@@ -175,6 +175,47 @@ func TestSessionEvents(t *testing.T) {
 	}
 }
 
+func TestSessionEventsRemoteBindsToExtension(t *testing.T) {
+	h := newTestServer(t, "")
+
+	// A client-side extension window: concrete host + ssh alias (remote session).
+	openRR := doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":"mac","targetHost":"desktop","path":"/home/me/proj","event":"open"}`)
+	if openRR.Code != http.StatusOK {
+		t.Fatalf("open: got %d", openRR.Code)
+	}
+	var openResp SessionEventResponse
+	if err := json.Unmarshal(openRR.Body.Bytes(), &openResp); err != nil {
+		t.Fatal(err)
+	}
+
+	// A remote hook event carries ideHost as the boolean true (host unknown).
+	hookRR := doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":true,"path":"/home/me/proj","event":"agent_response_received"}`)
+	if hookRR.Code != http.StatusOK {
+		t.Fatalf("remote hook event: got %d", hookRR.Code)
+	}
+	var hookResp SessionEventResponse
+	if err := json.Unmarshal(hookRR.Body.Bytes(), &hookResp); err != nil {
+		t.Fatal(err)
+	}
+	if hookResp.Key != openResp.Key {
+		t.Fatalf("remote event should bind to the extension record: got key %q, want %q", hookResp.Key, openResp.Key)
+	}
+
+	// The bind must not fork a second session.
+	listRR := doJSON(t, h, http.MethodGet, "/api/sessions", "", "")
+	var list struct {
+		Sessions []json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(listRR.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Sessions) != 1 {
+		t.Fatalf("expected 1 session after bind, got %d", len(list.Sessions))
+	}
+}
+
 func TestReportJobLifecycle(t *testing.T) {
 	h := newTestServer(t, "")
 

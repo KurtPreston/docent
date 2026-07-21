@@ -41,7 +41,7 @@ func TestApplyEventAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := Identity{IDE: "cursor", IDEHost: "mac", Path: "/code/proj"}
-	if err := store.ApplyEvent(id, "open", "", ""); err != nil {
+	if _, err := store.ApplyEvent(id, "open", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	rec, ok := store.Get(id.Key())
@@ -54,7 +54,7 @@ func TestApplyEventAndClose(t *testing.T) {
 	if _, ok := store.GetByName("proj"); !ok {
 		t.Fatal("GetByName should find the record")
 	}
-	if err := store.ApplyEvent(id, "close", "", ""); err != nil {
+	if _, err := store.ApplyEvent(id, "close", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := store.Get(id.Key()); ok {
@@ -69,12 +69,12 @@ func TestRemoteEventBindsToExtensionRecord(t *testing.T) {
 	}
 	// Client-side extension window: concrete host + ssh alias (a remote session).
 	ext := Identity{IDE: "cursor", IDEHost: "mac", TargetHost: "desktop", Path: "/home/me/proj"}
-	if err := store.ApplyEvent(ext, "open", "", ""); err != nil {
+	if _, err := store.ApplyEvent(ext, "open", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	// Remote hook event: knows it is remote, but not its host or the ssh alias.
 	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
-	if err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
+	if _, err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.data) != 1 {
@@ -100,7 +100,7 @@ func TestRemoteEventPrefersMostRecentRemote(t *testing.T) {
 	store.data[newer.Key()] = Record{IDE: "cursor", IDEHost: "laptop", TargetHost: "desktop", Path: "/home/me/proj", LastHeartbeatAt: "2026-01-02T00:00:00Z"}
 
 	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
-	if err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
+	if _, err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if store.data[newer.Key()].LastPromptAt == "" {
@@ -118,11 +118,11 @@ func TestRemoteEventIgnoresLocalSession(t *testing.T) {
 	}
 	// A local session at the same path (no ssh alias).
 	local := Identity{IDE: "cursor", IDEHost: "devbox", Path: "/home/me/proj"}
-	if err := store.ApplyEvent(local, "open", "", ""); err != nil {
+	if _, err := store.ApplyEvent(local, "open", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
-	if err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
+	if _, err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if store.data[local.Key()].LastAgentStopAt != "" {
@@ -139,7 +139,7 @@ func TestRemoteEventFallbackCreatesRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
-	if err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
+	if _, err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	rec, ok := store.Get(hook.Key())
@@ -160,7 +160,7 @@ func TestSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := Identity{IDE: "cursor", IDEHost: "mac", Path: "/code/proj"}
-	if err := store.ApplyEvent(id, "heartbeat", "", ""); err != nil {
+	if _, err := store.ApplyEvent(id, "heartbeat", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	// Not yet stale.

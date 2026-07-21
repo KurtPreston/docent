@@ -218,7 +218,7 @@ func (s *Store) resolveKeyLocked(id Identity) string {
 // event removes the record entirely. Every other event refreshes the heartbeat
 // timestamp (any signal from a session proves it is alive) and stamps the
 // event-specific timestamp.
-func (s *Store) ApplyEvent(id Identity, event, name, color string) error {
+func (s *Store) ApplyEvent(id Identity, event, name, color string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := s.resolveKeyLocked(id)
@@ -226,7 +226,7 @@ func (s *Store) ApplyEvent(id Identity, event, name, color string) error {
 
 	if event == "close" {
 		delete(s.data, key)
-		return s.save()
+		return key, s.save()
 	}
 
 	rec, ok := s.data[key]
@@ -261,7 +261,7 @@ func (s *Store) ApplyEvent(id Identity, event, name, color string) error {
 		rec.ColorSource = "hook"
 	}
 	s.data[key] = rec
-	return s.save()
+	return key, s.save()
 }
 
 // Sweep removes records whose most recent heartbeat is older than ttl and

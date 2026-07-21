@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"mime"
@@ -211,14 +212,44 @@ func (s *Server) collectUnit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "directive": directiveID, "mode": string(mode)})
 }
 
+// hostField decodes the ingest "ideHost", which is either a hostname string or
+// the boolean true. The boolean means "remote session, host unknown": the
+// Cursor shell hooks run on the box where the agent executes (the remote for a
+// Remote-SSH window), so they can name neither the client host nor the ssh
+// alias and send true instead of a wrong hostname. docentd resolves such events
+// onto the client-side extension's window record (see registry.resolveKeyLocked).
+type hostField struct {
+	Host   string
+	Remote bool
+}
+
+func (h *hostField) UnmarshalJSON(b []byte) error {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	switch t := v.(type) {
+	case nil:
+		// absent/null: leave zero (no host, not remote).
+	case bool:
+		h.Remote = t
+	case string:
+		h.Host = strings.TrimSpace(t)
+	default:
+		return fmt.Errorf("ideHost must be a string hostname or boolean")
+	}
+	return nil
+}
+
 // SessionEventRequest is the payload accepted by POST /api/sessions/events. It
 // is the canonical contract shared by the Cursor hooks and the IDE extension.
 // A session's identity is the composite of ide, ideHost, targetHost, and path.
 type SessionEventRequest struct {
 	// IDE is the editor reporting the event ("cursor", "vscode", "vi", ...).
 	IDE string `json:"ide"`
-	// IDEHost is the host of the machine the IDE runs on.
-	IDEHost string `json:"ideHost"`
+	// IDEHost is the host of the machine the IDE runs on, or the boolean true
+	// for a remote session whose host is unknown (see hostField).
+	IDEHost hostField `json:"ideHost"`
 	// TargetHost is the remote server the IDE is editing, when applicable.
 	TargetHost string `json:"targetHost,omitempty"`
 	// Path is the workspace path being edited.
@@ -276,15 +307,16 @@ func (s *Server) sessionEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, SessionEventResponse{OK: false, Error: "invalid or missing event"})
 		return
 	}
-	if strings.TrimSpace(payload.IDEHost) == "" && strings.TrimSpace(payload.Path) == "" {
+	if payload.IDEHost.Host == "" && !payload.IDEHost.Remote && strings.TrimSpace(payload.Path) == "" {
 		writeJSON(w, http.StatusBadRequest, SessionEventResponse{OK: false, Error: "ideHost or path required"})
 		return
 	}
 	id := registry.Identity{
 		IDE:        payload.IDE,
-		IDEHost:    payload.IDEHost,
+		IDEHost:    payload.IDEHost.Host,
 		TargetHost: payload.TargetHost,
 		Path:       payload.Path,
+		Remote:     payload.IDEHost.Remote,
 	}
 	name := strings.TrimSpace(payload.Name)
 	if name == "" {
@@ -295,7 +327,10 @@ func (s *Server) sessionEvents(w http.ResponseWriter, r *http.Request) {
 	if event != "heartbeat" {
 		host := payload.TargetHost
 		if host == "" {
-			host = payload.IDEHost
+			host = payload.IDEHost.Host
+		}
+		if host == "" && payload.IDEHost.Remote {
+			host = "remote"
 		}
 		webhook.Default.Push(webhook.Event{
 			Source:     payload.IDE,
@@ -307,8 +342,8 @@ func (s *Server) sessionEvents(w http.ResponseWriter, r *http.Request) {
 			ReceivedAt: time.Now().UTC(),
 		})
 	}
-	_ = s.registry.ApplyEvent(id, event, name, payload.Color)
-	writeJSON(w, http.StatusOK, SessionEventResponse{OK: true, Key: id.Key(), Event: event})
+	key, _ := s.registry.ApplyEvent(id, event, name, payload.Color)
+	writeJSON(w, http.StatusOK, SessionEventResponse{OK: true, Key: key, Event: event})
 }
 
 // sessionsList returns the current session registry records (the ingest view of
