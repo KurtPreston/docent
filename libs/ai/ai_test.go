@@ -102,8 +102,10 @@ func TestRuleBasedRunModeDailyPlan(t *testing.T) {
 				Key: "SALSA-1", Title: "SALSA-1 Thing", URL: "https://jira.example/browse/SALSA-1",
 			}},
 			Entities: []model.Entity{
-				{Kind: "commit", Coordinates: map[string]string{"ticket": "SALSA-1", "branch": "salsa-1"}},
-				{Kind: "issue", Coordinates: map[string]string{"ticket": "SALSA-1"}, State: map[string]string{"status_tier": "started"}},
+				{Kind: "commit", Coordinates: map[string]string{"ticket": "SALSA-1", "branch": "salsa-1"},
+					State: map[string]string{"observedAt": "2026-04-23T12:00:00Z"}},
+				{Kind: "issue", Coordinates: map[string]string{"ticket": "SALSA-1"},
+					State: map[string]string{"status_tier": "started", "updated": "2026-04-23T12:00:00Z"}},
 			},
 		}},
 	})

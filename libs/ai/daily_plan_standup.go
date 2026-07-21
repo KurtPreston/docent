@@ -8,25 +8,41 @@ import (
 
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/model"
-	"github.com/KurtPreston/docent/libs/workitem"
 )
 
 const dailyPlanModeID = "daily-plan"
 
+// standup line categories: how a line flows through the report sections.
+const (
+	// categoryDone: merged/closed PRs — appear under the previous day only.
+	categoryDone = "done"
+	// categoryInProgress: opened/updated/started work — previous day AND
+	// "continue on" for today.
+	categoryInProgress = "in_progress"
+	// categoryReviewed: a PR I reviewed — its own "Reviewed:" section.
+	categoryReviewed = "reviewed"
+)
+
 // RenderDailyPlanMarkdown produces the deterministic standup document:
 //
 //	**Monday**
-//	- Started [TICKET](pr-or-jira) description
-//	- Finished [TICKET](pr-or-jira) description
+//	- Merged PR for [TICKET](pr) description
+//	- Opened draft PR for [TICKET](pr) description
+//	- Started [TICKET](jira) description
 //
 //	**Tuesday**
 //	- Continue on [TICKET](pr-or-jira) description
 //
+//	Reviewed:
+//	- [TICKET](pr-url) description
+//
 //	PRs ready for review:
 //	- [TICKET](pr-url)
 //
-// Classification drives off libs/workitem status, with a report-side done
-// state for merged/closed authored PRs in-window or JIRA done-category.
+// Each previous-day line is derived from what actually happened to the work
+// item inside the window (see deriveStandupLine): the verb reflects the PR
+// action (opened/updated/merged/closed) or genuinely-started work, so items
+// with no real self-authored activity are dropped rather than mislabeled.
 func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 	prevLabel := strings.TrimSpace(in.PrevDayLabel)
 	nextLabel := strings.TrimSpace(in.NextDayLabel)
@@ -37,11 +53,11 @@ func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 		nextLabel = "Next"
 	}
 
-	var started, finished []standupLine
-	seenTicket := map[string]bool{}
+	var yesterday, reviewed []standupLine
+	seenKey := map[string]bool{}
 
 	for _, wi := range in.WorkItems {
-		line, ok := standupLineFromWorkItem(wi, in.Since, in.Now)
+		line, ok := deriveStandupLine(wi, in.Since, in.Now)
 		if !ok {
 			continue
 		}
@@ -49,44 +65,55 @@ func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 		if key == "" {
 			key = wi.Key
 		}
-		if seenTicket[key] {
+		if seenKey[key] {
 			continue
 		}
-		seenTicket[key] = true
+		seenKey[key] = true
 
-		switch line.Kind {
-		case "finished":
-			finished = append(finished, line)
-		case "started":
-			started = append(started, line)
+		if line.Category == categoryReviewed {
+			reviewed = append(reviewed, line)
+		} else {
+			yesterday = append(yesterday, line)
 		}
 	}
-	sortStandupLines(started)
-	sortStandupLines(finished)
+	sortStandupLines(yesterday)
+	sortStandupLines(reviewed)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%s**\n", prevLabel)
-	if len(started) == 0 && len(finished) == 0 {
+	if len(yesterday) == 0 {
 		b.WriteString("- _none_\n")
 	} else {
-		for _, line := range started {
-			fmt.Fprintf(&b, "- Started %s\n", line.Bullet)
-		}
-		for _, line := range finished {
-			fmt.Fprintf(&b, "- Finished %s\n", line.Bullet)
+		for _, line := range yesterday {
+			fmt.Fprintf(&b, "- %s %s\n", line.Verb, line.Bullet)
 		}
 	}
 	b.WriteByte('\n')
 
+	// Today continues the in-flight work (not the merged/closed items).
+	var today []standupLine
+	for _, line := range yesterday {
+		if line.Category == categoryInProgress {
+			today = append(today, line)
+		}
+	}
 	fmt.Fprintf(&b, "**%s**\n", nextLabel)
-	if len(started) == 0 {
+	if len(today) == 0 {
 		b.WriteString("- _none_\n")
 	} else {
-		for _, line := range started {
+		for _, line := range today {
 			fmt.Fprintf(&b, "- Continue on %s\n", line.Bullet)
 		}
 	}
 	b.WriteByte('\n')
+
+	if len(reviewed) > 0 {
+		b.WriteString("Reviewed:\n")
+		for _, line := range reviewed {
+			fmt.Fprintf(&b, "- %s\n", line.Bullet)
+		}
+		b.WriteByte('\n')
+	}
 
 	b.WriteString("PRs ready for review:\n")
 	ready := readyForReviewPRs(in.Statuses)
@@ -103,40 +130,152 @@ func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 }
 
 type standupLine struct {
-	Kind   string // "started" or "finished"
-	Ticket string
-	Bullet string // "[KEY](url) description"
+	Ticket   string
+	Bullet   string // "[KEY](url) description"
+	Verb     string // "Started", "Merged PR for", ...
+	Category string // categoryDone | categoryInProgress | categoryReviewed
+	rank     int    // display order within a section
 }
 
-func standupLineFromWorkItem(wi model.WorkItem, since, until time.Time) (standupLine, bool) {
-	facts := accumulateReportFacts(wi, since, until)
-	status, rank, _ := workitem.Classify(facts)
-	if rank >= workitem.RankHidden || status == workitem.StatusAssigned {
+// deriveStandupLine inspects a work item's window-scoped signals and returns
+// the single standup line that best describes what happened to it yesterday,
+// or ok=false when nothing genuine did. Precedence (highest first): merged >
+// closed > opened(draft) > opened > updated (pushed commits to an existing
+// PR) > started (new commits with no PR, or a ticket moved into the started
+// tier in-window backed by branch activity or one of my PRs) > reviewed (a PR
+// I reviewed). Items whose only evidence is a reflog branch-visit, a stale
+// open PR merely "updated", or a watcher-only Jira change fall through to
+// ok=false and are dropped.
+func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, bool) {
+	var (
+		merged, closed, opened, anyDraft bool
+		selfCommit, hasAuthoredPR        bool
+		recentAuthoredPR                 bool
+		jiraStarted, branchEvidence      bool
+		reviewed                         bool
+	)
+	for _, ent := range wi.Entities {
+		switch ent.Kind {
+		case "commit":
+			// Only the user's own commits count; commits from CI bots or
+			// teammates that happen to sit on a checked-out branch do not.
+			// (Missing is_self is treated as self for backward compatibility.)
+			if entityTimestampInWindow(ent, since, until) && ent.State["is_self"] != "false" {
+				selfCommit = true
+				branchEvidence = true
+			}
+		case "github_commit":
+			// github_commit comes from an author-anchored search, so it is
+			// always the user's own work.
+			if entityTimestampInWindow(ent, since, until) {
+				selfCommit = true
+				branchEvidence = true
+			}
+		case "reflog", "branch":
+			if entityTimestampInWindow(ent, since, until) {
+				branchEvidence = true
+			}
+		case "reviewed_pr":
+			if prUpdatedInWindow(ent, since, until) {
+				reviewed = true
+			}
+		case "ticket", "issue", "issue_activity":
+			if entityTimestampInWindow(ent, since, until) && ent.State["status_tier"] == "started" {
+				jiraStarted = true
+			}
+		case "authored_pr", "pr_review_status":
+			// Only my authored PRs; pr_review_status carries relation.
+			if rel := ent.State["relation"]; rel != "" && rel != "authored" {
+				continue
+			}
+			hasAuthoredPR = true
+			if ent.State["is_draft"] == "true" {
+				anyDraft = true
+			}
+			if authoredPRMergedInWindow(ent, since, until) {
+				merged = true
+			} else if authoredPRClosedNotMergedInWindow(ent, since, until) {
+				closed = true
+			}
+			if prCreatedInWindow(ent, since, until) {
+				opened = true
+			}
+			// A PR created no earlier than the window start (in-window or since,
+			// e.g. opened this morning) is fresh work, distinct from a months-old
+			// stale draft that merely still exists.
+			if prCreatedOnOrAfter(ent, since) {
+				recentAuthoredPR = true
+			}
+		}
+	}
+	// A push counts only for an existing PR (not one opened/closed in-window).
+	pushed := hasAuthoredPR && selfCommit && !opened && !merged && !closed
+
+	var verb, category string
+	var rank int
+	switch {
+	case merged:
+		verb, category, rank = "Merged PR for", categoryDone, 0
+	case closed:
+		verb, category, rank = "Closed PR for", categoryDone, 1
+	case opened && anyDraft:
+		verb, category, rank = "Opened draft PR for", categoryInProgress, 2
+	case opened:
+		verb, category, rank = "Opened PR for", categoryInProgress, 3
+	case pushed:
+		verb, category, rank = "Updated PR for", categoryInProgress, 4
+	case selfCommit && !hasAuthoredPR:
+		verb, category, rank = "Started", categoryInProgress, 5
+	case jiraStarted && (branchEvidence || recentAuthoredPR):
+		// A ticket in the started tier (updated in-window), backed by local
+		// branch activity or a freshly-opened PR of mine, was genuinely
+		// started. Requiring one of those excludes both watcher-only tickets
+		// and long-lived stale drafts that merely still sit in the tier.
+		verb, category, rank = "Started", categoryInProgress, 5
+	case reviewed:
+		verb, category, rank = "Reviewed", categoryReviewed, 6
+	default:
 		return standupLine{}, false
 	}
 
 	ticket, desc, link := primaryTicketLink(wi)
-	// Standup lines require a real JIRA-style ticket key; skip unticketed
-	// branches/commits that only have a StableID-ish work-item key.
-	if ticket == "" || !jiraKeyPattern.MatchString(ticket) {
-		return standupLine{}, false
-	}
 	if link == "" {
 		link = ticketBrowseFallback(wi, ticket)
 	}
-	if link == "" {
-		return standupLine{}, false
-	}
-	bullet := fmt.Sprintf("[%s](%s)", ticket, link)
-	if desc != "" {
-		bullet += " " + desc
+
+	// Prefer a real JIRA-style ticket key with a link.
+	if ticket != "" && jiraKeyPattern.MatchString(ticket) && link != "" {
+		bullet := fmt.Sprintf("[%s](%s)", ticket, link)
+		if desc != "" {
+			bullet += " " + desc
+		}
+		return standupLine{Ticket: ticket, Bullet: bullet, Verb: verb, Category: category, rank: rank}, true
 	}
 
-	kind := "started"
-	if status == workitem.StatusDone {
-		kind = "finished"
+	// Reviewed PRs need not carry a JIRA ticket; link the PR itself.
+	if category == categoryReviewed {
+		title, url := reviewedPRTitleURL(wi)
+		if url == "" {
+			return standupLine{}, false
+		}
+		if title == "" {
+			title = url
+		}
+		return standupLine{Ticket: url, Bullet: fmt.Sprintf("[%s](%s)", title, url), Verb: verb, Category: category, rank: rank}, true
 	}
-	return standupLine{Kind: kind, Ticket: ticket, Bullet: bullet}, true
+
+	return standupLine{}, false
+}
+
+// reviewedPRTitleURL returns the title and URL of the first reviewed PR on the
+// work item, used when a reviewed PR has no associated JIRA ticket.
+func reviewedPRTitleURL(wi model.WorkItem) (title, url string) {
+	for _, ent := range wi.Entities {
+		if ent.Kind == "reviewed_pr" && ent.URL != "" {
+			return strings.TrimSpace(ent.Title), ent.URL
+		}
+	}
+	return "", ""
 }
 
 func ticketBrowseFallback(wi model.WorkItem, ticket string) string {
@@ -154,70 +293,6 @@ func ticketBrowseFallback(wi model.WorkItem, ticket string) string {
 		}
 	}
 	return ""
-}
-
-func accumulateReportFacts(wi model.WorkItem, since, until time.Time) workitem.Facts {
-	var facts workitem.Facts
-	for _, ent := range wi.Entities {
-		switch ent.Kind {
-		case "session":
-			if ent.State["live"] == "true" {
-				facts.HasLiveSession = true
-			}
-			if ent.Coordinates["ticket"] != "" {
-				facts.BranchEvidence = true
-			}
-			if ent.State["attention"] == "needs-followup" {
-				facts.SessionNeedsFollowup = true
-			}
-		case "ticket", "issue_activity", "issue":
-			// Annotation backfill stamps observedAt=now; only count JIRA
-			// tiers when the issue itself moved inside the window.
-			if !entityTimestampInWindow(ent, since, until) {
-				continue
-			}
-			if ent.State != nil {
-				switch ent.State["status_tier"] {
-				case "started":
-					facts.JiraStarted = true
-				case "assigned":
-					facts.JiraAssigned = true
-				}
-				if strings.EqualFold(ent.State["status_category"], "done") {
-					facts.Done = true
-				}
-			}
-		case "commit", "reflog":
-			// Event collectors already window-filter these; treat as
-			// in-window evidence that work happened on the ticket.
-			if strings.HasPrefix(wi.Key, "wb:") || ent.Coordinates["ticket"] != "" {
-				facts.BranchEvidence = true
-			}
-		case "branch":
-			// Bare branch/worktree presence is not standup evidence —
-			// every salsa worktree would otherwise flood Started.
-			continue
-		default:
-			if !strings.Contains(ent.Kind, "pr") {
-				continue
-			}
-			if authoredPRClosedInWindow(ent, since, until) {
-				facts.Done = true
-			}
-			// State-pass pr_review_status is for the ready-for-review
-			// section (via Statuses), not for Started/Continue, unless
-			// the PR's own updated_at falls in the window.
-			if ent.Kind == "pr_review_status" {
-				if prUpdatedInWindow(ent, since, until) {
-					workitem.ClassifyPR(&facts, ent)
-				}
-				continue
-			}
-			// Event-pass PR kinds (authored_pr, etc.) are window-filtered.
-			workitem.ClassifyPR(&facts, ent)
-		}
-	}
-	return facts
 }
 
 func entityTimestampInWindow(ent model.Entity, since, until time.Time) bool {
@@ -280,30 +355,78 @@ func timeInWindow(t, since, until time.Time) bool {
 	return true
 }
 
-func authoredPRClosedInWindow(ent model.Entity, since, until time.Time) bool {
-	if ent.State == nil {
+// authoredPRMergedInWindow reports whether an authored PR entity is in the
+// merged state with its close time inside the window.
+func authoredPRMergedInWindow(ent model.Entity, since, until time.Time) bool {
+	if ent.State == nil || strings.ToLower(strings.TrimSpace(ent.State["state"])) != "merged" {
 		return false
 	}
-	// Only count the author's own PRs.
-	if rel := ent.State["relation"]; rel != "" && rel != "authored" {
+	return prCloseTimeInWindow(ent, since, until)
+}
+
+// authoredPRClosedNotMergedInWindow reports whether an authored PR entity was
+// closed without merging, with its close time inside the window.
+func authoredPRClosedNotMergedInWindow(ent model.Entity, since, until time.Time) bool {
+	if ent.State == nil || strings.ToLower(strings.TrimSpace(ent.State["state"])) != "closed" {
 		return false
 	}
-	state := strings.ToLower(strings.TrimSpace(ent.State["state"]))
-	if state != "closed" && state != "merged" {
-		return false
-	}
+	return prCloseTimeInWindow(ent, since, until)
+}
+
+// prCloseTimeInWindow checks whether a closed/merged PR's close time falls in
+// the window, preferring closed_at and falling back to updated_at. A missing
+// or unparseable timestamp is treated as in-window (the state already says it
+// closed and event rows are window-filtered).
+func prCloseTimeInWindow(ent model.Entity, since, until time.Time) bool {
 	closedAt := strings.TrimSpace(ent.State["closed_at"])
-	if closedAt == "" {
+	if closedAt == "" || strings.HasPrefix(closedAt, "0001") {
 		closedAt = strings.TrimSpace(ent.State["updated_at"])
 	}
 	if closedAt == "" {
-		return true // closed/merged with no timestamp — treat as done
+		return true
 	}
 	t, ok := parseFlexibleTime(closedAt)
 	if !ok {
 		return true
 	}
 	return timeInWindow(t, since, until)
+}
+
+// prCreatedInWindow reports whether an authored PR was created inside the
+// window (i.e. opened yesterday). Requires the created_at field the collector
+// now captures; absent it, returns false so the PR is treated as pre-existing.
+func prCreatedInWindow(ent model.Entity, since, until time.Time) bool {
+	if ent.State == nil {
+		return false
+	}
+	raw := strings.TrimSpace(ent.State["created_at"])
+	if raw == "" {
+		return false
+	}
+	t, ok := parseFlexibleTime(raw)
+	if !ok {
+		return false
+	}
+	return timeInWindow(t, since, until)
+}
+
+// prCreatedOnOrAfter reports whether an authored PR was created no earlier than
+// the window start. Unlike prCreatedInWindow it also accepts PRs opened after
+// the window (e.g. this morning), so a ticket started yesterday whose PR went
+// up today still reads as fresh work rather than a stale months-old draft.
+func prCreatedOnOrAfter(ent model.Entity, since time.Time) bool {
+	if ent.State == nil {
+		return false
+	}
+	raw := strings.TrimSpace(ent.State["created_at"])
+	if raw == "" {
+		return false
+	}
+	t, ok := parseFlexibleTime(raw)
+	if !ok {
+		return false
+	}
+	return !t.Before(since)
 }
 
 func primaryTicketLink(wi model.WorkItem) (ticket, desc, link string) {
@@ -359,6 +482,9 @@ func prURLForTicket(wi model.WorkItem, ticket string) string {
 
 func sortStandupLines(lines []standupLine) {
 	sort.SliceStable(lines, func(i, j int) bool {
+		if lines[i].rank != lines[j].rank {
+			return lines[i].rank < lines[j].rank
+		}
 		return lines[i].Ticket < lines[j].Ticket
 	})
 }
