@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { RefreshButton, AutoToggle } from "../components/Controls";
 import { DataTable } from "../components/DataTable";
 import type { Column } from "../components/DataTable";
 import { fetchSessions } from "../lib/api";
+import { canLaunchSession, launchSession } from "../lib/sessions";
 import { timeAgo, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type { RegistrySession } from "../lib/types";
@@ -15,6 +17,43 @@ function StatusPill({ s }: { s: RegistrySession }) {
   else if (s.status === "needs-followup") return <span className="pill followup">needs follow-up</span>;
   else if (s.status === "working") return <span className="pill working">working</span>;
   return <span className="pill status">idle</span>;
+}
+
+// SessionName links to the session's work item when it is correlated to one,
+// otherwise renders the plain leaf name.
+function SessionName({ s }: { s: RegistrySession }) {
+  const label = s.name || "(unnamed)";
+  if (!s.workItemKey) return <>{label}</>;
+  return (
+    <Link to={"/workitem?key=" + encodeURIComponent(s.workItemKey)} title="Open work item">
+      {label}
+    </Link>
+  );
+}
+
+// LaunchButton opens/focuses the session's IDE via the configured provider. It
+// renders nothing when the provider offers no launch action for this session.
+function LaunchButton({ s }: { s: RegistrySession }) {
+  if (!canLaunchSession(s)) return null;
+  const title = s.provider === "cursor" ? "Open in Cursor" : "Focus this window";
+  return (
+    <button
+      className="launch-btn"
+      type="button"
+      title={title}
+      onClick={() =>
+        void launchSession({
+          provider: s.provider,
+          workItemKey: s.workItemKey,
+          deepLink: s.deepLink,
+          name: s.name,
+          targetHost: s.targetHost,
+        })
+      }
+    >
+      open
+    </button>
+  );
 }
 
 export function Sessions() {
@@ -63,7 +102,7 @@ export function Sessions() {
     {
       key: "name",
       header: "Name",
-      render: (s) => s.name || "(unnamed)",
+      render: (s) => <SessionName s={s} />,
       sortValue: (s) => s.name || "",
       filterText: (s) => s.name || "",
     },
@@ -109,6 +148,12 @@ export function Sessions() {
       className: "muted",
       render: (s) => timeAgo(s.lastActivity) || "—",
       sortValue: (s) => (s.lastActivity ? Date.parse(s.lastActivity) : 0),
+    },
+    {
+      key: "actions",
+      header: "",
+      className: "actions-col",
+      render: (s) => <LaunchButton s={s} />,
     },
   ];
 

@@ -320,6 +320,9 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 	}
 	ttl := s.cfg.Sessions.TTL()
 	now := time.Now()
+	// provider/workItemKey/deepLink let the Sessions page mirror the dashboard's
+	// launch action (open/focus the IDE) and cross-link a session to its work
+	// item, without the page needing to fetch and correlate /api/workitems.
 	type sessionView struct {
 		Key          string `json:"key"`
 		IDE          string `json:"ide,omitempty"`
@@ -330,7 +333,11 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 		Live         bool   `json:"live"`
 		Status       string `json:"status"`
 		LastActivity string `json:"lastActivity,omitempty"`
+		Provider     string `json:"provider,omitempty"`
+		WorkItemKey  string `json:"workItemKey,omitempty"`
+		DeepLink     string `json:"deepLink,omitempty"`
 	}
+	provider := s.engine.Provider()
 	all := s.registry.All()
 	out := make([]sessionView, 0, len(all))
 	for key, rec := range all {
@@ -344,6 +351,9 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 			Live:         registry.IsFresh(rec, ttl, now),
 			Status:       registry.SessionStatus(rec),
 			LastActivity: registry.LatestActivity(rec),
+			Provider:     provider,
+			WorkItemKey:  s.engine.WorkItemKeyForSession(key, rec.Name, rec.Path),
+			DeepLink:     s.engine.SessionDeepLink(rec.Path, rec.TargetHost),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})

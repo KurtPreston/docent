@@ -76,3 +76,43 @@ export async function activate(
     await focusWSMSession(session.name, session.host);
   }
 }
+
+// SessionLaunchTarget is the subset of a RegistrySession the Sessions page uses
+// to open/focus a session's IDE. Unlike activate() it does not require a work
+// item: cursor sessions carry their own path-derived deepLink, and wsm sessions
+// focus by window name.
+export type SessionLaunchTarget = {
+  provider?: string;
+  workItemKey?: string;
+  deepLink?: string;
+  name?: string;
+  targetHost?: string;
+};
+
+// canLaunchSession reports whether launchSession has an action for the session
+// under the current provider, so the UI can hide/disable the button otherwise.
+export function canLaunchSession(s: SessionLaunchTarget): boolean {
+  if (s.provider === "cursor") return !!(s.deepLink || s.workItemKey);
+  if (s.provider === "wsm") return !!s.name;
+  return false;
+}
+
+// launchSession opens/focuses the IDE for a raw registry session. For cursor it
+// prefers the work item's /open flow (which also syncs the title-bar color)
+// when the session is correlated, else navigates the session's own deep link.
+// For wsm it focuses the exact window by name.
+export async function launchSession(s: SessionLaunchTarget): Promise<void> {
+  if (s.provider === "cursor") {
+    if (s.workItemKey) {
+      await openViaDeepLink({ key: s.workItemKey, deepLink: s.deepLink });
+    } else if (s.deepLink) {
+      window.location.href = s.deepLink;
+    } else {
+      toast("no editor deep link for this session", true);
+    }
+    return;
+  }
+  if (s.provider === "wsm" && s.name) {
+    await focusWSMSession(s.name, s.targetHost);
+  }
+}

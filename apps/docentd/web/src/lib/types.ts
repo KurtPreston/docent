@@ -105,6 +105,12 @@ export type RegistrySession = {
   live: boolean;
   status: string;
   lastActivity?: string;
+  // provider is the open_trigger provider ("cursor" | "wsm" | ""); workItemKey
+  // is set when the session is correlated to a work item; deepLink opens the
+  // session's own workspace (cursor provider only). See server.go sessionsList.
+  provider?: string;
+  workItemKey?: string;
+  deepLink?: string;
 };
 
 export type SessionsView = {

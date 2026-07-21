@@ -218,6 +218,9 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 }
 .launch-btn:hover { border-color: var(--accent); color: var(--accent); }
 .section-head .launch-btn { margin-left: auto; }
+/* Sessions table action cell: keep the launch button compact and right-aligned. */
+.actions-col { text-align: right; white-space: nowrap; }
+.actions-col .launch-btn { margin-left: 0; }
 
 /* /report page: generation form + rendered Markdown. */
 .report-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; padding: 16px; }

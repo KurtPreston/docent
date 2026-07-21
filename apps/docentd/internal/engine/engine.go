@@ -315,6 +315,61 @@ func (e *Engine) deepLinkFor(openPath string) string {
 	return e.sessionLinker.DeepLink(openPath, e.cfg.SSHHost)
 }
 
+// Provider returns the normalized open_trigger provider ("cursor", "wsm", or
+// "" when none). Exposed so the sessions API can tell the dashboard how a
+// launch action should behave for a raw registry session.
+func (e *Engine) Provider() string {
+	return e.providerKey()
+}
+
+// SessionDeepLink returns the provider deep link that opens a session's own
+// workspace path, targeting its remote host when set (falling back to
+// docentd's ssh alias for local sessions), or "" when the provider has no deep
+// link or the path is empty. Unlike deepLinkFor this keys off the session's
+// path/host directly, so it works even for sessions not tied to a work item.
+func (e *Engine) SessionDeepLink(path, targetHost string) string {
+	if e.sessionLinker == nil || path == "" {
+		return ""
+	}
+	host := targetHost
+	if host == "" {
+		host = e.cfg.SSHHost
+	}
+	return e.sessionLinker.DeepLink(path, host)
+}
+
+// WorkItemKeyForSession resolves the key of the work item that surfaces the
+// given session, or "" when the session is not part of any work item. It
+// prefers an exact match on the registry entity id ("session:<key>"), then
+// falls back to matching a session entity by workspace path, then by display
+// name (covering sessions a collector surfaced under a different entity id).
+func (e *Engine) WorkItemKeyForSession(sessionKey, name, path string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	entID := "session:" + sessionKey
+	var byPath, byName string
+	for i := range e.lastWorkItems {
+		for _, ent := range e.lastWorkItems[i].Entities {
+			if ent.Kind != "session" {
+				continue
+			}
+			if ent.ID == entID {
+				return e.lastWorkItems[i].Key
+			}
+			if byPath == "" && path != "" && ent.Coordinates["path"] == path {
+				byPath = e.lastWorkItems[i].Key
+			}
+			if byName == "" && name != "" && ent.Title == name {
+				byName = e.lastWorkItems[i].Key
+			}
+		}
+	}
+	if byPath != "" {
+		return byPath
+	}
+	return byName
+}
+
 // deriveTicketProjects seeds correlation.Config.Projects from the daemon's
 // explicit ticketProjects plus each jira directive's config.followed_projects,
 // so ticket-key matching is restricted to real project keys out of the box
