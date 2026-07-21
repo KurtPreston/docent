@@ -32,6 +32,12 @@ func (c WSMCollector) CollectState(ctx context.Context, directive userdata.Direc
 	if machine == "" {
 		machine = directive.ID
 	}
+	// ideHost is the machine wsm (and the editor windows it manages) runs on.
+	// Prefer the configured machine label; fall back to this host.
+	ideHost := strings.TrimSpace(directive.Config["ide_host"])
+	if ideHost == "" {
+		ideHost = localHostname()
+	}
 	client := wmclient.New(base)
 	windows, err := client.ListWindows(ctx)
 	if err != nil {
@@ -47,11 +53,16 @@ func (c WSMCollector) CollectState(ctx context.Context, directive userdata.Direc
 			"window_id": win.ID,
 			"machine":   machine,
 			"live":      "true",
+			"ide":       "cursor",
+			"ideHost":   ideHost,
 		}
-		if host != "" {
-			fields["host"] = host
-		} else if win.Host != "" {
-			fields["host"] = win.Host
+		target := host
+		if target == "" {
+			target = win.Host
+		}
+		if target != "" {
+			fields["host"] = target
+			fields["targetHost"] = target
 		}
 		// A live-window listing is a state ("this Cursor window is open"),
 		// not an activity event, so we deliberately leave ObservedAt unset.

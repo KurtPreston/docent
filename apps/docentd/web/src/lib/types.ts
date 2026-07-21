@@ -4,7 +4,9 @@
 export type DashboardSession = {
   kind: string;
   name: string;
+  ide?: string;
   host?: string;
+  targetHost?: string;
   path?: string;
   ticket?: string;
   color?: string;

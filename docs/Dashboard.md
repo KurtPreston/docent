@@ -90,7 +90,8 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 | `GET` | `/api/automations` | Configured rules plus recent job history (`?limit=N`, default 50). See [docs/Automations.md](Automations.md). |
 | `GET` | `/api/automations/{id}` | One rule's definition. |
 | `POST` | `/api/automations/{id}/run` | Manually fires a rule's actions now, bypassing its trigger, cooldown, and enabled flag; an optional JSON body supplies synthetic event context. |
-| `POST` | `/ingest` | Cursor hooks POST here to report session activity; see [Cursor hooks → docentd](../README.md#cursor-hooks--docentd) in the README. |
+| `POST` | `/api/sessions/events` | Session ingest: IDE extensions and Cursor hooks POST session lifecycle/activity events (`open`/`close`/`agent_request_sent`/`agent_response_received`/`heartbeat`) keyed by `ide`+`ideHost`+`targetHost`+`path`. See [Cursor hooks → docentd](../README.md#cursor-hooks--docentd). |
+| `GET` | `/api/sessions` | The ingest view of live/known sessions from the registry (composite-keyed), with heartbeat-derived liveness. |
 | `GET` | `/*` | Serves the built SPA; any extensionless, unmatched path falls back to `index.html` so client-side routes work. |
 
 ## Report page
@@ -274,7 +275,7 @@ so a released binary is self-contained. Requires **Node >= 18**.
   ```bash
   cd apps/docentd/web
   npm install
-  npm run dev     # http://localhost:5173; proxies /api,/ingest,/health to docentd
+  npm run dev     # http://localhost:5173; proxies /api,/health to docentd
   ```
 
   Point the proxy at a non-default docentd with `DOCENTD_URL=http://host:port npm run dev`.

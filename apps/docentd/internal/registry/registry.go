@@ -4,28 +4,80 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
-// Record holds per-session metadata and activity timestamps.
+// keyDelim separates the composite-key components. It is the ASCII unit
+// separator so it can never collide with a filesystem path.
+const keyDelim = "\x1f"
+
+// Identity is the composite key for a session: which IDE, on which host, is
+// working on which path (optionally targeting a remote server). It is the
+// canonical session identity shared by the ingest API and the collectors.
+type Identity struct {
+	IDE        string
+	IDEHost    string
+	TargetHost string
+	Path       string
+}
+
+// Key returns the stable composite key for this identity.
+func (id Identity) Key() string {
+	return strings.Join([]string{
+		norm(id.IDE),
+		norm(id.IDEHost),
+		norm(id.TargetHost),
+		strings.TrimRight(strings.TrimSpace(id.Path), "/"),
+	}, keyDelim)
+}
+
+// Name returns the workspace leaf name for display, derived from the path.
+func (id Identity) Name() string {
+	return leaf(id.Path)
+}
+
+func norm(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func leaf(path string) string {
+	p := strings.TrimRight(strings.TrimSpace(path), "/")
+	if p == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// Record holds per-session metadata and activity timestamps, keyed by the
+// composite Identity.Key().
 type Record struct {
-	Name            string `json:"name"`
-	Host            string `json:"host,omitempty"`
-	Path            string `json:"path,omitempty"`
-	Color           string `json:"color,omitempty"`
-	ColorSource     string `json:"colorSource,omitempty"`
-	FG              string `json:"fg,omitempty"`
-	Ticket          string `json:"ticket,omitempty"`
+	// Identity fields.
+	IDE        string `json:"ide,omitempty"`
+	IDEHost    string `json:"ideHost,omitempty"`
+	TargetHost string `json:"targetHost,omitempty"`
+	Path       string `json:"path,omitempty"`
+
+	Name        string `json:"name,omitempty"`
+	Color       string `json:"color,omitempty"`
+	ColorSource string `json:"colorSource,omitempty"`
+	FG          string `json:"fg,omitempty"`
+	Ticket      string `json:"ticket,omitempty"`
+
 	CreatedAt       string `json:"createdAt,omitempty"`
-	LastOpenedAt    string `json:"lastOpenedAt,omitempty"`
+	LastHeartbeatAt string `json:"lastHeartbeatAt,omitempty"`
+	LastOpenAt      string `json:"lastOpenAt,omitempty"`
+	LastCloseAt     string `json:"lastCloseAt,omitempty"`
 	LastPromptAt    string `json:"lastPromptAt,omitempty"`
 	LastAgentStopAt string `json:"lastAgentStopAt,omitempty"`
-	LastShellDoneAt string `json:"lastShellDoneAt,omitempty"`
 	LastFocusedAt   string `json:"lastFocusedAt,omitempty"`
 }
 
-// Store persists session records keyed by name.
+// Store persists session records keyed by the composite Identity.Key().
 type Store struct {
 	mu   sync.Mutex
 	path string
@@ -77,11 +129,26 @@ func (s *Store) save() error {
 	return os.Rename(tmp, s.path)
 }
 
-func (s *Store) Get(name string) (Record, bool) {
+// Get returns the record for a composite key.
+func (s *Store) Get(key string) (Record, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, ok := s.data[name]
+	r, ok := s.data[key]
 	return r, ok
+}
+
+// GetByName returns the first record whose workspace leaf name matches. It is
+// used to enrich collector-provided session entities, which only carry a leaf
+// name (not a full composite identity).
+func (s *Store) GetByName(name string) (Record, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.data {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return Record{}, false
 }
 
 func (s *Store) All() map[string]Record {
@@ -94,50 +161,103 @@ func (s *Store) All() map[string]Record {
 	return out
 }
 
-func (s *Store) ApplyEvent(name, kind, host, path, color string) error {
+// ApplyEvent records a session event against the composite identity. A "close"
+// event removes the record entirely. Every other event refreshes the heartbeat
+// timestamp (any signal from a session proves it is alive) and stamps the
+// event-specific timestamp.
+func (s *Store) ApplyEvent(id Identity, event, name, color string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.data[name]
-	if !ok {
-		rec = Record{Name: name, CreatedAt: nowISO()}
-	}
+	key := id.Key()
 	now := nowISO()
-	switch kind {
-	case "prompt-submit":
+
+	if event == "close" {
+		delete(s.data, key)
+		return s.save()
+	}
+
+	rec, ok := s.data[key]
+	if !ok {
+		rec = Record{
+			IDE:        id.IDE,
+			IDEHost:    id.IDEHost,
+			TargetHost: id.TargetHost,
+			Path:       strings.TrimRight(strings.TrimSpace(id.Path), "/"),
+			CreatedAt:  now,
+		}
+	}
+	if name != "" {
+		rec.Name = name
+	} else if rec.Name == "" {
+		rec.Name = id.Name()
+	}
+	rec.LastHeartbeatAt = now
+	switch event {
+	case "open":
+		rec.LastOpenAt = now
+	case "agent_request_sent":
 		rec.LastPromptAt = now
-	case "agent-stop":
+	case "agent_response_received":
 		rec.LastAgentStopAt = now
-	case "shell-done":
-		rec.LastShellDoneAt = now
-	case "session-start":
-		rec.LastOpenedAt = now
-	}
-	if host != "" {
-		rec.Host = host
-	}
-	if path != "" {
-		rec.Path = path
+	case "heartbeat":
+		// heartbeat only refreshes LastHeartbeatAt (already set above).
 	}
 	if color != "" {
 		rec.Color = color
 		rec.ColorSource = "hook"
 	}
-	if !ok {
-		s.data[name] = rec
-	}
-	s.data[name] = rec
+	s.data[key] = rec
 	return s.save()
 }
 
-func (s *Store) SetFocused(name string) error {
+// Sweep removes records whose most recent heartbeat is older than ttl and
+// returns the removed keys. A non-positive ttl disables sweeping.
+func (s *Store) Sweep(ttl time.Duration, now time.Time) []string {
+	if ttl <= 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.data[name]
+	var removed []string
+	for k, r := range s.data {
+		hb := parseISO(r.LastHeartbeatAt)
+		if hb.IsZero() {
+			hb = parseISO(r.CreatedAt)
+		}
+		if !hb.IsZero() && now.Sub(hb) > ttl {
+			delete(s.data, k)
+			removed = append(removed, k)
+		}
+	}
+	if len(removed) > 0 {
+		_ = s.save()
+	}
+	return removed
+}
+
+// IsFresh reports whether the record's heartbeat is within ttl of now. A
+// non-positive ttl means heartbeating is disabled, so any record is fresh.
+func IsFresh(r Record, ttl time.Duration, now time.Time) bool {
+	if ttl <= 0 {
+		return true
+	}
+	hb := parseISO(r.LastHeartbeatAt)
+	if hb.IsZero() {
+		return false
+	}
+	return now.Sub(hb) <= ttl
+}
+
+// SetFocused stamps the focus timestamp for a composite key.
+func (s *Store) SetFocused(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.data[key]
 	if !ok {
-		rec = Record{Name: name, CreatedAt: nowISO()}
+		return nil
 	}
 	rec.LastFocusedAt = nowISO()
-	s.data[name] = rec
+	s.data[key] = rec
 	return s.save()
 }
 
@@ -178,25 +298,19 @@ func parseISO(s string) time.Time {
 
 func LatestActivity(r Record) string {
 	latest := time.Time{}
-	field := ""
-	for _, pair := range []struct {
-		f string
-		v string
-	}{
-		{"lastPromptAt", r.LastPromptAt},
-		{"lastAgentStopAt", r.LastAgentStopAt},
-		{"lastShellDoneAt", r.LastShellDoneAt},
-		{"lastFocusedAt", r.LastFocusedAt},
-		{"lastOpenedAt", r.LastOpenedAt},
-		{"createdAt", r.CreatedAt},
+	for _, v := range []string{
+		r.LastPromptAt,
+		r.LastAgentStopAt,
+		r.LastFocusedAt,
+		r.LastOpenAt,
+		r.LastHeartbeatAt,
+		r.CreatedAt,
 	} {
-		t := parseISO(pair.v)
+		t := parseISO(v)
 		if !t.IsZero() && (latest.IsZero() || t.After(latest)) {
 			latest = t
-			field = pair.v
 		}
 	}
-	_ = field
 	if latest.IsZero() {
 		return ""
 	}

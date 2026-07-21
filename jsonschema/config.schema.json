@@ -11,6 +11,9 @@
     "open_trigger": {
       "$ref": "#/$defs/open_trigger"
     },
+    "sessions": {
+      "$ref": "#/$defs/sessions"
+    },
     "directives": {
       "type": "array",
       "items": {
@@ -418,6 +421,27 @@
               "x-docent-prompt": "wsm bearer token (optional)"
             }
           }
+        }
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tunes the ingest-driven session registry's heartbeat-based liveness. A session is presumed dead once it has been silent for heartbeat_interval * missed_heartbeats.",
+      "properties": {
+        "heartbeat_interval": {
+          "type": "string",
+          "description": "Expected cadence of session heartbeats (e.g. 30s, 1m). Defaults to 30s.",
+          "x-docent-prompt": "Session heartbeat interval",
+          "x-docent-default": "30s",
+          "x-docent-setup-skip-prompt": true
+        },
+        "missed_heartbeats": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many consecutive heartbeats a session may miss before it is presumed dead. Defaults to 2.",
+          "x-docent-default": 2,
+          "x-docent-setup-skip-prompt": true
         }
       }
     },

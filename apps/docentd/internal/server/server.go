@@ -56,7 +56,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/hooks/", s.hooksAPI) // auth via bearer or hook secret
 	mux.HandleFunc("/api/automations", s.requireAuth(s.automationsAPI))
 	mux.HandleFunc("/api/automations/", s.requireAuth(s.automationsSub))
-	mux.HandleFunc("/ingest", s.requireAuth(s.ingest))
+	mux.HandleFunc("/api/sessions", s.requireAuth(s.sessionsList))
+	mux.HandleFunc("/api/sessions/events", s.requireAuth(s.sessionEvents))
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux
 }
@@ -210,7 +211,48 @@ func (s *Server) collectUnit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "directive": directiveID, "mode": string(mode)})
 }
 
-func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
+// SessionEventRequest is the payload accepted by POST /api/sessions/events. It
+// is the canonical contract shared by the Cursor hooks and the IDE extension.
+// A session's identity is the composite of ide, ideHost, targetHost, and path.
+type SessionEventRequest struct {
+	// IDE is the editor reporting the event ("cursor", "vscode", "vi", ...).
+	IDE string `json:"ide"`
+	// IDEHost is the host of the machine the IDE runs on.
+	IDEHost string `json:"ideHost"`
+	// TargetHost is the remote server the IDE is editing, when applicable.
+	TargetHost string `json:"targetHost,omitempty"`
+	// Path is the workspace path being edited.
+	Path string `json:"path,omitempty"`
+	// Event is one of: open, close, agent_request_sent,
+	// agent_response_received, heartbeat.
+	Event string `json:"event"`
+	// Name overrides the display leaf name (defaults to basename of path).
+	Name string `json:"name,omitempty"`
+	// Color optionally carries the workspace title-bar color.
+	Color string `json:"color,omitempty"`
+}
+
+// SessionEventResponse is returned by POST /api/sessions/events.
+type SessionEventResponse struct {
+	OK    bool   `json:"ok"`
+	Key   string `json:"key,omitempty"`
+	Event string `json:"event,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// validSessionEvents is the accepted event vocabulary.
+var validSessionEvents = map[string]bool{
+	"open":                    true,
+	"close":                   true,
+	"agent_request_sent":      true,
+	"agent_response_received": true,
+	"heartbeat":               true,
+}
+
+// sessionEvents ingests a single session lifecycle/activity event, updating the
+// composite-keyed session registry (and the webhook inbox timeline for
+// non-heartbeat events).
+func (s *Server) sessionEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -220,47 +262,91 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}
-	var payload struct {
-		Source         string `json:"source"`
-		Kind           string `json:"kind"`
-		Name           string `json:"name"`
-		Path           string `json:"path"`
-		Host           string `json:"host"`
-		Color          string `json:"color"`
-		ConversationID string `json:"conversationId"`
-	}
+	var payload SessionEventRequest
 	if err := json.Unmarshal(body, &payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
+		writeJSON(w, http.StatusBadRequest, SessionEventResponse{OK: false, Error: "invalid json"})
 		return
 	}
-	name := payload.Name
-	if name == "" && payload.Path != "" {
-		name = filepath.Base(strings.TrimRight(payload.Path, "/"))
+	payload.IDE = strings.TrimSpace(payload.IDE)
+	if payload.IDE == "" {
+		payload.IDE = "cursor"
 	}
+	event := strings.TrimSpace(payload.Event)
+	if !validSessionEvents[event] {
+		writeJSON(w, http.StatusBadRequest, SessionEventResponse{OK: false, Error: "invalid or missing event"})
+		return
+	}
+	if strings.TrimSpace(payload.IDEHost) == "" && strings.TrimSpace(payload.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, SessionEventResponse{OK: false, Error: "ideHost or path required"})
+		return
+	}
+	id := registry.Identity{
+		IDE:        payload.IDE,
+		IDEHost:    payload.IDEHost,
+		TargetHost: payload.TargetHost,
+		Path:       payload.Path,
+	}
+	name := strings.TrimSpace(payload.Name)
 	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "name or path required"})
+		name = id.Name()
+	}
+	// Heartbeats are high-frequency liveness pings and would flood the
+	// timeline; only push meaningful lifecycle/activity events to the inbox.
+	if event != "heartbeat" {
+		host := payload.TargetHost
+		if host == "" {
+			host = payload.IDEHost
+		}
+		webhook.Default.Push(webhook.Event{
+			Source:     payload.IDE,
+			Kind:       event,
+			Name:       name,
+			Path:       payload.Path,
+			Host:       host,
+			Color:      payload.Color,
+			ReceivedAt: time.Now().UTC(),
+		})
+	}
+	_ = s.registry.ApplyEvent(id, event, name, payload.Color)
+	writeJSON(w, http.StatusOK, SessionEventResponse{OK: true, Key: id.Key(), Event: event})
+}
+
+// sessionsList returns the current session registry records (the ingest view of
+// what is open), keyed by composite key.
+func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	source := payload.Source
-	if source == "" {
-		source = "cursor"
+	ttl := s.cfg.Sessions.TTL()
+	now := time.Now()
+	type sessionView struct {
+		Key          string `json:"key"`
+		IDE          string `json:"ide,omitempty"`
+		IDEHost      string `json:"ideHost,omitempty"`
+		TargetHost   string `json:"targetHost,omitempty"`
+		Path         string `json:"path,omitempty"`
+		Name         string `json:"name,omitempty"`
+		Live         bool   `json:"live"`
+		Status       string `json:"status"`
+		LastActivity string `json:"lastActivity,omitempty"`
 	}
-	kind := payload.Kind
-	if kind == "" {
-		kind = "agent-stop"
+	all := s.registry.All()
+	out := make([]sessionView, 0, len(all))
+	for key, rec := range all {
+		out = append(out, sessionView{
+			Key:          key,
+			IDE:          rec.IDE,
+			IDEHost:      rec.IDEHost,
+			TargetHost:   rec.TargetHost,
+			Path:         rec.Path,
+			Name:         rec.Name,
+			Live:         registry.IsFresh(rec, ttl, now),
+			Status:       registry.SessionStatus(rec),
+			LastActivity: registry.LatestActivity(rec),
+		})
 	}
-	webhook.Default.Push(webhook.Event{
-		Source:         source,
-		Kind:           kind,
-		Name:           name,
-		Path:           payload.Path,
-		Host:           payload.Host,
-		Color:          payload.Color,
-		ConversationID: payload.ConversationID,
-		ReceivedAt:     time.Now().UTC(),
-	})
-	_ = s.registry.ApplyEvent(name, kind, payload.Host, payload.Path, payload.Color)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": name, "kind": kind})
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
 
 // staticOrIndex serves the single-page dashboard. It serves the requested

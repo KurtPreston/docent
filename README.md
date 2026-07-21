@@ -8,7 +8,7 @@ Monorepo suite containing local-first tooling for developer activity: **docentd*
 libs/           shared Go packages (model, collectors, correlation, ai,
                 automation, goals, report, workitem, sessionmanager, config, …)
 apps/
-  docentd/              merged daemon (collectors, dashboard, automations, /ingest)
+  docentd/              merged daemon (collectors, dashboard, automations, session ingest)
   docent-automations/   worker that drains queued agent automations
   docent-launcher-*/    hotkey + webview launchers
   docent-reporter/      stateless CLI reporter (was `slakkr`)
@@ -141,7 +141,7 @@ used beyond storage.)
 
 `hooks/docent-notify.sh` + `hooks/hooks.snippet.json` report session activity to
 `docentd`. Copy the script to `~/.cursor/hooks/` and merge the snippet into
-`~/.cursor/hooks.json`; the hook POSTs to `docentd`'s `/ingest` (fire-and-forget, so
+`~/.cursor/hooks.json`; the hook POSTs to `docentd`'s `/api/sessions/events` (fire-and-forget, so
 a down `docentd` never blocks Cursor). Point it with `DOCENT_URL` (remote base URL)
 or `DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sends
 `DOCENT_TOKEN` when set. See [`hooks/README.md`](hooks/README.md).

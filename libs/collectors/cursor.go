@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +38,9 @@ func (c CursorCollector) CollectState(ctx context.Context, directive userdata.Di
 	if machine == "" {
 		machine = directive.ID
 	}
+	// ideHost is the machine the Cursor GUI runs on — the same host docentd (and
+	// this collector) run on. It anchors the composite session identity.
+	ideHost := localHostname()
 	sessions, err := c.list(ctx, directive)
 	if err != nil {
 		return nil, err
@@ -51,9 +55,13 @@ func (c CursorCollector) CollectState(ctx context.Context, directive userdata.Di
 			"window_id": s.ID,
 			"machine":   machine,
 			"live":      "true",
+			"ide":       "cursor",
+			"ideHost":   ideHost,
 		}
+		// s.Host, when present, is the remote server the window edits.
 		if s.Host != "" {
 			fields["host"] = s.Host
+			fields["targetHost"] = s.Host
 		}
 		// Like the wsm collector, a live-window listing is a state, not an
 		// activity event, so ObservedAt is deliberately left unset — real
@@ -71,4 +79,13 @@ func (c CursorCollector) CollectState(ctx context.Context, directive userdata.Di
 		})
 	}
 	return items, nil
+}
+
+// localHostname returns this machine's hostname, or "localhost" if unavailable.
+// It is the ideHost anchor for locally-run editor collectors.
+func localHostname() string {
+	if h, err := os.Hostname(); err == nil && strings.TrimSpace(h) != "" {
+		return h
+	}
+	return "localhost"
 }

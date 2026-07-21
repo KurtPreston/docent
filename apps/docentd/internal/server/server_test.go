@@ -113,6 +113,68 @@ func TestAuth_healthAndStaticStayOpen(t *testing.T) {
 	}
 }
 
+func TestSessionEvents(t *testing.T) {
+	h := newTestServer(t, "")
+
+	// A bad event is rejected.
+	bad := doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":"mac","event":"nope"}`)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad event: got %d, want 400", bad.Code)
+	}
+
+	// An open event is accepted and echoes the composite key.
+	openRR := doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":"mac","path":"/code/proj","event":"open"}`)
+	if openRR.Code != http.StatusOK {
+		t.Fatalf("open event: got %d", openRR.Code)
+	}
+	var openResp SessionEventResponse
+	if err := json.Unmarshal(openRR.Body.Bytes(), &openResp); err != nil {
+		t.Fatal(err)
+	}
+	if !openResp.OK || openResp.Key == "" || openResp.Event != "open" {
+		t.Fatalf("unexpected open response: %+v", openResp)
+	}
+
+	// The session now appears in the ingest listing.
+	listRR := doJSON(t, h, http.MethodGet, "/api/sessions", "", "")
+	if listRR.Code != http.StatusOK {
+		t.Fatalf("list: got %d", listRR.Code)
+	}
+	var list struct {
+		Sessions []struct {
+			Key  string `json:"key"`
+			Name string `json:"name"`
+			Path string `json:"path"`
+			Live bool   `json:"live"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(listRR.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Sessions) != 1 || list.Sessions[0].Name != "proj" || !list.Sessions[0].Live {
+		t.Fatalf("unexpected session list: %+v", list.Sessions)
+	}
+
+	// A close event removes it.
+	closeRR := doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":"mac","path":"/code/proj","event":"close"}`)
+	if closeRR.Code != http.StatusOK {
+		t.Fatalf("close event: got %d", closeRR.Code)
+	}
+	list2 := doJSON(t, h, http.MethodGet, "/api/sessions", "", "")
+	var after struct {
+		Sessions []json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(list2.Body.Bytes(), &after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Sessions) != 0 {
+		t.Fatalf("session should be gone after close, got %d", len(after.Sessions))
+	}
+}
+
 func TestReportJobLifecycle(t *testing.T) {
 	h := newTestServer(t, "")
 

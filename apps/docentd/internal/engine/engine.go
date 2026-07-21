@@ -82,7 +82,9 @@ const (
 type DashboardSession struct {
 	Kind          string `json:"kind"`
 	Name          string `json:"name"`
+	IDE           string `json:"ide,omitempty"`
 	Host          string `json:"host,omitempty"`
+	TargetHost    string `json:"targetHost,omitempty"`
 	Path          string `json:"path,omitempty"`
 	Ticket        string `json:"ticket,omitempty"`
 	Color         string `json:"color,omitempty"`
@@ -545,9 +547,23 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 			case <-ticker.C:
 				e.tick(ctx, false)
 				e.tickSchedules(ctx)
+				e.sweepSessions()
 			}
 		}
 	}()
+}
+
+// sweepSessions prunes sessions whose heartbeat has gone stale (silent for
+// longer than the configured TTL) and rebuilds the snapshot if any were
+// removed. A non-positive TTL disables sweeping.
+func (e *Engine) sweepSessions() {
+	ttl := e.cfg.Sessions.TTL()
+	if ttl <= 0 {
+		return
+	}
+	if removed := e.store.Sweep(ttl, time.Now()); len(removed) > 0 {
+		e.rebuild()
+	}
 }
 
 // tick collects every unit that is due (on initial=true, every on_load unit;
@@ -912,9 +928,10 @@ func (e *Engine) jiraAnnotationDirective() (userdata.Directive, bool) {
 	return userdata.Directive{}, false
 }
 
-// entitiesFrom maps signals to entities, enriches session entities from the
-// registry store, and injects registry-only sessions that still need
-// follow-up (their live window has closed).
+// entitiesFrom maps signals to entities, enriches collector-provided session
+// entities from the registry store, and injects registry-tracked sessions
+// (ingest pipeline) that no collector surfaced — live ones (fresh heartbeat)
+// and closed ones that still need follow-up.
 func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config) []model.Entity {
 	entities := correlation.SignalsToEntities(signals, corrCfg)
 	for i := range entities {
@@ -923,21 +940,27 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 			continue
 		}
 		name := ent.Title
-		if rec, ok := e.store.Get(name); ok {
+		// Collector sessions carry only a leaf name; enrich from the registry
+		// by name (the ingest pipeline holds the real identity + activity).
+		if rec, ok := e.store.GetByName(name); ok {
 			if rec.Color != "" {
 				ent.State["color"] = rec.Color
 			}
-			if rec.Host != "" {
-				ent.Coordinates["host"] = rec.Host
+			if rec.TargetHost != "" {
+				ent.Coordinates["host"] = rec.TargetHost
+				ent.Coordinates["targetHost"] = rec.TargetHost
+			}
+			if rec.IDE != "" {
+				ent.State["ide"] = rec.IDE
 			}
 			ent.State["attention"] = registry.SessionStatus(rec)
 			la := registry.LatestActivity(rec)
 			ent.State["lastActivity"] = la
-			// Drive the work-item "last activity" from real hook timestamps
-			// (last prompt / agent-stop / shell-done / focus / open), not the
-			// wsm poll time — the wsm collector deliberately leaves observedAt
-			// unset. correlation aggregates observedAt across a work item's
-			// entities into its LastActivity.
+			// Drive the work-item "last activity" from real event timestamps
+			// (open / agent request / agent response / heartbeat), not the
+			// collector poll time — the collectors deliberately leave
+			// observedAt unset. correlation aggregates observedAt across a work
+			// item's entities into its LastActivity.
 			if la != "" {
 				ent.State["observedAt"] = la
 			}
@@ -949,13 +972,19 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 		}
 	}
 
-	for name, rec := range e.store.All() {
-		if registry.SessionStatus(rec) != "needs-followup" {
+	ttl := e.cfg.Sessions.TTL()
+	now := time.Now()
+	for key, rec := range e.store.All() {
+		status := registry.SessionStatus(rec)
+		live := registry.IsFresh(rec, ttl, now)
+		// Only surface sessions that are alive or still need a follow-up.
+		if !live && status != "needs-followup" {
 			continue
 		}
+		// Skip sessions a collector already surfaced (matched by leaf name).
 		found := false
 		for _, ent := range entities {
-			if ent.Kind == "session" && ent.Title == name {
+			if ent.Kind == "session" && ent.Title == rec.Name {
 				found = true
 				break
 			}
@@ -963,19 +992,41 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 		if found {
 			continue
 		}
+		title := rec.Name
+		if title == "" {
+			title = rec.Path
+		}
 		la := registry.LatestActivity(rec)
 		ent := model.Entity{
-			ID:          "session:" + name,
+			ID:          "session:" + key,
 			Kind:        "session",
-			Title:       name,
-			State:       map[string]string{"attention": "needs-followup", "live": "false", "lastActivity": la},
+			Title:       title,
+			State:       map[string]string{"attention": status, "lastActivity": la},
 			Coordinates: map[string]string{},
+		}
+		if live {
+			ent.State["live"] = "true"
+		} else {
+			ent.State["live"] = "false"
 		}
 		if la != "" {
 			ent.State["observedAt"] = la
 		}
-		if rec.Host != "" {
-			ent.Coordinates["host"] = rec.Host
+		if rec.IDE != "" {
+			ent.State["ide"] = rec.IDE
+		}
+		if rec.TargetHost != "" {
+			ent.Coordinates["host"] = rec.TargetHost
+			ent.Coordinates["targetHost"] = rec.TargetHost
+		}
+		if rec.IDEHost != "" {
+			ent.Coordinates["ideHost"] = rec.IDEHost
+		}
+		if rec.Path != "" {
+			ent.Coordinates["path"] = rec.Path
+		}
+		if rec.Ticket != "" {
+			ent.Coordinates["ticket"] = rec.Ticket
 		}
 		if rec.Color != "" {
 			ent.State["color"] = rec.Color
@@ -1051,7 +1102,9 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 				ds := DashboardSession{
 					Kind:          "session",
 					Name:          ent.Title,
+					IDE:           ent.State["ide"],
 					Host:          ent.Coordinates["host"],
+					TargetHost:    ent.Coordinates["targetHost"],
 					Path:          ent.Coordinates["path"],
 					Ticket:        correlation.ParseTicketKey(ent.Title, corrCfg),
 					Color:         ent.State["color"],

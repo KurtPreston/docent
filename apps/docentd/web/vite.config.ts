@@ -9,7 +9,7 @@ const API_TARGET =
   (typeof process !== "undefined" && process.env && process.env.DOCENTD_URL) ||
   "http://127.0.0.1:39787";
 
-const proxied = ["/api", "/ingest", "/health"];
+const proxied = ["/api", "/health"];
 
 export default defineConfig({
   plugins: [react()],

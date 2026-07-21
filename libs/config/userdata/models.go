@@ -18,6 +18,7 @@ const DefaultDir = "userdata"
 type ConfigFile struct {
 	AI             AIConfig                      `yaml:"ai,omitempty"`
 	OpenTrigger    OpenTriggerConfig             `yaml:"open_trigger,omitempty"`
+	Sessions       SessionsConfig                `yaml:"sessions,omitempty"`
 	Directives     []Directive                   `yaml:"directives,omitempty"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"execution_modes,omitempty"`
 	Automations    []automation.Rule             `yaml:"automations,omitempty"`
@@ -149,6 +150,53 @@ type OpenTriggerWSM struct {
 // into .vscode/settings.json. Defaults to true when unset.
 func (c OpenTriggerCursor) WriteColorEnabled() bool {
 	return c.WriteColor == nil || *c.WriteColor
+}
+
+// Session heartbeat defaults. A session that misses DefaultMissedHeartbeats
+// consecutive heartbeats (i.e. is silent for interval * missed) is presumed
+// dead and swept from the registry.
+const (
+	DefaultHeartbeatInterval = 30 * time.Second
+	DefaultMissedHeartbeats  = 2
+)
+
+// SessionsConfig tunes the ingest-driven session registry's heartbeat-based
+// liveness. A session is presumed dead once it has been silent for
+// HeartbeatInterval * MissedHeartbeats.
+type SessionsConfig struct {
+	// HeartbeatInterval is the expected cadence of session heartbeats (e.g.
+	// "30s"). Empty uses DefaultHeartbeatInterval.
+	HeartbeatInterval string `yaml:"heartbeat_interval,omitempty"`
+	// MissedHeartbeats is how many consecutive heartbeats a session may miss
+	// before it is presumed dead. Zero uses DefaultMissedHeartbeats.
+	MissedHeartbeats int `yaml:"missed_heartbeats,omitempty"`
+}
+
+// HeartbeatIntervalDuration returns the configured heartbeat interval, or the
+// default when unset/invalid.
+func (c SessionsConfig) HeartbeatIntervalDuration() time.Duration {
+	if c.HeartbeatInterval == "" {
+		return DefaultHeartbeatInterval
+	}
+	d, err := ParseDuration(c.HeartbeatInterval)
+	if err != nil || d <= 0 {
+		return DefaultHeartbeatInterval
+	}
+	return d
+}
+
+// MissedHeartbeatsOrDefault returns the configured miss threshold, or the
+// default when unset.
+func (c SessionsConfig) MissedHeartbeatsOrDefault() int {
+	if c.MissedHeartbeats <= 0 {
+		return DefaultMissedHeartbeats
+	}
+	return c.MissedHeartbeats
+}
+
+// TTL is how long a session may be silent before it is presumed dead.
+func (c SessionsConfig) TTL() time.Duration {
+	return c.HeartbeatIntervalDuration() * time.Duration(c.MissedHeartbeatsOrDefault())
 }
 
 type ValidationError struct {

@@ -24,6 +24,12 @@
 # collector directive below. (Session activity also arrives via the ingest API,
 # POST /api/sessions/events.)
 
+# sessions tunes the ingest registry's heartbeat-based liveness. A session is
+# presumed dead once it is silent for heartbeat_interval * missed_heartbeats.
+# sessions:
+#   heartbeat_interval: 30s   # expected heartbeat cadence (default 30s)
+#   missed_heartbeats: 2      # misses tolerated before a session is dead (default 2)
+
 directives:
   - id: local-git-status
     name: git repo working trees

@@ -45,6 +45,7 @@ type DaemonConfig struct {
 	// OpenTrigger are optional.
 	AI             userdata.AIConfig             `yaml:"-"`
 	OpenTrigger    userdata.OpenTriggerConfig    `yaml:"-"`
+	Sessions       userdata.SessionsConfig       `yaml:"-"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"-"`
 	Automations    []automation.Rule             `yaml:"-"`
 	OutputDir      string                        `yaml:"-"`
@@ -142,6 +143,9 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 	if cfg.OpenTrigger.Provider == "" {
 		cfg.OpenTrigger = file.OpenTrigger
 	}
+	if (cfg.Sessions == userdata.SessionsConfig{}) {
+		cfg.Sessions = file.Sessions
+	}
 	if len(cfg.ExecutionModes) == 0 {
 		cfg.ExecutionModes = file.ExecutionModes
 	}
@@ -162,6 +166,9 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 		}
 		if cfg.OpenTrigger.Provider == "" {
 			cfg.OpenTrigger = extra.OpenTrigger
+		}
+		if (cfg.Sessions == userdata.SessionsConfig{}) {
+			cfg.Sessions = extra.Sessions
 		}
 		if len(cfg.ExecutionModes) == 0 {
 			cfg.ExecutionModes = extra.ExecutionModes
