@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/configschema"
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
 	"github.com/KurtPreston/docent/libs/config/executionmode"
+	"github.com/KurtPreston/docent/libs/model"
 	"github.com/KurtPreston/docent/libs/runlog"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/report"
@@ -69,6 +71,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	timeOfDayFlag := fs.String("time-of-day", "auto", "daily-plan framing: auto (noon cutoff), morning, or afternoon")
 	checkOnly := fs.Bool("check", false, "validate every enabled directive and exit without collecting data")
 	skipCheck := fs.Bool("skip-check", false, "skip the pre-flight directive validation that runs alongside the interactive menu")
+	dump := fs.Bool("dump", false, "write collected signals.json + correlated workitems.json into the run-log dir")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -313,6 +316,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if *dump {
+		a.dumpPipelineIO(run.Dir(), statuses, workItems)
+	}
+
 	// Scope semantics are now honored by the collectors themselves; the
 	// CLI no longer needs to post-filter the aggregated status list.
 	// collectors.FilterToSelf remains exported as a fallback helper for
@@ -352,6 +359,28 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+// dumpPipelineIO writes the collected signals (report inputs) and the
+// correlated work items (report outputs) as indented JSON into the run-log
+// dir, so a run's pipeline I/O can be inspected after the fact. Failures are
+// warned about but never abort the run.
+func (a *App) dumpPipelineIO(dir string, statuses []collectors.StatusItem, workItems []model.WorkItem) {
+	write := func(name string, v any) {
+		path := filepath.Join(dir, name)
+		data, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			fmt.Fprintf(a.Err, "warning: marshal %s: %v\n", name, err)
+			return
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+			fmt.Fprintf(a.Err, "warning: write %s: %v\n", name, err)
+			return
+		}
+		fmt.Fprintf(a.Err, "Wrote %s\n", path)
+	}
+	write("signals.json", statuses)
+	write("workitems.json", workItems)
 }
 
 // runLogAdapter bridges *runlog.Run to collectors.RunLog so the
