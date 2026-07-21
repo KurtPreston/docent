@@ -26,20 +26,15 @@ func TestConfigValidateDirectives(t *testing.T) {
 	}
 }
 
-func TestSessionManagerCursorPollStatusEnabled(t *testing.T) {
-	var c SessionManagerCursor
-	if !c.PollStatusEnabled() {
-		t.Fatal("nil PollStatus should default to true")
-	}
-	yes := true
-	cYes := SessionManagerCursor{PollStatus: &yes}
-	if !cYes.PollStatusEnabled() {
-		t.Fatal("PollStatus true should enable polling")
+func TestOpenTriggerCursorWriteColorEnabled(t *testing.T) {
+	var c OpenTriggerCursor
+	if !c.WriteColorEnabled() {
+		t.Fatal("nil WriteColor should default to true")
 	}
 	no := false
-	cNo := SessionManagerCursor{PollStatus: &no}
-	if cNo.PollStatusEnabled() {
-		t.Fatal("PollStatus false should disable polling")
+	cNo := OpenTriggerCursor{WriteColor: &no}
+	if cNo.WriteColorEnabled() {
+		t.Fatal("WriteColor false should disable color write")
 	}
 }
 

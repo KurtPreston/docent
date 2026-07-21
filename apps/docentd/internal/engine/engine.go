@@ -26,7 +26,7 @@ type Dashboard struct {
 	Backend      string `json:"backend"`
 	SessionCount int    `json:"sessionCount"`
 	GroupCount   int    `json:"groupCount"`
-	// Provider is the configured session_manager provider ("cursor", "wsm",
+	// Provider is the configured open_trigger provider ("cursor", "wsm",
 	// or "" when none). The web app uses it to decide whether to render the
 	// session column and which action a session/path click triggers.
 	Provider string `json:"provider,omitempty"`
@@ -239,7 +239,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		automationSeeded: map[string]bool{},
 		scheduleLastFire: map[string]time.Time{},
 	}
-	e.sessionMgr = sessionmanager.Select(cfg.SessionManager)
+	e.sessionMgr = sessionmanager.Select(cfg.OpenTrigger)
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
 	e.jiraBaseURL = jiraBaseURL(cfg)
 	e.units = e.buildUnits()
@@ -298,10 +298,10 @@ func (e *Engine) ticketURL(collected, key string) string {
 	return e.ticketBrowseURL(key)
 }
 
-// providerKey returns the normalized session_manager provider ("cursor",
+// providerKey returns the normalized open_trigger provider ("cursor",
 // "wsm", or "" when none).
 func (e *Engine) providerKey() string {
-	return normalizeSessionProvider(e.cfg.SessionManager.Provider)
+	return normalizeSessionProvider(e.cfg.OpenTrigger.Provider)
 }
 
 // deepLinkFor returns the provider deep link for a work-item path, or "" when
@@ -1415,7 +1415,7 @@ func (e *Engine) OpenWorkItem(key string) (OpenResult, bool) {
 		return OpenResult{}, false
 	}
 	res := OpenResult{OK: true, Provider: e.providerKey(), DeepLink: detail.DeepLink}
-	if e.providerKey() == "cursor" && e.cfg.SessionManager.Cursor.WriteColorEnabled() && detail.OpenPath != "" {
+	if e.providerKey() == "cursor" && e.cfg.OpenTrigger.Cursor.WriteColorEnabled() && detail.OpenPath != "" {
 		color, fg := detail.Color, detail.FG
 		if color == "" {
 			color = model.ColorForName(detail.Key)
@@ -1457,24 +1457,15 @@ func (e *Engine) CollectUnitNow(ctx context.Context, directiveID string, mode co
 	return true
 }
 
-// EnsureDirectives injects the always-on webhook inbox plus the session
-// collector for the configured session_manager provider. There is no default
-// session provider: when sm.Provider is empty (or unrecognized) no session
-// directive is injected, so the dashboard has no session column and no
-// clickable links. An explicit user-authored directive for the provider always
-// wins over injection.
-func EnsureDirectives(d []userdata.Directive, sm userdata.SessionManagerConfig) []userdata.Directive {
+// EnsureDirectives injects the always-on webhook inbox. Live-window polling is
+// no longer coupled to the open_trigger provider: to list live windows, declare
+// an explicit "cursor" or "wsm" collector directive in config.yaml. Session
+// activity also arrives via the ingest API (POST /api/sessions/events).
+func EnsureDirectives(d []userdata.Directive) []userdata.Directive {
 	hasWebhook := false
-	hasWM := false
-	hasCursor := false
 	for _, dir := range d {
-		switch dir.Collector {
-		case "webhook":
+		if dir.Collector == "webhook" {
 			hasWebhook = true
-		case "wsm":
-			hasWM = true
-		case "cursor":
-			hasCursor = true
 		}
 	}
 	out := append([]userdata.Directive{}, d...)
@@ -1484,38 +1475,6 @@ func EnsureDirectives(d []userdata.Directive, sm userdata.SessionManagerConfig) 
 			// The inbox is drained on read, so collect on every request.
 			Events: &userdata.ModeConfig{Poll: userdata.PollConfig{OnRequest: true}},
 		})
-	}
-	// Live windows are real-time and cheap: collect on load and on every
-	// request.
-	sessionPoll := &userdata.ModeConfig{Poll: userdata.PollConfig{OnRequest: true, OnLoad: true}}
-	switch normalizeSessionProvider(sm.Provider) {
-	case "cursor":
-		if sm.Cursor.PollStatusEnabled() && !hasCursor {
-			cfg := map[string]string{"machine": "local"}
-			if cmd := strings.TrimSpace(sm.Cursor.Command); cmd != "" {
-				cfg["command"] = cmd
-			}
-			if host := strings.TrimSpace(sm.Cursor.Host); host != "" {
-				cfg["host"] = host
-			}
-			out = append(out, userdata.Directive{
-				ID: "local-cursor", Name: "Cursor sessions", Collector: "cursor", Enabled: true,
-				Config: cfg,
-				State:  sessionPoll,
-			})
-		}
-	case "wsm":
-		if !hasWM {
-			base := strings.TrimSpace(sm.WSM.BaseURL)
-			if base == "" {
-				base = "http://127.0.0.1:39788"
-			}
-			out = append(out, userdata.Directive{
-				ID: "local-wm", Name: "Local wsm", Collector: "wsm", Enabled: true,
-				Config: map[string]string{"base_url": base, "machine": "local"},
-				State:  sessionPoll,
-			})
-		}
 	}
 	return out
 }

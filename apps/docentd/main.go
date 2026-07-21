@@ -41,7 +41,7 @@ func serve(args []string) {
 	if *port > 0 {
 		cfg.Port = *port
 	}
-	cfg.Directives = engine.EnsureDirectives(cfg.Directives, cfg.SessionManager)
+	cfg.Directives = engine.EnsureDirectives(cfg.Directives)
 
 	reg, err := registry.NewStore(cfg.RegistryPath)
 	if err != nil {

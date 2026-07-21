@@ -8,8 +8,8 @@
     "ai": {
       "$ref": "#/$defs/ai"
     },
-    "session_manager": {
-      "$ref": "#/$defs/session_manager"
+    "open_trigger": {
+      "$ref": "#/$defs/open_trigger"
     },
     "directives": {
       "type": "array",
@@ -368,15 +368,15 @@
         }
       ]
     },
-    "session_manager": {
+    "open_trigger": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Selects how docent lists and opens editor windows. Omit entirely for no session manager (no session column, no clickable links).",
+      "description": "Selects how docent opens/focuses an editor window for a work item (cursor deep link or wsm webhook). Omit entirely for no clickable open/focus links. Listing live windows is separate: declare a cursor or wsm collector directive.",
       "properties": {
         "provider": {
           "type": "string",
           "enum": ["cursor", "wsm"],
-          "x-docent-prompt": "Session manager (cursor or wsm)",
+          "x-docent-prompt": "Open trigger (cursor or wsm)",
           "x-docent-default": "cursor"
         },
         "cursor": {
@@ -397,13 +397,6 @@
             "write_color": {
               "type": "boolean",
               "default": true,
-              "x-docent-default": true,
-              "x-docent-setup-skip-prompt": true
-            },
-            "poll_status": {
-              "type": "boolean",
-              "default": true,
-              "description": "Poll cursor --status to list live windows. Set false on macOS to avoid Dock bounce.",
               "x-docent-default": true,
               "x-docent-setup-skip-prompt": true
             }
@@ -552,6 +545,9 @@
             },
             {
               "$ref": "#/$defs/directive.wsm"
+            },
+            {
+              "$ref": "#/$defs/directive.cursor"
             }
           ]
         }
@@ -1045,6 +1041,37 @@
             "base_url": {
               "type": "string",
               "x-docent-prompt": "wsm HTTP base URL (e.g. http://127.0.0.1:39788)"
+            },
+            "machine": {
+              "type": "string",
+              "x-docent-prompt": "Machine label reported with live windows"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["collector"]
+    },
+    "directive.cursor": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "cursor",
+          "x-docent-display-name": "Cursor sessions"
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "x-docent-prompt": "Cursor CLI command (default cursor)"
+            },
+            "host": {
+              "type": "string",
+              "x-docent-prompt": "SSH host alias for remote windows"
             },
             "machine": {
               "type": "string",

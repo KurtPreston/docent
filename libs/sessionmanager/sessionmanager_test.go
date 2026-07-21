@@ -127,14 +127,14 @@ func TestCursorFocusUnsupported(t *testing.T) {
 }
 
 func TestSelect(t *testing.T) {
-	if mgr := Select(userdata.SessionManagerConfig{}); mgr != nil {
+	if mgr := Select(userdata.OpenTriggerConfig{}); mgr != nil {
 		t.Errorf("empty provider: want nil, got %T", mgr)
 	}
-	if mgr := Select(userdata.SessionManagerConfig{Provider: "tmux"}); mgr != nil {
+	if mgr := Select(userdata.OpenTriggerConfig{Provider: "tmux"}); mgr != nil {
 		t.Errorf("unknown provider: want nil, got %T", mgr)
 	}
 
-	cur, ok := Select(userdata.SessionManagerConfig{Provider: "cursor"}).(*CursorManager)
+	cur, ok := Select(userdata.OpenTriggerConfig{Provider: "cursor"}).(*CursorManager)
 	if !ok {
 		t.Fatal("cursor provider: want *CursorManager")
 	}
@@ -142,15 +142,15 @@ func TestSelect(t *testing.T) {
 		t.Errorf("cursor default command = %q, want cursor", cur.Command)
 	}
 
-	cur2 := Select(userdata.SessionManagerConfig{
+	cur2 := Select(userdata.OpenTriggerConfig{
 		Provider: "cursor",
-		Cursor:   userdata.SessionManagerCursor{Command: "my-cursor", Host: "box"},
+		Cursor:   userdata.OpenTriggerCursor{Command: "my-cursor", Host: "box"},
 	}).(*CursorManager)
 	if cur2.Command != "my-cursor" || cur2.Host != "box" {
 		t.Errorf("cursor overrides not applied: %+v", cur2)
 	}
 
-	w, ok := Select(userdata.SessionManagerConfig{Provider: "wsm"}).(*WSMManager)
+	w, ok := Select(userdata.OpenTriggerConfig{Provider: "wsm"}).(*WSMManager)
 	if !ok {
 		t.Fatal("wsm provider: want *WSMManager")
 	}

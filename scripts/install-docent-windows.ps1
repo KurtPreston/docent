@@ -569,12 +569,12 @@ if ($Mode -eq 'local') {
     }
 }
 
-# --- session manager provider (local docentd only) --------------------------
-# Left unset on Windows. provider: cursor shells `cursor --status` on every
-# dashboard poll and can spawn/flash a second Cursor GUI from a Scheduled Task
-# context. Prefer session_manager.provider: wsm (with the separate wsm daemon),
-# or leave unset for no session column. An existing block in config.yaml is
-# left untouched.
+# --- open trigger provider (local docentd only) -----------------------------
+# Left unset on Windows, and no `cursor` collector directive is added. A cursor
+# directive shells `cursor --status` on every dashboard poll and can spawn/flash
+# a second Cursor GUI from a Scheduled Task context. Prefer open_trigger.provider:
+# wsm (with the separate wsm daemon) plus a `wsm` directive, or leave unset for
+# no session column. Existing config.yaml blocks are left untouched.
 #
 # The window manager (wsm) and its VirtualDesktop module prerequisite are
 # installed separately from the wsm repo; nothing to do here.

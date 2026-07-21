@@ -17,7 +17,7 @@ const DefaultDir = "userdata"
 // optional user-declared execution modes and automations.
 type ConfigFile struct {
 	AI             AIConfig                      `yaml:"ai,omitempty"`
-	SessionManager SessionManagerConfig          `yaml:"session_manager,omitempty"`
+	OpenTrigger    OpenTriggerConfig             `yaml:"open_trigger,omitempty"`
 	Directives     []Directive                   `yaml:"directives,omitempty"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"execution_modes,omitempty"`
 	Automations    []automation.Rule             `yaml:"automations,omitempty"`
@@ -111,20 +111,21 @@ type AIProviderClaude struct {
 	Args    []string `yaml:"args,omitempty"`
 }
 
-// SessionManagerConfig selects how docent lists and opens editor windows for a
-// work item. It mirrors AIConfig's discriminated shape: Provider is the
-// discriminator, and each provider has its own nested block. An empty Provider
-// means no session manager is configured — the dashboard shows no session
-// column and no clickable open/focus links.
-type SessionManagerConfig struct {
-	// Provider is one of "cursor" or "wsm". Empty means no session manager.
-	Provider string               `yaml:"provider,omitempty"`
-	Cursor   SessionManagerCursor `yaml:"cursor,omitempty"`
-	WSM      SessionManagerWSM    `yaml:"wsm,omitempty"`
+// OpenTriggerConfig selects how docent opens/focuses an editor window for a
+// work item (deep link, wsm webhook, etc.). It mirrors AIConfig's discriminated
+// shape: Provider is the discriminator, and each provider has its own nested
+// block. An empty Provider means no open trigger is configured — the dashboard
+// shows no clickable open/focus links. Listing live windows is a separate
+// concern handled by collector directives (e.g. a "cursor" or "wsm" directive).
+type OpenTriggerConfig struct {
+	// Provider is one of "cursor" or "wsm". Empty means no open trigger.
+	Provider string            `yaml:"provider,omitempty"`
+	Cursor   OpenTriggerCursor `yaml:"cursor,omitempty"`
+	WSM      OpenTriggerWSM    `yaml:"wsm,omitempty"`
 }
 
-// SessionManagerCursor configures the Cursor session provider.
-type SessionManagerCursor struct {
+// OpenTriggerCursor configures the Cursor open trigger (deep links / CLI open).
+type OpenTriggerCursor struct {
 	// Command overrides the Cursor CLI binary (default "cursor").
 	Command string `yaml:"command,omitempty"`
 	// Host is the ssh alias the local Cursor uses to reach this box, used to
@@ -134,14 +135,10 @@ type SessionManagerCursor struct {
 	// repo's .vscode/settings.json. Nil means the default (true); set false to
 	// disable the color write entirely.
 	WriteColor *bool `yaml:"write_color,omitempty"`
-	// PollStatus controls whether docent polls `cursor --status` to list live
-	// windows. Nil means the default (true); set false to skip the poll (e.g. on
-	// macOS where --status briefly spawns a second Cursor GUI).
-	PollStatus *bool `yaml:"poll_status,omitempty"`
 }
 
-// SessionManagerWSM configures the wsm session provider.
-type SessionManagerWSM struct {
+// OpenTriggerWSM configures the wsm open trigger.
+type OpenTriggerWSM struct {
 	// BaseURL overrides the wsm HTTP base URL (default http://127.0.0.1:39788).
 	BaseURL string `yaml:"base_url,omitempty"`
 	// Token is an optional bearer token for the wsm API.
@@ -150,14 +147,8 @@ type SessionManagerWSM struct {
 
 // WriteColorEnabled reports whether opening a work item should sync its color
 // into .vscode/settings.json. Defaults to true when unset.
-func (c SessionManagerCursor) WriteColorEnabled() bool {
+func (c OpenTriggerCursor) WriteColorEnabled() bool {
 	return c.WriteColor == nil || *c.WriteColor
-}
-
-// PollStatusEnabled reports whether the cursor collector should poll
-// `cursor --status` for live windows. Defaults to true when unset.
-func (c SessionManagerCursor) PollStatusEnabled() bool {
-	return c.PollStatus == nil || *c.PollStatus
 }
 
 type ValidationError struct {

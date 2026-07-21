@@ -74,10 +74,10 @@ type DeepLinker interface {
 	DeepLink(path, host string) string
 }
 
-// Select returns the SessionManager described by config, or nil when no
-// provider is configured. A nil manager means "no session manager": callers
-// render no session column and no clickable links.
-func Select(cfg userdata.SessionManagerConfig) SessionManager {
+// Select returns the SessionManager described by the open-trigger config, or
+// nil when no provider is configured. A nil manager means "no open trigger":
+// callers render no clickable open/focus links.
+func Select(cfg userdata.OpenTriggerConfig) SessionManager {
 	switch normalizeProvider(cfg.Provider) {
 	case "cursor":
 		cmd := strings.TrimSpace(cfg.Cursor.Command)

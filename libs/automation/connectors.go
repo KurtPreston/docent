@@ -89,7 +89,7 @@ type OpenRunner struct {
 
 func (r OpenRunner) Run(ctx context.Context, action Action, ev Event) error {
 	if r.Opener == nil {
-		return fmt.Errorf("open: no session manager configured")
+		return fmt.Errorf("open: no open trigger configured")
 	}
 	actx := EventContext(ev)
 	path := strings.TrimSpace(action.Cwd)

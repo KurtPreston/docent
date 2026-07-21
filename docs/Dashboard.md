@@ -109,33 +109,54 @@ re-run). See [docs/Reporting.md](Reporting.md) for what each mode/scope
 actually does and how AI providers are configured — the Report tab and the
 CLI share both.
 
-## Session manager (cursor / wsm / none)
+## Open trigger + live-window polling (cursor / wsm / none)
 
-How the dashboard lists and opens editor windows is selected by a
-`session_manager` block in `config.yaml` (mirroring the `ai:` block). There is
-**no default** — set one explicitly (the Linux remote installer may suggest
-`cursor` when that CLI is present; macOS/Windows installers leave it unset):
+Two independent concerns:
 
-- **`cursor`** — lists windows via `cursor --status` (disable with
-  `cursor.poll_status: false`) and renders each work item's path as a
-  `cursor://` deep link. Clicking it first syncs the work item's color into
-  the repo's `.vscode/settings.json` (via `POST /api/workitems/:key/open`,
-  disable with `cursor.write_color: false`) and then navigates the link to
-  open/focus the window. Exact-window focus is best-effort (Cursor may open a
-  duplicate). Prefer this on a remote Linux docentd that shares Cursor's
-  remote-cli IPC; on macOS/Windows local docentd, polling `cursor --status`
-  can spawn a second GUI briefly — set `poll_status: false` to keep deep-link
-  open without listing live windows.
-- **`wsm`** — lists and focuses windows through the local [wsm](https://github.com/KurtPreston/wsm)
+1. **Open trigger** — how the dashboard opens/focuses an editor window for a
+   work item — is selected by an `open_trigger` block in `config.yaml`
+   (mirroring the `ai:` block). There is **no default**.
+2. **Live-window listing** — whether the dashboard shows which windows are open
+   — is a separate collector directive (`cursor` or `wsm`). Session activity can
+   also arrive via the ingest API (`POST /api/sessions/events`).
+
+The Linux installer sets `open_trigger.provider: cursor` and adds a `cursor`
+directive when that CLI is present; macOS/Windows installers leave both unset.
+
+Open trigger providers:
+
+- **`cursor`** — renders each work item's path as a `cursor://` deep link.
+  Clicking it first syncs the work item's color into the repo's
+  `.vscode/settings.json` (via `POST /api/workitems/:key/open`, disable with
+  `cursor.write_color: false`) and then navigates the link to open/focus the
+  window. Exact-window focus is best-effort (Cursor may open a duplicate).
+- **`wsm`** — opens/focuses windows through the local [wsm](https://github.com/KurtPreston/wsm)
   daemon. Choose this on the workstation when you need reliable exact-window focus.
-- **unset** — no session column and no clickable links.
+- **unset** — no clickable open/focus links.
+
+To also list live windows, declare a matching collector directive. On a remote
+Linux docentd that shares Cursor's remote-cli IPC, a `cursor` directive polling
+`cursor --status` works well; on macOS/Windows local docentd it can spawn a
+second GUI briefly, so omit the `cursor` directive there (deep-link open still
+works).
 
 ```yaml
-session_manager:
+open_trigger:
   provider: cursor      # or: wsm
   cursor:
     write_color: true   # sync work-item color into .vscode/settings.json (default)
-    poll_status: false  # skip cursor --status (recommended on macOS)
+
+directives:
+  - id: local-cursor    # list live windows via cursor --status
+    name: Cursor sessions
+    collector: cursor
+    enabled: true
+    config:
+      machine: local
+    state:
+      poll:
+        on_request: true
+        on_load: true
 ```
 
 ```

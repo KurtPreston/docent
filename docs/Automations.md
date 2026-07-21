@@ -92,7 +92,7 @@ Optional gates evaluated after the trigger matches, before any action runs:
 | `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`, and the optional prompt controls `prompt` / `context` (see [Report delivery](#report-delivery)). |
 | `agent` | Run a write-capable coding agent (`cursor` or `claude`) in a provisioned workdir | `provider`, `workdir` (`worktree` default, or `open_path`), `prompt` (required), `post` (see below). **Queued** to the [`docent-automations`](#the-docent-automations-worker) worker — see that section. |
 | `agent-inline` | Same as `agent`, but runs in-process instead of queuing | Same fields as `agent`; used by tests or setups that don't run the worker. |
-| `open` | Open a path in the editor via the configured [session manager](Dashboard.md#session-manager-cursor--wsm--none) | An optional templated `cwd`. Only available when `session_manager` is configured. |
+| `open` | Open a path in the editor via the configured [open trigger](Dashboard.md#open-trigger--live-window-polling-cursor--wsm--none) | An optional templated `cwd`. Only available when `open_trigger` is configured. |
 
 An action's failure doesn't stop the chain: every action in a rule runs even
 if an earlier one failed, and each subsequent action's template/env context

@@ -636,12 +636,13 @@ bootstrap_docent_config() {
   fi
 }
 
-# session_manager is left unset on macOS. provider: cursor shells
-# `cursor --status` on every dashboard poll unless cursor.poll_status: false;
+# open_trigger is left unset on macOS, and no `cursor` collector directive is
+# added. A cursor directive shells `cursor --status` on every dashboard poll;
 # from launchd that path does `open -n` and briefly spawns a second Cursor GUI
-# (window flicker). Prefer session_manager.provider: wsm (with the separate wsm
-# daemon), poll_status: false for deep-link open only, or leave unset for no
-# session column. An existing block in config.yaml is left untouched.
+# (window flicker). Prefer open_trigger.provider: wsm (with the separate wsm
+# daemon) plus a `wsm` directive, open_trigger.provider: cursor alone for
+# deep-link open only (no cursor directive), or leave unset for no session
+# column. Existing config.yaml blocks are left untouched.
 
 bootstrap_docent_config
 

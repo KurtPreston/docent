@@ -579,9 +579,9 @@ func newCursorTestEngine(t *testing.T, sshHost string, writeColor *bool) *Engine
 	}
 	cfg := config.DaemonConfig{
 		SSHHost: sshHost,
-		SessionManager: userdata.SessionManagerConfig{
+		OpenTrigger: userdata.OpenTriggerConfig{
 			Provider: "cursor",
-			Cursor:   userdata.SessionManagerCursor{WriteColor: writeColor},
+			Cursor:   userdata.OpenTriggerCursor{WriteColor: writeColor},
 		},
 	}
 	return New(cfg, store)
@@ -773,26 +773,26 @@ func TestEngineNewDisablesGenericTicketsWithoutJira(t *testing.T) {
 	}
 }
 
-func TestEnsureDirectives_cursorPollStatusDisabled(t *testing.T) {
-	no := false
-	dirs := EnsureDirectives(nil, userdata.SessionManagerConfig{
-		Provider: "cursor",
-		Cursor:   userdata.SessionManagerCursor{PollStatus: &no},
-	})
-	for _, d := range dirs {
-		if d.Collector == "cursor" {
-			t.Fatalf("poll_status=false should not inject cursor collector, got %+v", d)
-		}
-	}
+func TestEnsureDirectives_injectsWebhookOnly(t *testing.T) {
+	dirs := EnsureDirectives(nil)
 	if !hasCollector(dirs, "webhook") {
-		t.Fatal("expected webhook directive to still be injected")
+		t.Fatal("expected webhook directive to be injected")
+	}
+	// Live-window pollers are no longer auto-injected; they must be declared
+	// explicitly as directives.
+	if hasCollector(dirs, "cursor") || hasCollector(dirs, "wsm") {
+		t.Fatalf("no session poller should be injected, got %+v", dirs)
 	}
 }
 
-func TestEnsureDirectives_cursorPollStatusDefaultInjects(t *testing.T) {
-	dirs := EnsureDirectives(nil, userdata.SessionManagerConfig{Provider: "cursor"})
+func TestEnsureDirectives_preservesUserCursorDirective(t *testing.T) {
+	in := []userdata.Directive{{ID: "local-cursor", Name: "Cursor sessions", Collector: "cursor", Enabled: true}}
+	dirs := EnsureDirectives(in)
 	if !hasCollector(dirs, "cursor") {
-		t.Fatal("default poll_status should inject cursor collector")
+		t.Fatal("user-declared cursor directive should be preserved")
+	}
+	if !hasCollector(dirs, "webhook") {
+		t.Fatal("expected webhook directive to still be injected")
 	}
 }
 

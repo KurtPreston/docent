@@ -12,7 +12,7 @@ import (
 
 // CursorCollector lists live Cursor windows via the sessionmanager Cursor
 // provider (which shells `cursor --status`). The collector directive is named
-// "cursor" and is auto-injected when session_manager.provider == cursor.
+// "cursor" and must be declared explicitly in config.yaml to poll live windows.
 type CursorCollector struct {
 	Clock func() time.Time
 

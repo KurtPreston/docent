@@ -27,7 +27,7 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Collectors) != 9 {
+	if len(m.Collectors) != 10 {
 		t.Fatalf("collectors: got %d", len(m.Collectors))
 	}
 	var foundFormatter bool
@@ -102,24 +102,23 @@ directives:
 	}
 }
 
-func TestValidateYAML_sessionManagerAccepted(t *testing.T) {
+func TestValidateYAML_openTriggerAccepted(t *testing.T) {
 	cases := []string{
 		`
-session_manager:
+open_trigger:
   provider: cursor
   cursor:
     command: cursor
     host: dev-box
     write_color: false
-    poll_status: false
 `,
 		`
-session_manager:
+open_trigger:
   provider: wsm
   wsm:
     base_url: http://127.0.0.1:39788
 `,
-		// Absent session_manager is valid.
+		// Absent open_trigger is valid.
 		`
 ai:
   provider: rule-based
@@ -132,13 +131,29 @@ ai:
 	}
 }
 
-func TestValidateYAML_sessionManagerBadProviderFails(t *testing.T) {
+func TestValidateYAML_openTriggerBadProviderFails(t *testing.T) {
 	doc := strings.TrimSpace(`
-session_manager:
+open_trigger:
   provider: tmux
 `)
 	if err := configschema.ValidateYAML([]byte(doc)); err == nil {
-		t.Fatal("expected schema rejection for unknown session_manager provider")
+		t.Fatal("expected schema rejection for unknown open_trigger provider")
+	}
+}
+
+func TestValidateYAML_cursorDirectiveAccepted(t *testing.T) {
+	doc := strings.TrimSpace(`
+directives:
+  - id: local-cursor
+    name: Cursor sessions
+    collector: cursor
+    enabled: true
+    config:
+      command: cursor
+      machine: local
+`)
+	if err := configschema.ValidateYAML([]byte(doc)); err != nil {
+		t.Fatalf("cursor directive should validate: %v", configschema.ValidationProblems(err))
 	}
 }
 

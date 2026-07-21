@@ -8,18 +8,21 @@
 #     base_url: http://127.0.0.1:11434
 #     model: qwen3
 
-# session_manager selects how the dashboard opens/lists editor windows.
-# Omit it entirely for no session column and no clickable links.
+# open_trigger selects how the dashboard opens/focuses an editor window for a
+# work item. Omit it entirely for no clickable open/focus links.
 #   provider: cursor        # or: wsm
 #   cursor:
 #     command: cursor       # Cursor CLI binary
 #     host: my-dev-box      # ssh alias for remote deep links (defaults to sshHost)
 #     write_color: true     # sync work-item color into .vscode/settings.json (default true)
-#     poll_status: false    # skip cursor --status polling (recommended on macOS)
-# session_manager:
+# open_trigger:
 #   provider: wsm
 #   wsm:
 #     base_url: http://127.0.0.1:39788
+#
+# Listing live editor windows is a separate concern: declare a "cursor" or "wsm"
+# collector directive below. (Session activity also arrives via the ingest API,
+# POST /api/sessions/events.)
 
 directives:
   - id: local-git-status
@@ -36,3 +39,15 @@ directives:
   #     username: me
   #   credential_refs:
   #     token: DOCENT_GITHUB_TOKEN
+
+  # Live editor windows via `cursor --status` (uncomment to enable):
+  # - id: local-cursor
+  #   name: Cursor sessions
+  #   collector: cursor
+  #   enabled: true
+  #   config:
+  #     machine: local
+  #   state:
+  #     poll:
+  #       on_request: true
+  #       on_load: true

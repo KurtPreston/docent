@@ -42,9 +42,9 @@ type DaemonConfig struct {
 	Directives       []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI and
-	// SessionManager are optional.
+	// OpenTrigger are optional.
 	AI             userdata.AIConfig             `yaml:"-"`
-	SessionManager userdata.SessionManagerConfig `yaml:"-"`
+	OpenTrigger    userdata.OpenTriggerConfig    `yaml:"-"`
 	ExecutionModes []executionmode.ExecutionMode `yaml:"-"`
 	Automations    []automation.Rule             `yaml:"-"`
 	OutputDir      string                        `yaml:"-"`
@@ -139,8 +139,8 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 	if cfg.AI.Provider == "" {
 		cfg.AI = file.AI
 	}
-	if cfg.SessionManager.Provider == "" {
-		cfg.SessionManager = file.SessionManager
+	if cfg.OpenTrigger.Provider == "" {
+		cfg.OpenTrigger = file.OpenTrigger
 	}
 	if len(cfg.ExecutionModes) == 0 {
 		cfg.ExecutionModes = file.ExecutionModes
@@ -160,8 +160,8 @@ func mergeAppConfig(cfg *DaemonConfig) error {
 		if cfg.AI.Provider == "" {
 			cfg.AI = extra.AI
 		}
-		if cfg.SessionManager.Provider == "" {
-			cfg.SessionManager = extra.SessionManager
+		if cfg.OpenTrigger.Provider == "" {
+			cfg.OpenTrigger = extra.OpenTrigger
 		}
 		if len(cfg.ExecutionModes) == 0 {
 			cfg.ExecutionModes = extra.ExecutionModes

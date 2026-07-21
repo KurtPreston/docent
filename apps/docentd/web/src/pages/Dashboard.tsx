@@ -260,7 +260,7 @@ function jiraFilterText(g: DashboardGroup): string {
 // column only appears when its backing collector is configured. `collectors` is
 // null until the /api/collectors fetch resolves, in which case we optimistically
 // show every column (matching the pre-gating behavior) rather than flashing them
-// away. The session column is instead gated on the active session_manager
+// away. The session column is instead gated on the active open_trigger
 // provider (see sessionHeaderFor / the columns filter).
 type ColumnGating = { jira: boolean; github: boolean };
 
@@ -497,7 +497,7 @@ export function Dashboard() {
 
   // Gate collector-backed columns on the docent config: JIRA needs a jira
   // collector and PRs need a github collector. The session column shows only
-  // when a session_manager provider is configured (empty provider ⇒ no column,
+  // when an open_trigger provider is configured (empty provider ⇒ no column,
   // no clickable links).
   const columns = allColumns.filter((c) => {
     if (c.key === "jira") return gating.jira;

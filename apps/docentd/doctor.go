@@ -22,7 +22,7 @@ func runDoctor(args []string) {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
-	cfg.Directives = engine.EnsureDirectives(cfg.Directives, cfg.SessionManager)
+	cfg.Directives = engine.EnsureDirectives(cfg.Directives)
 	reg := collectors.NewRegistry(nil)
 	opts := &collectors.ValidateOpts{UserdataDir: cfg.ConfigDir}
 	issues := reg.Validate(context.Background(), cfg.Directives, opts)

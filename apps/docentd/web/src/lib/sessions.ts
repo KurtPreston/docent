@@ -3,7 +3,7 @@ import { errMsg } from "./format";
 import { docentFetch } from "./auth";
 import type { DashboardGroup } from "./types";
 
-// Provider-aware session actions. docent's session_manager provider decides how
+// Provider-aware session actions. docent's open_trigger provider decides how
 // a session/path click behaves:
 //   - "cursor": sync the work item's color (backend) then navigate a cursor://
 //     deep link so the local Cursor opens/focuses the folder.
