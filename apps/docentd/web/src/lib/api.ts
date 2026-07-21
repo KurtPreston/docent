@@ -15,6 +15,7 @@ import type {
   ConfigFileView,
   ConfigSaveResult,
   AutomationsView,
+  SessionsView,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -26,6 +27,7 @@ async function getJSON<T>(url: string): Promise<T> {
 export const fetchDashboard = (): Promise<Dashboard> => getJSON<Dashboard>("/api/workitems");
 export const fetchSignals = (): Promise<SignalsView> => getJSON<SignalsView>("/api/signals");
 export const fetchCollectors = (): Promise<CollectorsView> => getJSON<CollectorsView>("/api/collectors");
+export const fetchSessions = (): Promise<SessionsView> => getJSON<SessionsView>("/api/sessions");
 
 // fetchWorkItem returns null on a 404 (unknown key) so callers can render a
 // friendly "not found" state distinct from a transport error.

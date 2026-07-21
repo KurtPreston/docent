@@ -3,6 +3,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { Dashboard } from "./pages/Dashboard";
 import { Signals } from "./pages/Signals";
 import { Collectors } from "./pages/Collectors";
+import { Sessions } from "./pages/Sessions";
 import { WorkItem } from "./pages/WorkItem";
 import { Report } from "./pages/Report";
 import { Automations } from "./pages/Automations";
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
   { path: "/", element: <Dashboard /> },
   { path: "/signals", element: <Signals /> },
   { path: "/collectors", element: <Collectors /> },
+  { path: "/sessions", element: <Sessions /> },
   { path: "/report", element: <Report /> },
   { path: "/automations", element: <Automations /> },
   {

@@ -92,6 +92,25 @@ export type SignalsView = {
   units: SignalUnit[];
 };
 
+// RegistrySession mirrors the sessionView struct returned by GET /api/sessions
+// (see apps/docentd/internal/server/server.go sessionsList): the raw session
+// registry, keyed by composite key, rather than the work-item grouped view.
+export type RegistrySession = {
+  key: string;
+  ide?: string;
+  ideHost?: string;
+  targetHost?: string;
+  path?: string;
+  name?: string;
+  live: boolean;
+  status: string;
+  lastActivity?: string;
+};
+
+export type SessionsView = {
+  sessions: RegistrySession[];
+};
+
 export type UnitView = {
   directiveId: string;
   collector: string;
