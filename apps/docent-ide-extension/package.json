@@ -1,0 +1,59 @@
+{
+  "name": "docent-ide-extension",
+  "displayName": "Docent Session Reporter",
+  "description": "Reports editor window lifecycle (open/close/focus) and heartbeats to docentd's session ingest API.",
+  "version": "0.1.0",
+  "publisher": "docent",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KurtPreston/docent.git",
+    "directory": "apps/docent-ide-extension"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Docent",
+      "properties": {
+        "docent.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:39787",
+          "description": "Base URL of the docentd daemon that receives session events."
+        },
+        "docent.token": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token for docentd (leave empty when docentd is unauthenticated / loopback-only)."
+        },
+        "docent.heartbeatSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "description": "How often (seconds) to send a heartbeat so docentd keeps the session marked live."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies -o docent-ide-extension.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  }
+}

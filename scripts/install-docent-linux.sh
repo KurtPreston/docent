@@ -33,6 +33,7 @@ INSTALL_SYSTEMD=1
 SKIP_BUILD=0
 ENABLE_LINGER=1
 DRY_RUN=0
+INSTALL_EXTENSION="${INSTALL_EXTENSION:-ask}"
 GO="${DOCENT_GO:-}"
 NODE="${DOCENT_NODE:-node}"
 # NPM is derived from $NODE's toolchain at build time (see build_frontend) unless
@@ -62,6 +63,8 @@ Options:
                     have an active login session, so scheduled automations are
                     skipped whenever you're logged out.
   --linger          Enable lingering (default) so docentd survives logout
+  --extension       Install the docent IDE extension into detected editors
+  --no-extension    Skip the docent IDE extension (default is to ask on a TTY)
   --port N          Dashboard port (default: 39787)
   --bin-dir PATH    Install binary here (default: ~/.local/bin)
   --dry-run         Print actions without changing the system
@@ -92,6 +95,8 @@ while [ $# -gt 0 ]; do
     --no-build) SKIP_BUILD=1 ;;
     --linger) ENABLE_LINGER=1 ;;
     --no-linger) ENABLE_LINGER=0 ;;
+    --extension) INSTALL_EXTENSION=yes ;;
+    --no-extension) INSTALL_EXTENSION=no ;;
     --port) shift; DOCENT_PORT="${1:?--port requires a number}" ;;
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
     --dry-run) DRY_RUN=1 ;;
@@ -325,6 +330,81 @@ EOF
 
 bootstrap_config
 configure_open_trigger
+
+# --- docent IDE extension ----------------------------------------------------
+# ide_user_dir maps an editor CLI to its Linux user-settings directory.
+ide_user_dir() {
+  case "$1" in
+    cursor) printf '%s' "$HOME/.config/Cursor/User" ;;
+    code)   printf '%s' "$HOME/.config/Code/User" ;;
+  esac
+}
+
+write_ide_settings() {
+  local editor="$1" dir file url token tmp
+  dir="$(ide_user_dir "$editor")"
+  file="$dir/settings.json"
+  url="http://127.0.0.1:$DOCENT_PORT"
+  token="${DOCENT_TOKEN:-}"
+  if [ -z "$token" ] && [ -f "$CONFIG_DIR/.env" ]; then
+    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r')"
+  fi
+  run mkdir -p "$dir"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run printf '%s\n' "write docent.url/docent.token into $file"
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "  jq not found; set docent.url in $file manually" >&2
+    return 0
+  fi
+  [ -f "$file" ] || echo '{}' >"$file"
+  tmp="$(mktemp)"
+  jq --arg url "$url" --arg token "$token" \
+    '. + {"docent.url": $url} + (if $token != "" then {"docent.token": $token} else {} end)' \
+    "$file" >"$tmp" && mv "$tmp" "$file"
+  log "wrote docent settings to $file"
+}
+
+configure_ide_extension() {
+  local vsix="$ROOT/apps/docent-ide-extension/docent-ide-extension.vsix"
+  local found=0 editor
+  for editor in cursor code; do
+    command -v "$editor" >/dev/null 2>&1 && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    log "no Cursor/VS Code CLI found — skipping IDE extension"
+    return 0
+  fi
+
+  local do_install=0 ans
+  case "$INSTALL_EXTENSION" in
+    yes|1) do_install=1 ;;
+    no|0) return 0 ;;
+    ask)
+      if [ -t 0 ]; then
+        printf 'Install the docent session-reporter extension into detected editors? [y/N] '
+        read -r ans
+        case "$ans" in y|Y|yes|Yes) do_install=1 ;; esac
+      fi
+      ;;
+  esac
+  [ "$do_install" -eq 1 ] || return 0
+
+  if [ ! -f "$vsix" ]; then
+    log "building docent IDE extension"
+    run env DOCENT_NODE="$NODE" bash "$ROOT/scripts/build-extension.sh" >/dev/null \
+      || { echo "  extension build failed; skipping" >&2; return 0; }
+  fi
+  for editor in cursor code; do
+    command -v "$editor" >/dev/null 2>&1 || continue
+    log "installing docent extension into $editor"
+    run "$editor" --install-extension "$vsix" --force || echo "  $editor extension install failed" >&2
+    write_ide_settings "$editor"
+  done
+}
+
+configure_ide_extension
 
 # --- systemd --user service ---------------------------------------------------
 if [ "$INSTALL_SYSTEMD" -eq 1 ]; then

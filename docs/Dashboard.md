@@ -171,6 +171,25 @@ directives:
                                            macOS: window raised, no Spaces)
 ```
 
+## Session ingest: IDE extension + Cursor hooks
+
+Besides polling collectors, docentd receives session events directly at
+`POST /api/sessions/events`, keyed by the composite `ide`+`ideHost`+`targetHost`+`path`:
+
+- The [docent IDE extension](../apps/docent-ide-extension/README.md) (a small
+  VS Code / Cursor extension) reports window lifecycle — `open` on activate,
+  periodic `heartbeat`, `close` on shutdown/folder-removal. A session is
+  presumed dead once it is silent for `sessions.heartbeat_interval *
+  sessions.missed_heartbeats` (default 30s × 2), then swept from the registry.
+- The slim [Cursor hook](../hooks/README.md) reports agent activity
+  (`agent_request_sent` / `agent_response_received`), which the extension API
+  cannot observe.
+
+Build the extension with `scripts/build-extension.sh`; the platform installers
+offer to install it (and write `docent.url` / `docent.token` into the editor's
+settings) when they detect Cursor or VS Code. See
+[`GET /api/sessions`](#docentd-http-api) for the ingest view of live sessions.
+
 ## Window manager (wsm)
 
 The window manager is now the standalone [wsm](https://github.com/KurtPreston/wsm)

@@ -31,6 +31,7 @@ WSM_PORT=39788
 INSTALL_HOOKS=auto
 INSTALL_HAMMERSPOON=1
 INSTALL_LAUNCHD=1
+INSTALL_EXTENSION="${INSTALL_EXTENSION:-ask}"
 SKIP_BUILD=0
 DRY_RUN=0
 DOCENTD_MODE=""  # local | remote (resolved after arg parse)
@@ -70,6 +71,8 @@ or retype credentials; DOCENTD_URL still overrides.
 Options:
   --hooks           Install Cursor hooks even if Cursor.app is not found
   --no-hooks        Skip ~/.cursor/hooks install
+  --extension       Install the docent IDE extension into detected editors
+  --no-extension    Skip the docent IDE extension (default is to ask on a TTY)
   --no-hammerspoon  Skip docent.lua install (~/.hammerspoon)
   --no-launchd      Skip launchd plist install (binaries only)
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
@@ -109,6 +112,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --hooks) INSTALL_HOOKS=1 ;;
     --no-hooks) INSTALL_HOOKS=0 ;;
+    --extension) INSTALL_EXTENSION=yes ;;
+    --no-extension) INSTALL_EXTENSION=no ;;
     --no-hammerspoon) INSTALL_HAMMERSPOON=0 ;;
     --no-launchd) INSTALL_LAUNCHD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
@@ -774,24 +779,32 @@ install_hooks() {
 
   local tmp hook_base="$hooks_dir/docent-notify.sh"
   tmp="$(mktemp)"
+  # The extension now owns window lifecycle + heartbeats, so the hook only wires
+  # the two agent events Cursor doesn't expose to extensions. Any docent entries
+  # on the retired events (sessionStart/sessionEnd/afterShellExecution) are
+  # stripped so re-installs clean up after the old hook.
   jq --arg hook "$hook_base" '
     def addhook(ev; suffix):
       .hooks[ev] = (((.hooks[ev]) // []) | map(select((.command // "") | contains("docent-notify.sh") | not))
         + [{command: ($hook + " " + suffix), timeout: 5}]);
+    def stripdocent(ev):
+      if (.hooks[ev]) != null
+      then .hooks[ev] = ((.hooks[ev]) | map(select((.command // "") | contains("docent-notify.sh") | not)))
+      else . end;
     if (.hooks | type) == "object" then
       .version = (.version // 1)
       | .hooks = (.hooks // {})
-      | addhook("beforeSubmitPrompt"; "prompt-submit")
-      | addhook("stop"; "agent-stop")
-      | addhook("sessionStart"; "session-start")
-      | addhook("sessionEnd"; "session-end")
-      | addhook("afterShellExecution"; "shell-done")
+      | addhook("beforeSubmitPrompt"; "agent_request_sent")
+      | addhook("stop"; "agent_response_received")
+      | stripdocent("sessionStart")
+      | stripdocent("sessionEnd")
+      | stripdocent("afterShellExecution")
     else
-      .["beforeSubmitPrompt"] = ([(.["beforeSubmitPrompt"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " prompt-submit")}])
-      | .["stop"] = ([(.["stop"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " agent-stop")}])
-      | .["sessionStart"] = ([(.["sessionStart"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " session-start")}])
-      | .["sessionEnd"] = ([(.["sessionEnd"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " session-end")}])
-      | .["afterShellExecution"] = ([(.["afterShellExecution"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " shell-done")}])
+      .["beforeSubmitPrompt"] = ([(.["beforeSubmitPrompt"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " agent_request_sent")}])
+      | .["stop"] = ([(.["stop"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " agent_response_received")}])
+      | .["sessionStart"] = [(.["sessionStart"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)]
+      | .["sessionEnd"] = [(.["sessionEnd"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)]
+      | .["afterShellExecution"] = [(.["afterShellExecution"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)]
     end
   ' "$hooks_json" >"$tmp" && mv "$tmp" "$hooks_json"
 }
@@ -834,11 +847,94 @@ install_hammerspoon() {
   echo "If the chooser does not appear, use the menu bar icon → Reload Config." >&2
 }
 
+# --- docent IDE extension ----------------------------------------------------
+# ide_user_dir maps an editor CLI to its macOS user-settings directory.
+ide_user_dir() {
+  case "$1" in
+    cursor) printf '%s' "$HOME/Library/Application Support/Cursor/User" ;;
+    code)   printf '%s' "$HOME/Library/Application Support/Code/User" ;;
+  esac
+}
+
+docent_url_for_settings() {
+  if [ "${DOCENTD_MODE:-local}" = remote ] && [ -n "${DOCENTD_URL:-}" ]; then
+    printf '%s' "${DOCENTD_URL%/}"
+  else
+    printf 'http://127.0.0.1:%s' "$DOCENT_PORT"
+  fi
+}
+
+write_ide_settings() {
+  local editor="$1" dir file url token tmp
+  dir="$(ide_user_dir "$editor")"
+  file="$dir/settings.json"
+  url="$(docent_url_for_settings)"
+  token="${DOCENTD_TOKEN:-${DOCENT_TOKEN:-}}"
+  if [ -z "$token" ] && [ -f "$CONFIG_DIR/.env" ]; then
+    token="$(grep -E '^DOCENT_TOKEN=' "$CONFIG_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '\r')"
+  fi
+  run mkdir -p "$dir"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run printf '%s\n' "write docent.url/docent.token into $file"
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "  jq not found; set docent.url in $file manually" >&2
+    return 0
+  fi
+  [ -f "$file" ] || echo '{}' >"$file"
+  tmp="$(mktemp)"
+  jq --arg url "$url" --arg token "$token" \
+    '. + {"docent.url": $url} + (if $token != "" then {"docent.token": $token} else {} end)' \
+    "$file" >"$tmp" && mv "$tmp" "$file"
+  log "wrote docent settings to $file"
+}
+
+configure_ide_extension() {
+  local vsix="$ROOT/apps/docent-ide-extension/docent-ide-extension.vsix"
+  local found=0 editor
+  for editor in cursor code; do
+    command -v "$editor" >/dev/null 2>&1 && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    log "no Cursor/VS Code CLI found — skipping IDE extension"
+    return 0
+  fi
+
+  local do_install=0 ans
+  case "$INSTALL_EXTENSION" in
+    yes|1) do_install=1 ;;
+    no|0) return 0 ;;
+    ask)
+      if [ -t 0 ]; then
+        printf 'Install the docent session-reporter extension into detected editors? [y/N] '
+        read -r ans
+        case "$ans" in y|Y|yes|Yes) do_install=1 ;; esac
+      fi
+      ;;
+  esac
+  [ "$do_install" -eq 1 ] || return 0
+
+  if [ ! -f "$vsix" ]; then
+    log "building docent IDE extension"
+    run env DOCENT_NODE="$NODE" DOCENT_NPM="$NPM" bash "$ROOT/scripts/build-extension.sh" >/dev/null \
+      || { echo "  extension build failed; skipping" >&2; return 0; }
+  fi
+  for editor in cursor code; do
+    command -v "$editor" >/dev/null 2>&1 || continue
+    log "installing docent extension into $editor"
+    run "$editor" --install-extension "$vsix" --force || echo "  $editor extension install failed" >&2
+    write_ide_settings "$editor"
+  done
+}
+
 resolve_install_hooks
 
 if [ "$INSTALL_HOOKS" -eq 1 ]; then
   install_hooks
 fi
+
+configure_ide_extension
 
 if [ "$INSTALL_HAMMERSPOON" -eq 1 ]; then
   install_hammerspoon

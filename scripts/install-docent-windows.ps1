@@ -60,6 +60,12 @@ Skip the dashboard + docentd.exe build (reuse an existing binary in BinDir).
 Deprecated no-op. The VirtualDesktop module is now installed by wsm's own
 installer; kept for backward compatibility.
 
+.PARAMETER Extension
+Install the docent IDE extension into detected editors (Cursor / VS Code).
+
+.PARAMETER NoExtension
+Skip the docent IDE extension (default is to ask when running interactively).
+
 .PARAMETER Hotkey
 Launcher hotkey (default: Ctrl+Alt+Space).
 
@@ -94,6 +100,8 @@ param(
     [switch]$NoTasks,
     [switch]$NoBuild,
     [switch]$NoModules,
+    [switch]$Extension,
+    [switch]$NoExtension,
     [string]$Hotkey = 'Ctrl+Alt+Space',
     [int]$Port = 39787,
     [int]$WsmPort = 39788,
@@ -696,6 +704,70 @@ if (-not $DryRun -and -not $NoTasks) {
     }
     else { Write-Warning "wsm not reachable on :$WsmPort - install it from https://github.com/KurtPreston/wsm" }
 }
+
+# --- docent IDE extension ----------------------------------------------------
+function Write-DocentIdeSettings {
+    param([string]$Editor, [string]$Url, [string]$Tok)
+    $sub = if ($Editor -eq 'cursor') { 'Cursor' } else { 'Code' }
+    $dir = Join-Path $env:APPDATA (Join-Path $sub 'User')
+    $file = Join-Path $dir 'settings.json'
+    if ($DryRun) { Write-Host "[dry-run] write docent.url/docent.token into $file"; return }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $obj = @{}
+    if (Test-Path $file) {
+        try { $obj = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json -AsHashtable } catch { $obj = @{} }
+        if ($null -eq $obj) { $obj = @{} }
+    }
+    $obj['docent.url'] = $Url
+    if ($Tok) { $obj['docent.token'] = $Tok }
+    ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding UTF8
+    Log "wrote docent settings to $file"
+}
+
+function Install-DocentExtension {
+    $vsix = Join-Path $Root 'apps\docent-ide-extension\docent-ide-extension.vsix'
+    $extDir = Join-Path $Root 'apps\docent-ide-extension'
+    $editors = @()
+    foreach ($e in @('cursor', 'code')) {
+        if (Get-Command $e -ErrorAction SilentlyContinue) { $editors += $e }
+    }
+    if ($editors.Count -eq 0) { Log 'no Cursor/VS Code CLI found - skipping IDE extension'; return }
+
+    $doInstall = $false
+    if ($Extension) { $doInstall = $true }
+    elseif ($NoExtension) { return }
+    elseif ([Environment]::UserInteractive -and -not $DryRun) {
+        $ans = Read-Host 'Install the docent session-reporter extension into detected editors? [y/N]'
+        if ($ans -match '^(y|yes)$') { $doInstall = $true }
+    }
+    if (-not $doInstall) { return }
+
+    if (-not (Test-Path $vsix)) {
+        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+            Write-Host '  npm not found; cannot build the extension - skipping'
+            return
+        }
+        Step 'build docent IDE extension' {
+            & npm --prefix $extDir install | Out-Null
+            & npm --prefix $extDir run compile | Out-Null
+            Push-Location $extDir
+            try {
+                & npm exec --no -- '@vscode/vsce' package --no-dependencies -o $vsix | Out-Null
+            }
+            finally { Pop-Location }
+        }
+        if (-not (Test-Path $vsix) -and -not $DryRun) { Write-Host '  extension build failed; skipping'; return }
+    }
+
+    $url = if ($Mode -eq 'local') { "http://127.0.0.1:$Port" } else { $RemoteUrl.TrimEnd('/') }
+    foreach ($e in $editors) {
+        Log "installing docent extension into $e"
+        Step "$e --install-extension" { & $e --install-extension $vsix --force | Out-Null }
+        Write-DocentIdeSettings -Editor $e -Url $url -Tok $Token
+    }
+}
+
+Install-DocentExtension
 
 # --- summary -----------------------------------------------------------------
 Write-Host ""

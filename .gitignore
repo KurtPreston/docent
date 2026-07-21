@@ -4,6 +4,11 @@
 /apps/docentd/web/node_modules/
 /apps/docentd/web/dist/
 
+# docent IDE extension (TypeScript/vsce) build system
+/apps/docent-ide-extension/node_modules/
+/apps/docent-ide-extension/out/
+/apps/docent-ide-extension/*.vsix
+
 # Go build artifacts left in the repo root when building with `go build ./apps/<name>`
 /docent-tunnel
 /docentd

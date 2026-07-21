@@ -1,8 +1,14 @@
 # Integration notes
 
-## Cursor hooks -> docentd `/ingest`
+## Cursor hooks -> docentd `/api/sessions/events`
 
 Copy `hooks/docent-notify.sh` to `~/.cursor/hooks/` and merge `hooks/hooks.snippet.json` into `~/.cursor/hooks.json`.
+
+The hook reports **agent activity only** — `beforeSubmitPrompt` → `agent_request_sent`
+and `stop` → `agent_response_received` — because those events are not available to
+the [docent IDE extension](../apps/docent-ide-extension/README.md), which owns
+window lifecycle (open/close/focus) and heartbeats. Install the extension to get
+live-window tracking.
 
 Set `DOCENT_URL` (remote docentd base URL) or `DOCENT_PORT` (default 39787 for local).
 Hooks load `~/.config/docent/.env` when present. Optionally set `DOCENT_TOKEN`.

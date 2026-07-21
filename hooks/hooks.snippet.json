@@ -1,7 +1,4 @@
 {
-  "beforeSubmitPrompt": [{ "command": "~/.cursor/hooks/docent-notify.sh prompt-submit" }],
-  "stop": [{ "command": "~/.cursor/hooks/docent-notify.sh agent-stop" }],
-  "sessionStart": [{ "command": "~/.cursor/hooks/docent-notify.sh session-start" }],
-  "sessionEnd": [{ "command": "~/.cursor/hooks/docent-notify.sh session-end" }],
-  "afterShellExecution": [{ "command": "~/.cursor/hooks/docent-notify.sh shell-done" }]
+  "beforeSubmitPrompt": [{ "command": "~/.cursor/hooks/docent-notify.sh agent_request_sent" }],
+  "stop": [{ "command": "~/.cursor/hooks/docent-notify.sh agent_response_received" }]
 }

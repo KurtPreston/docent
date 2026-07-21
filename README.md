@@ -137,13 +137,23 @@ add it to `execution_modes:` to run it from the reporter/dashboard too.
 (`repos`, `labels`, and `ticket_keys` are accepted and validated but not yet
 used beyond storage.)
 
+### IDE extension → docentd
+
+The [docent IDE extension](apps/docent-ide-extension/README.md) is a small
+VS Code / Cursor extension that reports editor **window lifecycle** and
+**heartbeats** to `docentd`'s `POST /api/sessions/events`, so the dashboard
+knows which windows are open without polling. Build it with
+`scripts/build-extension.sh`; the platform installers offer to install it (and
+write `docent.url` / `docent.token`) when they detect Cursor or VS Code.
+
 ### Cursor hooks → docentd
 
-`hooks/docent-notify.sh` + `hooks/hooks.snippet.json` report session activity to
-`docentd`. Copy the script to `~/.cursor/hooks/` and merge the snippet into
-`~/.cursor/hooks.json`; the hook POSTs to `docentd`'s `/api/sessions/events` (fire-and-forget, so
-a down `docentd` never blocks Cursor). Point it with `DOCENT_URL` (remote base URL)
-or `DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sends
+`hooks/docent-notify.sh` + `hooks/hooks.snippet.json` report **agent activity**
+to `docentd` (the window lifecycle is owned by the extension above). Copy the
+script to `~/.cursor/hooks/` and merge the snippet into `~/.cursor/hooks.json`;
+the hook POSTs to `docentd`'s `/api/sessions/events` (fire-and-forget, so a down
+`docentd` never blocks Cursor). Point it with `DOCENT_URL` (remote base URL) or
+`DOCENT_PORT` (default 39787 local); it loads `~/.config/docent/.env` and sends
 `DOCENT_TOKEN` when set. See [`hooks/README.md`](hooks/README.md).
 
 ### Launchers
