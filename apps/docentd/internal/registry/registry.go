@@ -16,11 +16,21 @@ const keyDelim = "\x1f"
 // Identity is the composite key for a session: which IDE, on which host, is
 // working on which path (optionally targeting a remote server). It is the
 // canonical session identity shared by the ingest API and the collectors.
+//
+// Remote marks a reporter that knows it is a remote session but cannot name the
+// host the editor's window/GUI runs on. The Cursor shell hooks are the
+// motivating case: they run on the box where the agent executes — the remote
+// for a Remote-SSH window — and so can see neither the client's hostname nor
+// the ssh alias, leaving IDEHost empty. On ingest such an event is resolved to
+// the most-recently-active live remote session matching by ide + path (see
+// Store.resolveKeyLocked), so agent activity attaches to the session the
+// (client-side) IDE extension created instead of forking a duplicate record.
 type Identity struct {
 	IDE        string
 	IDEHost    string
 	TargetHost string
 	Path       string
+	Remote     bool
 }
 
 // Key returns the stable composite key for this identity.
@@ -61,6 +71,7 @@ type Record struct {
 	IDEHost    string `json:"ideHost,omitempty"`
 	TargetHost string `json:"targetHost,omitempty"`
 	Path       string `json:"path,omitempty"`
+	Remote     bool   `json:"remote,omitempty"`
 
 	Name        string `json:"name,omitempty"`
 	Color       string `json:"color,omitempty"`
@@ -161,6 +172,48 @@ func (s *Store) All() map[string]Record {
 	return out
 }
 
+// resolveKeyLocked maps an incoming identity to the storage key its event
+// should apply to. It returns the exact composite key when a record for it
+// already exists. For a Remote reporter that cannot name its host (IDEHost
+// empty), it instead binds to the most-recently-active live remote session
+// (targetHost set) with the same ide + path — the record the client-side IDE
+// extension created — so agent activity lands there instead of forking a
+// duplicate. With no such session it falls back to the composite key, creating
+// a Remote-flagged record. Callers must hold s.mu.
+func (s *Store) resolveKeyLocked(id Identity) string {
+	direct := id.Key()
+	if _, ok := s.data[direct]; ok {
+		return direct
+	}
+	if !id.Remote {
+		return direct
+	}
+	wantIDE := norm(id.IDE)
+	wantPath := strings.TrimRight(strings.TrimSpace(id.Path), "/")
+	var bestKey string
+	var bestTime time.Time
+	for k, r := range s.data {
+		if norm(r.IDE) != wantIDE {
+			continue
+		}
+		if strings.TrimRight(strings.TrimSpace(r.Path), "/") != wantPath {
+			continue
+		}
+		if strings.TrimSpace(r.TargetHost) == "" {
+			continue
+		}
+		t := parseISO(r.LastHeartbeatAt)
+		if bestKey == "" || t.After(bestTime) {
+			bestKey = k
+			bestTime = t
+		}
+	}
+	if bestKey != "" {
+		return bestKey
+	}
+	return direct
+}
+
 // ApplyEvent records a session event against the composite identity. A "close"
 // event removes the record entirely. Every other event refreshes the heartbeat
 // timestamp (any signal from a session proves it is alive) and stamps the
@@ -168,7 +221,7 @@ func (s *Store) All() map[string]Record {
 func (s *Store) ApplyEvent(id Identity, event, name, color string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := id.Key()
+	key := s.resolveKeyLocked(id)
 	now := nowISO()
 
 	if event == "close" {
@@ -183,6 +236,7 @@ func (s *Store) ApplyEvent(id Identity, event, name, color string) error {
 			IDEHost:    id.IDEHost,
 			TargetHost: id.TargetHost,
 			Path:       strings.TrimRight(strings.TrimSpace(id.Path), "/"),
+			Remote:     id.Remote,
 			CreatedAt:  now,
 		}
 	}

@@ -62,6 +62,98 @@ func TestApplyEventAndClose(t *testing.T) {
 	}
 }
 
+func TestRemoteEventBindsToExtensionRecord(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Client-side extension window: concrete host + ssh alias (a remote session).
+	ext := Identity{IDE: "cursor", IDEHost: "mac", TargetHost: "desktop", Path: "/home/me/proj"}
+	if err := store.ApplyEvent(ext, "open", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Remote hook event: knows it is remote, but not its host or the ssh alias.
+	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
+	if err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.data) != 1 {
+		t.Fatalf("remote event should bind, not fork: got %d records %+v", len(store.data), store.data)
+	}
+	rec, ok := store.Get(ext.Key())
+	if !ok {
+		t.Fatal("extension record should still exist")
+	}
+	if rec.LastAgentStopAt == "" {
+		t.Fatal("agent stop should be recorded on the bound extension record")
+	}
+}
+
+func TestRemoteEventPrefersMostRecentRemote(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := Identity{IDE: "cursor", IDEHost: "mac", TargetHost: "desktop", Path: "/home/me/proj"}
+	newer := Identity{IDE: "cursor", IDEHost: "laptop", TargetHost: "desktop", Path: "/home/me/proj"}
+	store.data[older.Key()] = Record{IDE: "cursor", IDEHost: "mac", TargetHost: "desktop", Path: "/home/me/proj", LastHeartbeatAt: "2026-01-01T00:00:00Z"}
+	store.data[newer.Key()] = Record{IDE: "cursor", IDEHost: "laptop", TargetHost: "desktop", Path: "/home/me/proj", LastHeartbeatAt: "2026-01-02T00:00:00Z"}
+
+	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
+	if err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if store.data[newer.Key()].LastPromptAt == "" {
+		t.Fatal("remote event should bind to the most-recently-active remote record")
+	}
+	if store.data[older.Key()].LastPromptAt != "" {
+		t.Fatal("older remote record should be untouched")
+	}
+}
+
+func TestRemoteEventIgnoresLocalSession(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A local session at the same path (no ssh alias).
+	local := Identity{IDE: "cursor", IDEHost: "devbox", Path: "/home/me/proj"}
+	if err := store.ApplyEvent(local, "open", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
+	if err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if store.data[local.Key()].LastAgentStopAt != "" {
+		t.Fatal("remote hook event must not bind to a local (non-remote) session")
+	}
+	if len(store.data) != 2 {
+		t.Fatalf("remote event should create its own fallback record: got %d", len(store.data))
+	}
+}
+
+func TestRemoteEventFallbackCreatesRecord(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
+	if err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := store.Get(hook.Key())
+	if !ok {
+		t.Fatal("fallback record should be created when no remote session exists")
+	}
+	if !rec.Remote {
+		t.Fatal("fallback record should carry Remote=true")
+	}
+	if rec.LastPromptAt == "" {
+		t.Fatal("prompt time should be recorded on the fallback record")
+	}
+}
+
 func TestSweep(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
 	if err != nil {
