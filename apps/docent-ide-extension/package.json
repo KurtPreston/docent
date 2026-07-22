@@ -2,7 +2,7 @@
   "name": "docent-ide-extension",
   "displayName": "Docent Session Reporter",
   "description": "Reports editor window lifecycle (open/close/focus) and heartbeats to docentd's session ingest API.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "docent",
   "private": true,
   "license": "MIT",
