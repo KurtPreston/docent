@@ -79,22 +79,48 @@ function targetHostFor(uri: vscode.Uri): string {
 
 // hostFromRemoteAuthority extracts the target host from a remote authority of
 // the form "<resolver>+<host>" (e.g. "ssh-remote+desktop", "wsl+Ubuntu"). Some
-// editor builds hex-encode the host segment; decode it when it round-trips to a
-// printable label, otherwise keep the raw segment.
+// editor builds hex-encode the host segment, and newer Cursor/VS Code builds
+// encode it as a JSON object such as {"hostName":"desktop"} rather than a bare
+// label. We decode the hex when it round-trips to printable text, then pull the
+// host out of the JSON form, so the ssh alias is reported consistently instead
+// of leaking a raw JSON blob into the target-host column and the deep link.
 function hostFromRemoteAuthority(authority: string): string {
   const plus = authority.indexOf("+");
   const seg = plus >= 0 ? authority.slice(plus + 1) : authority;
+
+  let raw = seg;
   if (seg.length >= 4 && seg.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(seg)) {
     try {
       const decoded = Buffer.from(seg, "hex").toString("utf8");
       if (/^[\x20-\x7E]+$/.test(decoded)) {
-        return decoded;
+        raw = decoded;
       }
     } catch {
-      /* fall through to the raw segment */
+      /* keep the raw segment */
     }
   }
-  return seg;
+
+  return hostFromJSON(raw) || raw;
+}
+
+// hostFromJSON returns the ssh host when s is a JSON object like
+// {"hostName":"desktop"} (the form recent Cursor/VS Code builds encode into the
+// remote authority), or "" when s is not such an object.
+function hostFromJSON(s: string): string {
+  const t = s.trim();
+  if (!t.startsWith("{")) {
+    return "";
+  }
+  try {
+    const obj = JSON.parse(t) as Record<string, unknown>;
+    const v = obj.hostName ?? obj.host ?? obj.name;
+    if (typeof v === "string" && v.trim() !== "") {
+      return v.trim();
+    }
+  } catch {
+    /* not JSON: fall back to the raw value */
+  }
+  return "";
 }
 
 // currentFolders returns the workspace folders this window has open, each with
