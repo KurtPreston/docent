@@ -130,7 +130,12 @@ end
 
 local function buildChoices(data, cb)
   local choices = {}
-  for _, g in ipairs(data.groups or {}) do
+  -- The API already orders groups by priority (a group with a live session that
+  -- needs a response first, then any group with a live session, then the rest),
+  -- matching the dashboard. We preserve that group order via `group` (the
+  -- group's index) as the primary sort key, and only use `sort` (the per-row
+  -- tier) to order rows *within* a group, so each group's rows stay together.
+  for gi, g in ipairs(data.groups or {}) do
     local ticket = g.ticket
     table.insert(choices, {
       text = workItemLabel(g),
@@ -140,6 +145,7 @@ local function buildChoices(data, cb)
       provider = data.provider,
       deepLink = g.deepLink,
       image = swatchImage(g.color),
+      group = gi,
       sort = g.needsFollowup and 0 or 1,
     })
     for _, s in ipairs(g.sessions or {}) do
@@ -152,6 +158,7 @@ local function buildChoices(data, cb)
         text = s.name,
         subText = table.concat(subParts, "  ·  "),
         kind = "session", name = s.name, host = s.host, image = swatchImage(s.color),
+        group = gi,
         sort = s.needsFollowup and 2 or (s.live and 3 or 4),
       })
     end
@@ -159,18 +166,21 @@ local function buildChoices(data, cb)
       table.insert(choices, {
         text = "PR #" .. tostring(pr.prNumber) .. "  " .. (pr.title or ""),
         subText = table.concat({ ticket or "", pr.repo or "", pr.state or "" }, "  ·  "),
-        kind = "url", url = pr.url, image = swatchImage(g.color), sort = 5,
+        kind = "url", url = pr.url, image = swatchImage(g.color), group = gi, sort = 5,
       })
     end
     if ticket and #(g.sessions or {}) == 0 and #(g.prs or {}) == 0 and g.jiraUrl then
       table.insert(choices, {
         text = ticket .. "  " .. (g.summary or ""),
         subText = g.jiraStatus or "",
-        kind = "url", url = g.jiraUrl, image = swatchImage(g.color), sort = 6,
+        kind = "url", url = g.jiraUrl, image = swatchImage(g.color), group = gi, sort = 6,
       })
     end
   end
-  table.sort(choices, function(a, b) return (a.sort or 9) < (b.sort or 9) end)
+  table.sort(choices, function(a, b)
+    if (a.group or 0) ~= (b.group or 0) then return (a.group or 0) < (b.group or 0) end
+    return (a.sort or 9) < (b.sort or 9)
+  end)
   cb(choices)
 end
 

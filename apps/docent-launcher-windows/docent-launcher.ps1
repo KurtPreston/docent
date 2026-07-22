@@ -74,7 +74,13 @@ $script:FetchEntries = {
 
     $entries = @()
     $provider = $data.provider
+    # The API already orders groups by priority (a group with a live session
+    # that needs a response first, then any group with a live session, then the
+    # rest), matching the dashboard. $gi records each group's position so we can
+    # preserve that order while only tiering rows *within* a group via Sort.
+    $gi = -1
     foreach ($g in @($data.groups)) {
+        $gi++
         $ticket = if ($g.PSObject.Properties.Name -contains 'ticket') { $g.ticket } else { $null }
 
         # One primary row per dashboard work-item group (repo/branch, ticket, etc.).
@@ -101,6 +107,7 @@ $script:FetchEntries = {
             Provider = $provider
             DeepLink = $g.deepLink
             Color    = $g.color
+            Group    = $gi
             Sort     = if ($g.needsFollowup) { 0 } else { 1 }
             Search   = "$wiLabel $ticket $($g.summary) $($g.repo) $($g.branch) $($g.openPath) $($g.status)".ToLowerInvariant()
         }
@@ -123,6 +130,7 @@ $script:FetchEntries = {
                 Provider = $null
                 DeepLink = $null
                 Color    = $s.color
+                Group    = $gi
                 Sort     = if ($s.needsFollowup) { 2 } elseif ($s.live) { 3 } else { 4 }
                 Search   = "$label $ticket $($s.host)".ToLowerInvariant()
             }
@@ -140,6 +148,7 @@ $script:FetchEntries = {
                 Provider = $null
                 DeepLink = $null
                 Color    = $g.color
+                Group    = $gi
                 Sort     = 5
                 Search   = "$label $ticket $($pr.repo)".ToLowerInvariant()
             }
@@ -156,12 +165,13 @@ $script:FetchEntries = {
                 Provider = $null
                 DeepLink = $null
                 Color    = $g.color
+                Group    = $gi
                 Sort     = 6
                 Search   = "$ticket $($g.summary)".ToLowerInvariant()
             }
         }
     }
-    return @($entries | Sort-Object Sort, Label)
+    return @($entries | Sort-Object Group, Sort, Label)
 }
 
 # Thin synchronous wrapper used by -SelfTest (the live UI fetches async instead).
