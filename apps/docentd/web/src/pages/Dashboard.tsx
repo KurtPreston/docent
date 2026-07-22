@@ -525,7 +525,10 @@ export function Dashboard() {
             rowKey={(g) => g.key}
             rowClassName={(g) => (g.needsFollowup ? "followup" : "")}
             onRowClick={(g) => navigate("/workitem?key=" + encodeURIComponent(g.key || g.ticket || ""))}
-            initialSort={{ key: "lastActivity", dir: "desc" }}
+            // No initialSort: the API already returns groups in priority order
+            // (live sessions needing a response first, then any live session,
+            // then the rest), matching the launcher. Users can still click a
+            // header to re-sort. See engine.go group sort + docent.lua.
             filterable
             filterPlaceholder="Filter work items…"
             storageKey="dashboard"
