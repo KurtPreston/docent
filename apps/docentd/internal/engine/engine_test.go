@@ -295,6 +295,39 @@ func TestBuildDashboardOrderingAndVisibility(t *testing.T) {
 	}
 }
 
+// An idle (registered but not-fresh) session still represents an open IDE
+// window, so it pins its work item to the top (active) ahead of a plain
+// started work item, even though it is not "live".
+func TestBuildDashboardOpenIdleSessionPinsToTop(t *testing.T) {
+	e := newTestEngine(t)
+	idleSess := model.Entity{
+		Kind:        "session",
+		Title:       "SALSA-9",
+		Coordinates: map[string]string{"ticket": "SALSA-9"},
+		State:       map[string]string{"live": "false", "attention": "idle"},
+	}
+	items := []model.WorkItem{
+		{Key: "SALSA-8", Title: "SALSA-8", Entities: []model.Entity{
+			{Kind: "issue", State: map[string]string{"status_tier": "started", "status": "In Development"}},
+		}},
+		{Key: "SALSA-9", Title: "SALSA-9", Entities: []model.Entity{idleSess}},
+	}
+	dash := e.buildDashboard(items, e.corrCfg)
+	if dash.GroupCount != 2 {
+		t.Fatalf("group count = %d, want 2: %+v", dash.GroupCount, dash.Groups)
+	}
+	if dash.Groups[0].Key != "SALSA-9" {
+		t.Errorf("order = %q first, want SALSA-9 (open idle session) pinned to top", dash.Groups[0].Key)
+	}
+	if dash.Groups[0].Status != statusActive {
+		t.Errorf("SALSA-9 status = %q, want active", dash.Groups[0].Status)
+	}
+	// An idle session is not live, so it must not inflate the live count.
+	if dash.SessionCount != 0 {
+		t.Errorf("SessionCount = %d, want 0 (idle session is not live)", dash.SessionCount)
+	}
+}
+
 func TestBuildDashboardBranchUnit(t *testing.T) {
 	e := newTestEngine(t)
 	wi := model.WorkItem{

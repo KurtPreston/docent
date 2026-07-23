@@ -1135,6 +1135,11 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			switch ent.Kind {
 			case "session":
 				live := ent.State["live"] == "true"
+				// Any attached session means an IDE window is registered/open
+				// for this work item, so it pins to the top even when idle
+				// (no fresh heartbeat). A fresh heartbeat additionally marks it
+				// as live for the "N live" count and green status.
+				facts.HasOpenSession = true
 				if live {
 					liveCount++
 					facts.HasLiveSession = true

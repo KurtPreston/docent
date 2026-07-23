@@ -17,6 +17,8 @@ func TestClassify(t *testing.T) {
 		{"done beats everything", Facts{Done: true, HasLiveSession: true}, StatusDone, RankDone, false},
 		{"live session needs followup", Facts{HasLiveSession: true, SessionNeedsFollowup: true, BranchEvidence: true}, StatusActive, RankActive, true},
 		{"live session no followup", Facts{HasLiveSession: true}, StatusActive, RankActive, false},
+		{"open idle session pins to active", Facts{HasOpenSession: true, JiraStarted: true}, StatusActive, RankActive, false},
+		{"open idle session with followup", Facts{HasOpenSession: true, SessionNeedsFollowup: true}, StatusActive, RankActive, true},
 		{"approved beats started", Facts{AuthoredApproved: true, BranchEvidence: true}, StatusApproved, RankApproved, true},
 		{"jira started no branch", Facts{JiraStarted: true}, StatusStarted, RankStarted, false},
 		{"draft pr is started", Facts{AuthoredDraft: true}, StatusStarted, RankStarted, false},

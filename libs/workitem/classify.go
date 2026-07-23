@@ -30,7 +30,8 @@ const (
 // classified into a status + action_required.
 type Facts struct {
 	Done                 bool // report-side: merged/closed authored PR or JIRA done category
-	HasLiveSession       bool
+	HasLiveSession       bool // a session with a fresh heartbeat (actively live)
+	HasOpenSession       bool // an IDE window is registered/open for this work item, even if idle
 	SessionNeedsFollowup bool
 	AuthoredApproved     bool // authored, non-draft, approved, checks passing/none
 	AuthoredDraft        bool // authored draft PR
@@ -83,7 +84,10 @@ func Classify(f Facts) (status string, rank int, actionRequired bool) {
 	switch {
 	case f.Done:
 		return StatusDone, RankDone, false
-	case f.HasLiveSession:
+	case f.HasLiveSession || f.HasOpenSession:
+		// An open IDE window (live heartbeat or merely registered/idle) pins
+		// the work item to the top; a live session that needs follow-up also
+		// flags action-required.
 		return StatusActive, RankActive, f.SessionNeedsFollowup
 	case f.AuthoredApproved:
 		return StatusApproved, RankApproved, true // not merged yet
