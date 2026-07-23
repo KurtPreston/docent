@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -363,6 +364,81 @@ func TestBuildDashboardBranchUnit(t *testing.T) {
 	}
 	if g.Status != statusApproved {
 		t.Errorf("status = %q, want approved", g.Status)
+	}
+}
+
+// A session-only work item carries a synthetic "session:..." key (e.g. a
+// docent IDE window with no branch or ticket). That internal key must never
+// surface in the JIRA column.
+func TestBuildDashboardSessionKeyNotTreatedAsTicket(t *testing.T) {
+	e := newTestEngine(t)
+	wi := model.WorkItem{
+		Key:   "session:webhook:cursor:docent:1784482833488134861",
+		Title: "docent",
+		Entities: []model.Entity{
+			{
+				Kind:  "session",
+				Title: "docent",
+				State: map[string]string{"live": "true", "attention": "idle"},
+			},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	if dash.GroupCount != 1 {
+		t.Fatalf("group count = %d, want 1: %+v", dash.GroupCount, dash.Groups)
+	}
+	g := dash.Groups[0]
+	if g.Ticket != "" {
+		t.Errorf("Ticket = %q, want empty (session key is not a JIRA ticket)", g.Ticket)
+	}
+	if len(g.Tickets) != 0 {
+		t.Errorf("Tickets = %+v, want none", g.Tickets)
+	}
+	if g.JiraURL != "" {
+		t.Errorf("JiraURL = %q, want empty", g.JiraURL)
+	}
+}
+
+// A single open window emits many webhook lifecycle events (open, agent
+// request, agent response, ...), each carrying a unique per-event StableID.
+// They must all collapse onto the one registry-backed session work item for
+// that window rather than forking a separate work item per event.
+func TestEntitiesFromWebhookEventsDoNotForkSessions(t *testing.T) {
+	e := newTestEngine(t)
+	// The window is recorded once in the composite-keyed registry.
+	id := registry.Identity{IDE: "cursor", IDEHost: "mac", TargetHost: "desktop", Path: "/home/me/docent", Remote: true}
+	if _, err := e.store.ApplyEvent(id, "open", "docent", ""); err != nil {
+		t.Fatal(err)
+	}
+	// The same window's webhook lifecycle events, as the webhook collector
+	// emits them (unique StableID per event).
+	fields := map[string]string{"path": "/home/me/docent", "host": "desktop"}
+	signals := []model.Signal{
+		{Source: "cursor", Kind: "open", Title: "docent", StableID: "webhook:cursor:docent:1", Fields: fields},
+		{Source: "cursor", Kind: "agent_request_sent", Title: "docent", StableID: "webhook:cursor:docent:2", Fields: fields},
+		{Source: "cursor", Kind: "agent_response_received", Title: "docent", StableID: "webhook:cursor:docent:3", Fields: fields},
+	}
+	entities := e.entitiesFrom(signals, e.corrCfg)
+	sessions := 0
+	for _, ent := range entities {
+		if ent.Kind != "session" {
+			continue
+		}
+		sessions++
+		if strings.HasPrefix(ent.ID, "webhook:") {
+			t.Errorf("webhook event leaked into work items as a session entity: %s", ent.ID)
+		}
+	}
+	if sessions != 1 {
+		t.Fatalf("session entities = %d, want 1 (single registry-backed window)", sessions)
+	}
+	items := correlation.BuildWorkItems(entities, e.corrCfg)
+	dash := e.buildDashboard(items, e.corrCfg)
+	if dash.GroupCount != 1 {
+		t.Fatalf("group count = %d, want 1: %+v", dash.GroupCount, dash.Groups)
+	}
+	if strings.HasPrefix(dash.Groups[0].Key, "session:webhook:") {
+		t.Errorf("work item keyed by webhook event: %q", dash.Groups[0].Key)
 	}
 }
 

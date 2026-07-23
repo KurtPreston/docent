@@ -992,6 +992,23 @@ func (e *Engine) jiraAnnotationDirective() (userdata.Directive, bool) {
 // while idle; the per-session `live` flag still reflects heartbeat freshness.
 func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config) []model.Entity {
 	entities := correlation.SignalsToEntities(signals, corrCfg)
+	// Session lifecycle/activity events arrive through the always-on webhook
+	// inbox (POST /api/sessions/events), which also records them in the
+	// composite-keyed registry. The registry is the single source of truth for
+	// open windows and is surfaced exactly once per window below from e.store.
+	// Each webhook event carries a unique per-event StableID, so promoting them
+	// to session entities here forks a separate work item for every open/agent
+	// event mapping to the same window, and leaves closed windows lingering for
+	// the whole events lookback. Drop them from work-item building; the raw
+	// signals still feed the Signals timeline and automations.
+	kept := entities[:0]
+	for _, ent := range entities {
+		if ent.Kind == "session" && strings.HasPrefix(ent.ID, "webhook:") {
+			continue
+		}
+		kept = append(kept, ent)
+	}
+	entities = kept
 	for i := range entities {
 		ent := &entities[i]
 		if ent.Kind != "session" {
@@ -1102,7 +1119,6 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 	for _, wi := range workItems {
 		g := DashboardGroup{
 			Key:          wi.Key,
-			Ticket:       wi.Key,
 			Summary:      wi.Title,
 			Repo:         wi.Repo,
 			Branch:       wi.Branch,
@@ -1113,6 +1129,13 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			FG:           wi.FG,
 			Sessions:     []DashboardSession{},
 			PRs:          []DashboardPR{},
+		}
+		// The JIRA column only applies to ticket-anchored work items, whose
+		// key is the ticket key itself. Other work items use synthetic keys
+		// (session:, repo:, pr:, item:, ...) that must never surface as a
+		// ticket, so gate the assignment on the key parsing as a ticket key.
+		if correlation.ParseTicketKey(wi.Key, corrCfg) != "" {
+			g.Ticket = wi.Key
 		}
 		if strings.HasPrefix(wi.Key, "wb:") {
 			g.Ticket = ""
@@ -1451,7 +1474,6 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 	detail := WorkItemDetail{
 		Key:          wi.Key,
 		Title:        wi.Title,
-		Ticket:       wi.Key,
 		Repo:         wi.Repo,
 		Branch:       wi.Branch,
 		OpenPath:     wi.OpenPath,
@@ -1464,6 +1486,11 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 		PRs:          []DashboardPR{},
 		Entities:     make([]EntityView, 0, len(wi.Entities)),
 		Signals:      []SignalView{},
+	}
+	// Mirror buildDashboard: only ticket-anchored work items expose a ticket
+	// key; synthetic keys (session:, repo:, pr:, ...) must not leak into JIRA.
+	if correlation.ParseTicketKey(wi.Key, e.corrCfg) != "" {
+		detail.Ticket = wi.Key
 	}
 	if strings.HasPrefix(wi.Key, "wb:") {
 		detail.Ticket = ""
