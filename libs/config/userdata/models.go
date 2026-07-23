@@ -158,6 +158,12 @@ func (c OpenTriggerCursor) WriteColorEnabled() bool {
 const (
 	DefaultHeartbeatInterval = 30 * time.Second
 	DefaultMissedHeartbeats  = 2
+	// DefaultIdleRetention is how long a session stays registered (and its
+	// work item pinned to the top) after its last heartbeat, even once it is
+	// no longer "live". This bridges idle windows and short disconnects (sleep,
+	// dropped Remote-SSH) so an open IDE window keeps its work item at the top;
+	// a cleanly closed window is removed immediately by its "close" event.
+	DefaultIdleRetention = 30 * time.Minute
 )
 
 // SessionsConfig tunes the ingest-driven session registry's heartbeat-based
@@ -170,6 +176,12 @@ type SessionsConfig struct {
 	// MissedHeartbeats is how many consecutive heartbeats a session may miss
 	// before it is presumed dead. Zero uses DefaultMissedHeartbeats.
 	MissedHeartbeats int `yaml:"missed_heartbeats,omitempty"`
+	// IdleRetention is how long a session is kept registered after its last
+	// heartbeat once it is no longer live (e.g. "30m"). It bridges idle windows
+	// and short disconnects so an open IDE window stays pinned to the top of the
+	// dashboard/launcher. Empty uses DefaultIdleRetention; it is always at least
+	// the liveness TTL.
+	IdleRetention string `yaml:"idle_retention,omitempty"`
 }
 
 // HeartbeatIntervalDuration returns the configured heartbeat interval, or the
@@ -194,9 +206,28 @@ func (c SessionsConfig) MissedHeartbeatsOrDefault() int {
 	return c.MissedHeartbeats
 }
 
-// TTL is how long a session may be silent before it is presumed dead.
+// TTL is how long a session may be silent before it stops counting as live
+// (the liveness/heartbeat-freshness window).
 func (c SessionsConfig) TTL() time.Duration {
 	return c.HeartbeatIntervalDuration() * time.Duration(c.MissedHeartbeatsOrDefault())
+}
+
+// RetentionDuration is how long a session is kept registered after its last
+// heartbeat (and its work item pinned to the top) even once it is no longer
+// live. It is never shorter than the liveness TTL, so retention always covers
+// at least the live window. A cleanly closed window is removed immediately by
+// its "close" event regardless of this.
+func (c SessionsConfig) RetentionDuration() time.Duration {
+	retention := DefaultIdleRetention
+	if c.IdleRetention != "" {
+		if d, err := ParseDuration(c.IdleRetention); err == nil && d > 0 {
+			retention = d
+		}
+	}
+	if ttl := c.TTL(); retention < ttl {
+		return ttl
+	}
+	return retention
 }
 
 type ValidationError struct {

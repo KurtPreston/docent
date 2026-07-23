@@ -439,8 +439,14 @@
         "missed_heartbeats": {
           "type": "integer",
           "minimum": 1,
-          "description": "How many consecutive heartbeats a session may miss before it is presumed dead. Defaults to 2.",
+          "description": "How many consecutive heartbeats a session may miss before it stops counting as live. Defaults to 2.",
           "x-docent-default": 2,
+          "x-docent-setup-skip-prompt": true
+        },
+        "idle_retention": {
+          "type": "string",
+          "description": "How long a session stays registered after its last heartbeat (e.g. 30m) even once it is no longer live, keeping an open IDE window's work item pinned to the top through idle periods and short disconnects. A cleanly closed window is removed immediately. Always at least the liveness TTL. Defaults to 30m.",
+          "x-docent-default": "30m",
           "x-docent-setup-skip-prompt": true
         }
       }

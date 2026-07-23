@@ -607,15 +607,17 @@ func (e *Engine) StartScheduler(ctx context.Context) {
 	}()
 }
 
-// sweepSessions prunes sessions whose heartbeat has gone stale (silent for
-// longer than the configured TTL) and rebuilds the snapshot if any were
-// removed. A non-positive TTL disables sweeping.
+// sweepSessions prunes sessions whose heartbeat has gone stale for longer than
+// the retention window (which is >= the liveness TTL, so an open window stays
+// registered — and pinned to the top — through idle periods and short
+// disconnects) and rebuilds the snapshot if any were removed. A non-positive
+// TTL disables sweeping.
 func (e *Engine) sweepSessions() {
-	ttl := e.cfg.Sessions.TTL()
-	if ttl <= 0 {
+	if e.cfg.Sessions.TTL() <= 0 {
 		return
 	}
-	if removed := e.store.Sweep(ttl, time.Now()); len(removed) > 0 {
+	retention := e.cfg.Sessions.RetentionDuration()
+	if removed := e.store.Sweep(retention, time.Now()); len(removed) > 0 {
 		e.rebuild()
 	}
 }
@@ -983,9 +985,11 @@ func (e *Engine) jiraAnnotationDirective() (userdata.Directive, bool) {
 }
 
 // entitiesFrom maps signals to entities, enriches collector-provided session
-// entities from the registry store, and injects registry-tracked sessions
-// (ingest pipeline) that no collector surfaced — live ones (fresh heartbeat)
-// and closed ones that still need follow-up.
+// entities from the registry store, and injects every registry-tracked session
+// (ingest pipeline) that no collector surfaced. A record survives in the
+// registry until it is cleanly closed or ages out past the retention window, so
+// injecting them all keeps an open IDE window's work item pinned to the top even
+// while idle; the per-session `live` flag still reflects heartbeat freshness.
 func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config) []model.Entity {
 	entities := correlation.SignalsToEntities(signals, corrCfg)
 	for i := range entities {
@@ -1030,11 +1034,12 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 	now := time.Now()
 	for key, rec := range e.store.All() {
 		status := registry.SessionStatus(rec)
+		// Any record still in the registry represents an open IDE window: the
+		// sweep only removes records past the retention window, and a cleanly
+		// closed window is deleted immediately by its "close" event. Surface
+		// them all so an idle/backgrounded window keeps its work item pinned to
+		// the top; `live` still reflects the shorter heartbeat-freshness TTL.
 		live := registry.IsFresh(rec, ttl, now)
-		// Only surface sessions that are alive or still need a follow-up.
-		if !live && status != "needs-followup" {
-			continue
-		}
 		// Skip sessions a collector already surfaced (matched by leaf name).
 		found := false
 		for _, ent := range entities {

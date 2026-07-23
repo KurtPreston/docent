@@ -153,7 +153,7 @@ local function buildChoices(data, cb)
       if ticket then table.insert(subParts, ticket) end
       if s.host then table.insert(subParts, s.host) end
       if s.needsFollowup then table.insert(subParts, "● follow-up")
-      elseif not s.live then table.insert(subParts, "closed") end
+      elseif not s.live then table.insert(subParts, "away") end
       table.insert(choices, {
         text = s.name,
         subText = table.concat(subParts, "  ·  "),

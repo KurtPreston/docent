@@ -146,7 +146,7 @@ function SessionMini({
       ) : s.status === "working" ? (
         <span className="pill working">working</span>
       ) : (
-        <span className="pill status">{s.live ? "idle" : "closed"}</span>
+        <span className="pill status">{s.live ? "idle" : "away"}</span>
       )}
     </span>
   );

@@ -2,10 +2,31 @@ package userdata
 
 import (
 	"testing"
+	"time"
 
 	"github.com/KurtPreston/docent/libs/config/configschema"
 	"gopkg.in/yaml.v3"
 )
+
+func TestSessionsConfigTTLAndRetention(t *testing.T) {
+	var def SessionsConfig
+	if got := def.TTL(); got != DefaultHeartbeatInterval*time.Duration(DefaultMissedHeartbeats) {
+		t.Errorf("default TTL = %s, want %s", got, DefaultHeartbeatInterval*time.Duration(DefaultMissedHeartbeats))
+	}
+	if got := def.RetentionDuration(); got != DefaultIdleRetention {
+		t.Errorf("default retention = %s, want %s", got, DefaultIdleRetention)
+	}
+	// Retention is honored when set and longer than the liveness TTL.
+	c := SessionsConfig{IdleRetention: "45m"}
+	if got := c.RetentionDuration(); got != 45*time.Minute {
+		t.Errorf("retention = %s, want 45m", got)
+	}
+	// Retention can never be shorter than the liveness TTL.
+	short := SessionsConfig{HeartbeatInterval: "1m", MissedHeartbeats: 5, IdleRetention: "10s"}
+	if got := short.RetentionDuration(); got != short.TTL() {
+		t.Errorf("retention %s should floor at TTL %s", got, short.TTL())
+	}
+}
 
 func TestConfigValidateDirectives(t *testing.T) {
 	cfg := ConfigFile{
