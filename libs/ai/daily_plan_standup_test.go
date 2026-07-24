@@ -105,8 +105,8 @@ func TestRenderDailyPlanStandupVerbs(t *testing.T) {
 
 	md := RenderDailyPlanMarkdown(in, nil)
 
-	prev, _ := splitSection(t, md, "**Monday**", "**Tuesday**")
-	next, _ := splitSection(t, md, "**Tuesday**", "Reviewed:")
+	prev, _ := splitSection(t, md, "*Monday*", "*Tuesday*")
+	next, _ := splitSection(t, md, "*Tuesday*", "Reviewed:")
 	reviewed, _ := splitSection(t, md, "Reviewed:", "PRs ready for review:")
 
 	// Previous-day verbs.
@@ -262,10 +262,10 @@ func TestRenderDailyPlanStandupEmpty(t *testing.T) {
 		PrevDayLabel: "Friday",
 		NextDayLabel: "Monday",
 	}, nil)
-	if !strings.Contains(md, "**Friday**\n- _none_") {
+	if !strings.Contains(md, "*Friday*\n- _none_") {
 		t.Fatalf("expected empty prev placeholder:\n%s", md)
 	}
-	if !strings.Contains(md, "**Monday**\n- _none_") {
+	if !strings.Contains(md, "*Monday*\n- _none_") {
 		t.Fatalf("expected empty next placeholder:\n%s", md)
 	}
 	if !strings.Contains(md, "PRs ready for review:\n- _none_") {
@@ -295,7 +295,7 @@ func TestRenderDailyPlanSkipsUnticketed(t *testing.T) {
 	if strings.Contains(md, "Started") || strings.Contains(md, "commit:") {
 		t.Fatalf("unticketed commit should not produce a standup line:\n%s", md)
 	}
-	if !strings.Contains(md, "**Monday**\n- _none_") {
+	if !strings.Contains(md, "*Monday*\n- _none_") {
 		t.Fatalf("expected empty prev section:\n%s", md)
 	}
 }

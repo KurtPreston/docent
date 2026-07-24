@@ -86,8 +86,8 @@ type ResolvedRun struct {
 
 	// Daily-plan framing (populated only for BuiltinDailyPlan when --days
 	// is not overriding the window). Empty for other modes.
-	PrevDayLabel string // e.g. "Monday"
-	NextDayLabel string // e.g. "Tuesday"
+	PrevDayLabel string // e.g. "Yesterday (Mon)" or "Friday" (weekend gap)
+	NextDayLabel string // e.g. "Today"
 	IsMorning    bool
 }
 
@@ -403,15 +403,13 @@ func resolveDailyPlanFrame(now time.Time, timeOfDay string, cutoffHour int) dail
 		isMorning = false
 	}
 
-	dow := func(t time.Time) string { return t.Weekday().String() }
-
 	if isMorning {
 		prev := previousWorkday(today)
 		return dailyPlanFrame{
 			Since:        prev,
 			Until:        today,
-			PrevDayLabel: dow(prev),
-			NextDayLabel: dow(today),
+			PrevDayLabel: relativeDayLabel(prev, today),
+			NextDayLabel: relativeDayLabel(today, today),
 			IsMorning:    true,
 		}
 	}
@@ -419,8 +417,48 @@ func resolveDailyPlanFrame(now time.Time, timeOfDay string, cutoffHour int) dail
 	return dailyPlanFrame{
 		Since:        today,
 		Until:        now,
-		PrevDayLabel: dow(today),
-		NextDayLabel: dow(next),
+		PrevDayLabel: relativeDayLabel(today, today),
+		NextDayLabel: relativeDayLabel(next, today),
 		IsMorning:    false,
 	}
+}
+
+// relativeDayLabel renders a standup day label relative to today: "Today" for
+// today itself, "Yesterday (Tue)" / "Tomorrow (Thu)" for the immediately
+// adjacent calendar day, and the plain weekday name otherwise (e.g. "Friday"
+// when the previous work day sits across a weekend).
+func relativeDayLabel(target, today time.Time) string {
+	switch dayDelta(today, target) {
+	case 0:
+		return "Today"
+	case -1:
+		return fmt.Sprintf("Yesterday (%s)", target.Format("Mon"))
+	case 1:
+		return fmt.Sprintf("Tomorrow (%s)", target.Format("Mon"))
+	default:
+		return target.Weekday().String()
+	}
+}
+
+// dayDelta returns the number of calendar days from `from` to `to` (negative
+// when `to` precedes `from`), counting day-by-day so it stays correct across
+// DST transitions.
+func dayDelta(from, to time.Time) int {
+	from = startOfDay(from)
+	to = startOfDay(to)
+	if to.Equal(from) {
+		return 0
+	}
+	if to.After(from) {
+		days := 0
+		for cur := from; cur.Before(to); cur = cur.AddDate(0, 0, 1) {
+			days++
+		}
+		return days
+	}
+	days := 0
+	for cur := to; cur.Before(from); cur = cur.AddDate(0, 0, 1) {
+		days--
+	}
+	return days
 }

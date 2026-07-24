@@ -23,14 +23,15 @@ const (
 	categoryReviewed = "reviewed"
 )
 
-// RenderDailyPlanMarkdown produces the deterministic standup document:
+// RenderDailyPlanMarkdown produces the deterministic standup document using
+// Slack mrkdwn (single-asterisk *bold*):
 //
-//	**Monday**
+//	*Yesterday (Mon)*
 //	- Merged PR for [TICKET](pr) description
 //	- Opened draft PR for [TICKET](pr) description
 //	- Started [TICKET](jira) description
 //
-//	**Tuesday**
+//	*Today*
 //	- Continue on [TICKET](pr-or-jira) description
 //
 //	Reviewed:
@@ -80,7 +81,7 @@ func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 	sortStandupLines(reviewed)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "**%s**\n", prevLabel)
+	fmt.Fprintf(&b, "*%s*\n", prevLabel)
 	if len(yesterday) == 0 {
 		b.WriteString("- _none_\n")
 	} else {
@@ -97,7 +98,7 @@ func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 			today = append(today, line)
 		}
 	}
-	fmt.Fprintf(&b, "**%s**\n", nextLabel)
+	fmt.Fprintf(&b, "*%s*\n", nextLabel)
 	if len(today) == 0 {
 		b.WriteString("- _none_\n")
 	} else {

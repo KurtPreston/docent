@@ -112,7 +112,7 @@ func TestRuleBasedRunModeDailyPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(md, "**Thursday**") || !strings.Contains(md, "**Friday**") {
+	if !strings.Contains(md, "*Thursday*") || !strings.Contains(md, "*Friday*") {
 		t.Fatalf("expected day labels:\n%s", md)
 	}
 	if !strings.Contains(md, "Started [SALSA-1]") {

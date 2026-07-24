@@ -177,7 +177,7 @@ func TestResolveDailyPlanDoesNotPrompt(t *testing.T) {
 	if !res.IsMorning {
 		t.Fatal("expected morning frame")
 	}
-	if res.PrevDayLabel != "Monday" || res.NextDayLabel != "Tuesday" {
+	if res.PrevDayLabel != "Yesterday (Mon)" || res.NextDayLabel != "Today" {
 		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
 	}
 }
@@ -199,7 +199,7 @@ func TestResolveDailyPlanAfternoon(t *testing.T) {
 	if res.IsMorning {
 		t.Fatal("expected afternoon frame")
 	}
-	if res.PrevDayLabel != "Tuesday" || res.NextDayLabel != "Wednesday" {
+	if res.PrevDayLabel != "Today" || res.NextDayLabel != "Tomorrow (Wed)" {
 		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
 	}
 }
@@ -211,7 +211,7 @@ func TestResolveDailyPlanFridayAfternoonPlansMonday(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.PrevDayLabel != "Friday" || res.NextDayLabel != "Monday" {
+	if res.PrevDayLabel != "Today" || res.NextDayLabel != "Monday" {
 		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
 	}
 }
@@ -244,7 +244,7 @@ func TestResolvePreviousWeekdayFromMonday(t *testing.T) {
 	if !res.Since.Equal(want) {
 		t.Fatalf("Mon: got %v want %v", res.Since, want)
 	}
-	if res.PrevDayLabel != "Friday" || res.NextDayLabel != "Monday" {
+	if res.PrevDayLabel != "Friday" || res.NextDayLabel != "Today" {
 		t.Fatalf("labels: %q / %q", res.PrevDayLabel, res.NextDayLabel)
 	}
 }
