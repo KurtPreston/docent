@@ -61,7 +61,9 @@ Deprecated no-op. The VirtualDesktop module is now installed by wsm's own
 installer; kept for backward compatibility.
 
 .PARAMETER Extension
-Install the docent IDE extension into detected editors (Cursor / VS Code).
+Install the docent IDE extension into detected editors (Cursor / VS Code). The
+.vsix is not committed, so this needs Node 18+ / npm on the machine to build it;
+the install is verified against `--list-extensions` and reported in the summary.
 
 .PARAMETER NoExtension
 Skip the docent IDE extension (default is to ask when running interactively).
@@ -706,6 +708,182 @@ if (-not $DryRun -and -not $NoTasks) {
 }
 
 # --- docent IDE extension ----------------------------------------------------
+# Extension id is publisher.name from apps/docent-ide-extension/package.json.
+$ExtensionId = 'docent.docent-ide-extension'
+$ExtensionStatus = 'skipped'
+
+# Run a native command, surfacing its exit code and (on failure) its output.
+# The extension build used to pipe everything to Out-Null and never check
+# $LASTEXITCODE, so a failed build or install looked exactly like a success.
+function Invoke-Native {
+    param([string]$Exe, [string[]]$Arguments, [string]$What)
+    if ($DryRun) { Write-Host "[dry-run] $What"; return $true }
+    # npm writes progress and warnings to stderr; under 'Stop' the 2>&1 merge can
+    # turn that chatter into a terminating NativeCommandError, so relax it here
+    # and judge the command by its exit code instead.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $out = @(& $Exe @Arguments 2>&1) } finally { $ErrorActionPreference = $prevEap }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "$What failed (exit $LASTEXITCODE)"
+        foreach ($line in ($out | Select-Object -Last 20)) { Write-Host "    $line" }
+        return $false
+    }
+    return $true
+}
+
+# Editor CLIs ship both a shell script and a .cmd shim on Windows; only the
+# latter is runnable here, so resolve to an Application and prefer .cmd/.exe.
+function Resolve-EditorCli {
+    param([string]$Name)
+    $found = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+    $shim = $found | Where-Object { $_.Source -match '\.(cmd|bat|exe)$' } | Select-Object -First 1
+    if ($shim) { return $shim.Source }
+    return $null
+}
+
+# Building the .vsix needs npm. It is often installed but missing from the PATH
+# of the shell running the installer (nvm-windows shells, scoop, an elevated
+# prompt), so check the usual install locations before declaring it absent.
+function Resolve-NpmCommand {
+    $cmd = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    $roots = @(
+        $env:ProgramFiles
+        ${env:ProgramFiles(x86)}
+        (Join-Path $env:LOCALAPPDATA 'Programs')
+    ) | Where-Object { $_ }
+    $candidates = @($roots | ForEach-Object { Join-Path $_ 'nodejs\npm.cmd' })
+    $candidates += @(
+        (Join-Path $HOME 'scoop\shims\npm.cmd'),
+        (Join-Path $HOME '.volta\bin\npm.exe')
+    )
+    $nvmRoot = if ($env:NVM_HOME) { $env:NVM_HOME } else { Join-Path $env:APPDATA 'nvm' }
+    if (Test-Path -LiteralPath $nvmRoot) {
+        $candidates += @(
+            Get-ChildItem -LiteralPath $nvmRoot -Directory -Filter 'v*' -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'npm.cmd' }
+        )
+    }
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath $c)) { return $c }
+    }
+    return $null
+}
+
+# Rebuild when any source file is newer than the .vsix, so a re-run after
+# editing the extension does not silently reinstall a stale package.
+function Test-VsixCurrent {
+    param([string]$Vsix, [string]$ExtDir)
+    if (-not (Test-Path -LiteralPath $Vsix)) { return $false }
+    $built = (Get-Item -LiteralPath $Vsix).LastWriteTimeUtc
+    $sources = @(
+        Get-ChildItem -LiteralPath $ExtDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\(node_modules|out)\\' -and $_.Extension -ne '.vsix' }
+    )
+    foreach ($s in $sources) {
+        if ($s.LastWriteTimeUtc -gt $built) { return $false }
+    }
+    return $true
+}
+
+function Build-DocentExtension {
+    param([string]$ExtDir, [string]$Vsix)
+    $npm = Resolve-NpmCommand
+    if (-not $npm) {
+        Write-Warning "npm not found - cannot build the docent IDE extension (the .vsix is not committed, so it must be built here)."
+        Write-Host "    Install Node 18+ (https://nodejs.org, 'winget install OpenJS.NodeJS.LTS', or 'scoop install nodejs-lts'),"
+        Write-Host "    then re-run just this step:"
+        Write-Host "      pwsh -File scripts\install-docent-windows.ps1 -Extension -NoBuild -NoTasks"
+        return $false
+    }
+    Log "building docent IDE extension (npm: $npm)"
+    $install = if (Test-Path -LiteralPath (Join-Path $ExtDir 'package-lock.json')) { 'ci' } else { 'install' }
+    Push-Location $ExtDir
+    try {
+        if (-not (Invoke-Native -Exe $npm -Arguments @($install) -What "npm $install")) { return $false }
+        if (-not (Invoke-Native -Exe $npm -Arguments @('run', 'compile') -What 'npm run compile')) { return $false }
+        $pkgArgs = @('exec', '--no', '--', '@vscode/vsce', 'package', '--no-dependencies', '-o', $Vsix)
+        if (-not (Invoke-Native -Exe $npm -Arguments $pkgArgs -What 'vsce package')) { return $false }
+    }
+    finally { Pop-Location }
+    if (-not $DryRun -and -not (Test-Path -LiteralPath $Vsix)) {
+        Write-Warning "vsce reported success but $Vsix was not produced"
+        return $false
+    }
+    return $true
+}
+
+function Test-EditorHasExtension {
+    param([string]$Cli)
+    if ($DryRun) { return $true }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $out = @(& $Cli --list-extensions 2>&1) } finally { $ErrorActionPreference = $prevEap }
+    return (($out -join "`n") -match ('(?im)^\s*' + [regex]::Escape($ExtensionId) + '\s*$'))
+}
+
+# settings.json is JSONC in practice: VS Code and Cursor both allow // and /*
+# */ comments plus trailing commas, which ConvertFrom-Json rejects. Strip them
+# with a string-aware scan -- a regex cannot tell a comment from a value like
+# "submodules/*/src/", whose glob looks exactly like a comment delimiter.
+function ConvertTo-StrictJson {
+    param([string]$Text)
+    $sb = [System.Text.StringBuilder]::new()
+    $inString = $false
+    $escaped = $false
+    $pendingComma = -1   # index in $sb of a comma that may turn out to be trailing
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
+        if ($inString) {
+            [void]$sb.Append($c)
+            if ($escaped) { $escaped = $false }
+            elseif ($c -eq '\') { $escaped = $true }
+            elseif ($c -eq '"') { $inString = $false }
+            continue
+        }
+        if ($c -eq '/' -and $i + 1 -lt $Text.Length) {
+            $next = $Text[$i + 1]
+            if ($next -eq '/') {
+                while ($i + 1 -lt $Text.Length -and $Text[$i + 1] -ne "`n") { $i++ }
+                continue
+            }
+            if ($next -eq '*') {
+                $i += 2
+                while ($i + 1 -lt $Text.Length -and -not ($Text[$i] -eq '*' -and $Text[$i + 1] -eq '/')) { $i++ }
+                $i++
+                continue
+            }
+        }
+        if ($c -eq ',') { $pendingComma = $sb.Length; [void]$sb.Append($c); continue }
+        if ($pendingComma -ge 0 -and -not [char]::IsWhiteSpace($c)) {
+            if ($c -eq '}' -or $c -eq ']') { [void]$sb.Remove($pendingComma, 1) }
+            $pendingComma = -1
+        }
+        if ($c -eq '"') { $inString = $true }
+        [void]$sb.Append($c)
+    }
+    return $sb.ToString()
+}
+
+# Update one string setting in place. Rewriting the file from a parsed object
+# would drop the user's comments, formatting and key order, so patch just the
+# value we own (or append the key before the closing brace).
+function Set-JsonStringSetting {
+    param([string]$Text, [string]$Key, [string]$Value)
+    $encoded = ConvertTo-Json -InputObject $Value
+    $pattern = '("' + [regex]::Escape($Key) + '"\s*:\s*)"(?:[^"\\]|\\.)*"'
+    $m = [regex]::Match($Text, $pattern)
+    if ($m.Success) {
+        return $Text.Substring(0, $m.Index) + $m.Groups[1].Value + $encoded + $Text.Substring($m.Index + $m.Length)
+    }
+    $close = $Text.LastIndexOf('}')
+    if ($close -lt 0) { return $null }
+    $head = $Text.Substring(0, $close).TrimEnd()
+    $sep = if ($head.EndsWith('{')) { '' } else { ',' }
+    return $head + $sep + "`n    `"$Key`": " + $encoded + "`n" + $Text.Substring($close)
+}
+
 function Write-DocentIdeSettings {
     param([string]$Editor, [string]$Url, [string]$Tok)
     $sub = if ($Editor -eq 'cursor') { 'Cursor' } else { 'Code' }
@@ -713,62 +891,96 @@ function Write-DocentIdeSettings {
     $file = Join-Path $dir 'settings.json'
     if ($DryRun) { Write-Host "[dry-run] write docent.url/docent.token into $file"; return }
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $obj = @{}
-    if (Test-Path $file) {
-        try { $obj = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json -AsHashtable } catch { $obj = @{} }
-        if ($null -eq $obj) { $obj = @{} }
+
+    $raw = if (Test-Path -LiteralPath $file) { Get-Content -Raw -LiteralPath $file } else { '' }
+    if (-not $raw -or -not $raw.Trim()) { $raw = "{`n}`n" }
+    try { $parsed = ConvertTo-StrictJson -Text $raw | ConvertFrom-Json -AsHashtable } catch { $parsed = $null }
+    if ($null -eq $parsed) {
+        Write-Warning "could not parse $file - leaving it untouched."
+        Write-Host "    Add these manually so the extension reaches docentd:"
+        Write-Host ('      "docent.url": "{0}"' -f $Url)
+        if ($Tok) { Write-Host '      "docent.token": "<your token>"' }
+        return
     }
-    $obj['docent.url'] = $Url
-    if ($Tok) { $obj['docent.token'] = $Tok }
-    ($obj | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding UTF8
+
+    $wanted = [ordered]@{ 'docent.url' = $Url }
+    if ($Tok) { $wanted['docent.token'] = $Tok }
+    $updated = $raw
+    $changed = $false
+    foreach ($key in $wanted.Keys) {
+        if ($parsed.Contains($key) -and $parsed[$key] -eq $wanted[$key]) { continue }
+        $next = Set-JsonStringSetting -Text $updated -Key $key -Value $wanted[$key]
+        if ($null -eq $next) { Write-Warning "could not locate the object end in $file - leaving it untouched."; return }
+        $updated = $next
+        $changed = $true
+    }
+    if (-not $changed) { Log "docent settings already current in $file"; return }
+
+    Set-Content -LiteralPath $file -Value $updated -NoNewline -Encoding UTF8
     Log "wrote docent settings to $file"
 }
 
 function Install-DocentExtension {
-    $vsix = Join-Path $Root 'apps\docent-ide-extension\docent-ide-extension.vsix'
     $extDir = Join-Path $Root 'apps\docent-ide-extension'
-    $editors = @()
+    $vsix = Join-Path $extDir 'docent-ide-extension.vsix'
+
+    $editors = [ordered]@{}
     foreach ($e in @('cursor', 'code')) {
-        if (Get-Command $e -ErrorAction SilentlyContinue) { $editors += $e }
+        $cli = Resolve-EditorCli -Name $e
+        if ($cli) { $editors[$e] = $cli }
     }
-    if ($editors.Count -eq 0) { Log 'no Cursor/VS Code CLI found - skipping IDE extension'; return }
 
     $doInstall = $false
     if ($Extension) { $doInstall = $true }
-    elseif ($NoExtension) { return }
-    elseif ([Environment]::UserInteractive -and -not $DryRun) {
+    elseif ($NoExtension) { $script:ExtensionStatus = 'skipped (-NoExtension)'; return }
+    elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $DryRun) {
         $ans = Read-Host 'Install the docent session-reporter extension into detected editors? [y/N]'
         if ($ans -match '^(y|yes)$') { $doInstall = $true }
     }
-    if (-not $doInstall) { return }
+    if (-not $doInstall) { $script:ExtensionStatus = 'skipped (declined)'; return }
 
-    if (-not (Test-Path $vsix)) {
-        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-            Write-Host '  npm not found; cannot build the extension - skipping'
+    if ($editors.Count -eq 0) {
+        Write-Warning "no Cursor/VS Code CLI on PATH - cannot install the IDE extension."
+        Write-Host "    Cursor installs its CLI at %LOCALAPPDATA%\Programs\cursor\resources\app\bin;"
+        Write-Host "    add it to PATH (or run Cursor's 'Shell Command: Install cursor command') and re-run with -Extension."
+        $script:ExtensionStatus = 'FAILED (no editor CLI found)'
+        return
+    }
+
+    if (-not (Test-VsixCurrent -Vsix $vsix -ExtDir $extDir)) {
+        if (-not (Build-DocentExtension -ExtDir $extDir -Vsix $vsix)) {
+            $script:ExtensionStatus = 'FAILED (build)'
             return
         }
-        Step 'build docent IDE extension' {
-            & npm --prefix $extDir install | Out-Null
-            & npm --prefix $extDir run compile | Out-Null
-            Push-Location $extDir
-            try {
-                & npm exec --no -- '@vscode/vsce' package --no-dependencies -o $vsix | Out-Null
-            }
-            finally { Pop-Location }
-        }
-        if (-not (Test-Path $vsix) -and -not $DryRun) { Write-Host '  extension build failed; skipping'; return }
     }
+    else { Log "reusing $vsix (up to date)" }
 
     # $Sessions already resolves to the right endpoint: 127.0.0.1 for a local or
     # tunneled docentd (the only value that also works for a Cursor Remote-SSH
     # window whose extension host runs on the dev box), and the raw remote URL
     # only for a direct -NoTunnel install.
     $url = $Sessions
-    foreach ($e in $editors) {
+    $ok = @()
+    $failed = @()
+    foreach ($e in $editors.Keys) {
+        $cli = $editors[$e]
         Log "installing docent extension into $e"
-        Step "$e --install-extension" { & $e --install-extension $vsix --force | Out-Null }
-        Write-DocentIdeSettings -Editor $e -Url $url -Tok $Token
+        $installed = Invoke-Native -Exe $cli -Arguments @('--install-extension', $vsix, '--force') -What "$e --install-extension"
+        # The CLI can exit 0 without installing anything, so confirm it is there.
+        if ($installed -and -not (Test-EditorHasExtension -Cli $cli)) {
+            Write-Warning "$e reported success but $ExtensionId is not in '$e --list-extensions'"
+            $installed = $false
+        }
+        if ($installed) {
+            $ok += $e
+            Write-Host "  ${e}: $ExtensionId installed"
+            Write-DocentIdeSettings -Editor $e -Url $url -Tok $Token
+        }
+        else { $failed += $e }
     }
+    $script:ExtensionStatus = if ($failed.Count -eq 0) { "installed into $($ok -join ', ')" }
+    elseif ($ok.Count -gt 0) { "installed into $($ok -join ', '); FAILED for $($failed -join ', ')" }
+    else { "FAILED ($($failed -join ', '))" }
 }
 
 Install-DocentExtension
@@ -790,6 +1002,7 @@ else {
     Write-Host "  docentd                 $RemoteUrl  (remote - not installed here)"
     Write-Host "  dashboard               $RemoteUrl/"
 }
+Write-Host "  IDE extension           $ExtensionStatus"
 
 if (-not $NoTasks) {
     $extra = ''
