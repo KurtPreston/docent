@@ -222,6 +222,7 @@ type Engine struct {
 
 	refreshing sync.Mutex // single-flight guard for on-request collection
 	annotating sync.Mutex // single-flight guard for the annotation fetch
+	rebuilding sync.Mutex // serializes rebuild so a stale pass can't clobber a newer one
 }
 
 func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
@@ -833,7 +834,15 @@ func (e *Engine) Snapshot() Dashboard {
 
 // rebuild recomputes entities, work-items, the dashboard, and the
 // signal -> entity -> work-item links from the union of all units' signals.
+//
+// Rebuilds are serialized on rebuilding: reading the signal set and publishing
+// the result are separate critical sections, so concurrent callers (collect
+// goroutines, session sweeps, annotation follow-ups) could otherwise interleave
+// and let a rebuild started against older inputs overwrite a newer dashboard.
 func (e *Engine) rebuild() {
+	e.rebuilding.Lock()
+	defer e.rebuilding.Unlock()
+
 	e.mu.Lock()
 	signals := make([]model.Signal, 0)
 	for _, u := range e.units {
