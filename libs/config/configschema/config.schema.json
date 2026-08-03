@@ -480,6 +480,13 @@
             "type": "string"
           }
         },
+        "pr_queries": {
+          "type": "array",
+          "description": "github/github-enterprise: extra open-PR searches whose results count as your own work (e.g. PRs a CI bot opens on your behalf). Collected only at involved/all scope.",
+          "items": {
+            "$ref": "#/$defs/prQuery"
+          }
+        },
         "target": {
           "type": "object",
           "additionalProperties": {
@@ -506,6 +513,23 @@
         }
       },
       "additionalProperties": false
+    },
+    "prQuery": {
+      "type": "object",
+      "required": ["relation", "qualifiers"],
+      "additionalProperties": false,
+      "properties": {
+        "relation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Label for the resulting pr_review_status rows. May not be 'authored' or 'review_requested'."
+        },
+        "qualifiers": {
+          "type": "string",
+          "minLength": 1,
+          "description": "GitHub search syntax, split on whitespace into positional arguments for `gh search prs` (e.g. \"author:app/ci-bot assignee:@me\")."
+        }
+      }
     },
     "poll": {
       "type": "object",

@@ -157,6 +157,58 @@ directives:
 	}
 }
 
+func TestValidateYAML_prQueriesAccepted(t *testing.T) {
+	doc := strings.TrimSpace(`
+ai:
+  provider: rule-based
+directives:
+  - id: gh-e
+    name: GH E
+    collector: github-enterprise
+    enabled: true
+    config:
+      base_url: https://git.example.com/
+    pr_queries:
+      - relation: backport
+        qualifiers: author:app/ci-bot assignee:@me
+`)
+	if err := configschema.ValidateYAML([]byte(doc)); err != nil {
+		t.Fatalf("pr_queries example should validate: %v", configschema.ValidationProblems(err))
+	}
+}
+
+func TestValidateYAML_prQueriesRejectsBadShape(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"missing qualifiers", "      - relation: backport"},
+		{"missing relation", "      - qualifiers: author:app/ci-bot"},
+		{"empty qualifiers", "      - relation: backport\n        qualifiers: \"\""},
+		{"uppercase relation", "      - relation: Backport\n        qualifiers: author:app/ci-bot"},
+		{"unknown key", "      - relation: backport\n        qualifiers: author:app/ci-bot\n        mine: true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := strings.TrimSpace(`
+ai:
+  provider: rule-based
+directives:
+  - id: gh-e
+    name: GH E
+    collector: github-enterprise
+    enabled: true
+    config:
+      base_url: https://git.example.com/
+    pr_queries:
+`) + "\n" + tc.query + "\n"
+			if err := configschema.ValidateYAML([]byte(doc)); err == nil {
+				t.Fatalf("expected %s to be rejected", tc.name)
+			}
+		})
+	}
+}
+
 func TestValidateYAML_badDirectiveFails(t *testing.T) {
 	yamlDoc := `
 ai:

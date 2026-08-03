@@ -3,6 +3,7 @@ package userdata
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -39,12 +40,29 @@ type Directive struct {
 	Config         map[string]string `yaml:"config,omitempty"`
 	CredentialRefs map[string]string `yaml:"credential_refs,omitempty"`
 
+	// PRQueries: github/github-enterprise. Extra open-PR searches whose
+	// results count as the user's own work — e.g. PRs a CI bot opens on
+	// their behalf, which the built-in author/review-requested searches
+	// can't see. Each becomes its own pr_review_status relation and is
+	// only collected at involved/all scope.
+	PRQueries []PRQuery `yaml:"pr_queries,omitempty"`
+
 	// State and Events configure the directive's collection units. A
 	// directive can fan out into a state unit, an events unit, or both.
 	// When neither is set, the engine creates a single default unit for
 	// whatever capability the collector supports.
 	State  *ModeConfig `yaml:"state,omitempty"`
 	Events *ModeConfig `yaml:"events,omitempty"`
+}
+
+// PRQuery is one declared extra open-PR search. Qualifiers is GitHub search
+// syntax (e.g. "author:app/ci-bot assignee:@me"), split on whitespace into
+// positional arguments for `gh search prs`. Relation labels the resulting
+// pr_review_status rows so automations and the dashboard can tell them apart
+// from the built-in relations.
+type PRQuery struct {
+	Relation   string `yaml:"relation"`
+	Qualifiers string `yaml:"qualifiers"`
 }
 
 // ModeConfig configures one collection mode (state or events) of a directive.
@@ -251,6 +269,7 @@ func (f ConfigFile) Validate() error {
 		}
 		problems = append(problems, validateModeConfig(path+".state", d.State)...)
 		problems = append(problems, validateModeConfig(path+".events", d.Events)...)
+		problems = append(problems, validatePRQueries(path, d.PRQueries)...)
 	}
 	if err := automation.ValidateRules(f.Automations); err != nil {
 		var ve automation.ValidationError
@@ -273,6 +292,47 @@ func validateModeConfig(path string, m *ModeConfig) []string {
 	}
 	if _, err := ParseDuration(m.Lookback); err != nil {
 		problems = append(problems, fmt.Sprintf("%s.lookback %q is not a valid duration", path, m.Lookback))
+	}
+	return problems
+}
+
+// reservedPRRelations are the relations the GitHub collector emits for its
+// built-in searches; a declared query may not reuse one.
+var reservedPRRelations = map[string]bool{"authored": true, "review_requested": true}
+
+var prRelationPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// validatePRQueries checks the declared extra open-PR searches of one
+// directive. Qualifiers are passed to `gh search prs` as positional
+// arguments, so a leading dash is rejected to keep a query from smuggling in
+// flags that would reshape the command.
+func validatePRQueries(path string, queries []PRQuery) []string {
+	var problems []string
+	seen := map[string]bool{}
+	for i, q := range queries {
+		qPath := fmt.Sprintf("%s.pr_queries[%d]", path, i)
+		relation := strings.TrimSpace(q.Relation)
+		switch {
+		case relation == "":
+			problems = append(problems, qPath+".relation is required")
+		case !prRelationPattern.MatchString(relation):
+			problems = append(problems, fmt.Sprintf("%s.relation %q must match %s", qPath, relation, prRelationPattern))
+		case reservedPRRelations[relation]:
+			problems = append(problems, fmt.Sprintf("%s.relation %q is reserved", qPath, relation))
+		case seen[relation]:
+			problems = append(problems, fmt.Sprintf("%s.relation %q is duplicated", qPath, relation))
+		default:
+			seen[relation] = true
+		}
+		fields := strings.Fields(q.Qualifiers)
+		if len(fields) == 0 {
+			problems = append(problems, qPath+".qualifiers is required")
+		}
+		for _, f := range fields {
+			if strings.HasPrefix(f, "-") {
+				problems = append(problems, fmt.Sprintf("%s.qualifiers %q may not start with a dash", qPath, f))
+			}
+		}
 	}
 	return problems
 }

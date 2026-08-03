@@ -47,6 +47,53 @@ func TestConfigValidateDirectives(t *testing.T) {
 	}
 }
 
+func TestValidatePRQueries(t *testing.T) {
+	withQueries := func(queries ...PRQuery) ConfigFile {
+		return ConfigFile{
+			AI: AIConfig{Provider: "rule-based"},
+			Directives: []Directive{{
+				ID: "gh-e", Name: "GH E", Collector: "github-enterprise", Enabled: true,
+				PRQueries: queries,
+			}},
+		}
+	}
+
+	valid := withQueries(
+		PRQuery{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"},
+		PRQuery{Relation: "release_train", Qualifiers: "label:release-train"},
+	)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid pr_queries rejected: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		query PRQuery
+	}{
+		{"empty relation", PRQuery{Relation: "", Qualifiers: "author:app/ci-bot"}},
+		{"uppercase relation", PRQuery{Relation: "Backport", Qualifiers: "author:app/ci-bot"}},
+		{"reserved relation", PRQuery{Relation: "authored", Qualifiers: "author:app/ci-bot"}},
+		{"reserved review relation", PRQuery{Relation: "review_requested", Qualifiers: "author:app/ci-bot"}},
+		{"empty qualifiers", PRQuery{Relation: "backport", Qualifiers: "   "}},
+		{"flag smuggled as qualifier", PRQuery{Relation: "backport", Qualifiers: "author:app/ci-bot --limit 500"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := withQueries(tc.query).Validate(); err == nil {
+				t.Fatalf("expected %s to be rejected", tc.name)
+			}
+		})
+	}
+
+	dup := withQueries(
+		PRQuery{Relation: "backport", Qualifiers: "author:app/ci-bot"},
+		PRQuery{Relation: "backport", Qualifiers: "label:backport"},
+	)
+	if err := dup.Validate(); err == nil {
+		t.Fatal("expected duplicate relation to be rejected")
+	}
+}
+
 func TestOpenTriggerCursorWriteColorEnabled(t *testing.T) {
 	var c OpenTriggerCursor
 	if !c.WriteColorEnabled() {
