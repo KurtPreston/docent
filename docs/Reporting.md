@@ -122,7 +122,7 @@ Each collector honors `scope` directly — there is no post-collection filter. `
 | Collector | `self` | `involved` (default) | `all` |
 |-----------|--------|----------------------|-------|
 | `local-git` | Commits whose author matches your `git config user.email` / `$USER`. Reflog rows always emitted. | Self commits **plus** commits on local branches (branches you've created or checked out). | Every commit on every ref in the window. |
-| `github` / `github-enterprise` | `gh search prs --author <you>` and commits authored by you. | Self plus PRs reviewed by you, issues you're involved with, and comments you left on either. | `involved` plus per-repo `gh search prs/issues/commits --repo <r>` for each entry in `config.followed_repos`. |
+| `github` / `github-enterprise` | `gh search prs --author <you>` and commits authored by you. | Self plus PRs reviewed by you, issues you're involved with, comments you left on either, PRs awaiting your review, and any [`pr_queries`](#extra-open-pr-searches) declared on the directive. | `involved` plus per-repo `gh search prs/issues/commits --repo <r>` for each entry in `config.followed_repos`. |
 | `gitea` | Repos you own; issues + PRs created by you. | Self plus issues/PRs assigned to you or mentioning you (deduped). | `involved` plus per-repo issue + PR listings for each entry in `config.followed_repos`. Bare-`owner` entries fan out across all repos under that owner. |
 | `jira` | `(assignee = currentUser() OR reporter = currentUser()) AND updated >= …` | Adds `OR watcher = currentUser()`. Today's default JQL. | Wraps with `project in (…) OR …` using `config.followed_projects` (falls back to `involved` when no projects are configured). |
 | `google-calendar` | All scopes return all events on the secret iCal feed (the feed is your personal calendar by definition). | Same as `self`. | Same as `self`. |
@@ -166,6 +166,43 @@ directives:
 
 Without these fields, `scope: all` collects the same set as `scope: involved` (the collectors have nothing extra to broaden on).
 
+### Extra open-PR searches
+
+The `github` / `github-enterprise` collectors look for open PRs you authored and
+PRs awaiting your review. Neither finds work a bot opens **on your behalf** — a
+backport bot cherry-picking your commit onto a release branch authors the PR
+itself, so the PR is yours in every sense that matters but invisible to docent.
+
+Declare extra searches with `pr_queries` to close that gap:
+
+```yaml
+directives:
+  - id: github-enterprise
+    collector: github-enterprise
+    enabled: true
+    config:
+      base_url: https://git.example.com/
+    pr_queries:
+      - relation: backport
+        qualifiers: author:app/ci-bot assignee:@me
+```
+
+`qualifiers` is [GitHub search syntax](https://docs.github.com/search-github/searching-on-github/searching-issues-and-pull-requests),
+split on whitespace and passed to `gh search prs` (docent adds `--state open`).
+Pick qualifiers precise enough that only your own work matches — `assignee:@me`
+on its own usually means "a teammate asked me to review this", which is why the
+example pairs it with the bot's login.
+
+Matches are treated exactly like PRs you authored: docent resolves their checks,
+review decision, and merge state, counts them in the dashboard's
+action-required tally, and lists them in the standup. `relation` labels the rows
+so automations can single them out via `match.fields`; it may be any lowercase
+identifier other than the built-in `authored` and `review_requested`.
+
+Because a PR opened on your behalf is adjacent context rather than something you
+wrote, these searches run at `involved` and `all` only. `scope: self` — which
+the `prs` mode pins — stays limited to PRs you authored.
+
 ### Common flags
 
 Paths follow the XDG base-directory layout by default:
@@ -200,7 +237,7 @@ On an interactive terminal, docent-reporter prints `Press 'c' to abort pending c
 All collectors run in **date range** mode (`since` → `until`). Implemented:
 
 - `local-git` — commits + reflog under `code_home` or explicit `paths`. Scope picks commits by author, by local-branch membership, or every commit on every ref.
-- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
+- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). Open-PR status also covers anything matched by [`pr_queries`](#extra-open-pr-searches). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
 - `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
 - `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.

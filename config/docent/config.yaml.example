@@ -45,6 +45,13 @@ directives:
   #     username: me
   #   credential_refs:
   #     token: DOCENT_GITHUB_TOKEN
+  #   # Extra open-PR searches for work a bot opens on your behalf, which the
+  #   # author/review-requested searches can't see. Keep the qualifiers precise:
+  #   # assignee:@me alone usually means "please review this". See
+  #   # docs/Reporting.md#extra-open-pr-searches.
+  #   pr_queries:
+  #     - relation: backport
+  #       qualifiers: author:app/ci-bot assignee:@me
 
   # Live editor windows via `cursor --status` (uncomment to enable):
   # - id: local-cursor

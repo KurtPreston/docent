@@ -235,3 +235,4 @@ agent run can't block the daemon's collection loop.
 - **`agent` actions silently queue with no worker running** — see [The `docent-automations` worker](#the-docent-automations-worker) above.
 - **Kind aliases** — e.g. a rule with `kind: pr` also matches the concrete entity kind `pr_review_status`/`pr_activity`; `ticket`/`issue`/`issue_activity` are similarly interchangeable.
 - **The `me` sentinel** in `when.to: me` / `when.from: me` means "the field's new/old value belongs to you" (`is_self`), not the literal string `"me"`.
+- **PRs a bot opens for you need a `pr_queries` entry** — a `checks`/`mergeable` transition can only fire on a PR the collector actually sees, and by default that means PRs you authored. Backport bots author the PR themselves, so declare a search for them on the directive (see [Extra open-PR searches](Reporting.md#extra-open-pr-searches)). Match just those rows with `match.fields: { relation: <your label> }`.
