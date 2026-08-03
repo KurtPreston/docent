@@ -246,6 +246,18 @@ func TestRenderDailyPlanOpenPRViaReviewStatus(t *testing.T) {
 				Coordinates: map[string]string{"ticket": "SALSA-21"},
 				State:       map[string]string{"relation": "authored", "state": "open", "is_draft": "false", "created_at": inWindow},
 			}),
+			// A directive-declared relation is mine, so it earns the same verb.
+			ticketWorkItem("SALSA-22", "Backported", "https://git.example/p/22", model.Entity{
+				Kind: "pr_review_status", URL: "https://git.example/p/22",
+				Coordinates: map[string]string{"ticket": "SALSA-22"},
+				State:       map[string]string{"relation": "backport", "mine": "true", "state": "open", "is_draft": "false", "created_at": inWindow},
+			}),
+			// Someone else's PR is not my activity to report.
+			ticketWorkItem("SALSA-23", "Theirs", "https://git.example/p/23", model.Entity{
+				Kind: "pr_review_status", URL: "https://git.example/p/23",
+				Coordinates: map[string]string{"ticket": "SALSA-23"},
+				State:       map[string]string{"relation": "review_requested", "mine": "false", "state": "open", "is_draft": "false", "created_at": inWindow},
+			}),
 		},
 	}
 	md := RenderDailyPlanMarkdown(in, nil)
@@ -254,6 +266,12 @@ func TestRenderDailyPlanOpenPRViaReviewStatus(t *testing.T) {
 	}
 	if !strings.Contains(md, "- Opened PR for [SALSA-21](https://git.example/p/21)") {
 		t.Errorf("expected opened verb from pr_review_status:\n%s", md)
+	}
+	if !strings.Contains(md, "- Opened PR for [SALSA-22](https://git.example/p/22)") {
+		t.Errorf("expected opened verb for owned declared relation:\n%s", md)
+	}
+	if strings.Contains(md, "Opened PR for [SALSA-23]") {
+		t.Errorf("review-requested PR should not earn an opened verb:\n%s", md)
 	}
 }
 
@@ -306,9 +324,15 @@ func TestRenderDailyPlanReadyForReviewSection(t *testing.T) {
 		Since: testSince, Now: testNow,
 		Statuses: []collectors.StatusItem{
 			{Kind: "pr_review_status", Title: "[SALSA-1] Ready", URL: "https://git.example/p/1",
-				Fields: map[string]string{"ready": "true", "review_decision": "REVIEW_REQUIRED", "relation": "authored"}},
+				Fields: map[string]string{"ready": "true", "review_decision": "REVIEW_REQUIRED", "relation": "authored", "mine": "true"}},
 			{Kind: "pr_review_status", Title: "[SALSA-3] Approved", URL: "https://git.example/p/3",
-				Fields: map[string]string{"ready": "true", "review_decision": "APPROVED", "relation": "authored"}},
+				Fields: map[string]string{"ready": "true", "review_decision": "APPROVED", "relation": "authored", "mine": "true"}},
+			// A directive-declared relation is still mine, so it belongs here.
+			{Kind: "pr_review_status", Title: "[SALSA-4] Backport", URL: "https://git.example/p/4",
+				Fields: map[string]string{"ready": "true", "review_decision": "REVIEW_REQUIRED", "relation": "backport", "mine": "true"}},
+			// Someone else's PR awaiting my review is not mine to ship.
+			{Kind: "pr_review_status", Title: "[SALSA-5] Theirs", URL: "https://git.example/p/5",
+				Fields: map[string]string{"ready": "true", "review_decision": "REVIEW_REQUIRED", "relation": "review_requested", "mine": "false"}},
 		},
 	}, nil)
 	idx := strings.Index(md, "PRs ready for review:")
@@ -321,6 +345,12 @@ func TestRenderDailyPlanReadyForReviewSection(t *testing.T) {
 	}
 	if strings.Contains(section, "https://git.example/p/3") {
 		t.Fatalf("approved PR should not be ready:\n%s", section)
+	}
+	if !strings.Contains(section, "https://git.example/p/4") {
+		t.Fatalf("owned declared-relation PR should be ready:\n%s", section)
+	}
+	if strings.Contains(section, "https://git.example/p/5") {
+		t.Fatalf("review-requested PR should not be ready:\n%s", section)
 	}
 }
 

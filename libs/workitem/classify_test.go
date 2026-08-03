@@ -44,23 +44,36 @@ func TestClassifyPR(t *testing.T) {
 		return model.Entity{Kind: "pr_review_status", State: state}
 	}
 	var f Facts
-	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"}))
+	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "mine": "true", "is_draft": "false", "review_decision": "APPROVED", "checks": "passing"}))
 	if !f.AuthoredApproved {
 		t.Error("approved+passing authored PR should set AuthoredApproved")
 	}
 	f = Facts{}
-	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "true"}))
+	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "mine": "true", "is_draft": "true"}))
 	if !f.AuthoredDraft || f.AuthoredApproved {
 		t.Errorf("draft PR facts wrong: %+v", f)
 	}
 	f = Facts{}
-	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "false", "review_decision": "CHANGES_REQUESTED", "checks": "passing"}))
+	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "mine": "true", "is_draft": "false", "review_decision": "CHANGES_REQUESTED", "checks": "passing"}))
 	if !f.AuthoredAwaiting || !f.AuthoredMyTurn {
 		t.Errorf("changes-requested should be awaiting+my-turn: %+v", f)
 	}
 	f = Facts{}
-	ClassifyPR(&f, mk(map[string]string{"relation": "review_requested"}))
+	ClassifyPR(&f, mk(map[string]string{"relation": "review_requested", "mine": "false"}))
 	if !f.ReviewRequested || f.AuthoredAwaiting {
 		t.Errorf("review_requested facts wrong: %+v", f)
+	}
+	// A directive-declared relation is classified by the mine flag, not by
+	// its name, so a bot's backport gets the same treatment as an authored PR.
+	f = Facts{}
+	ClassifyPR(&f, mk(map[string]string{"relation": "backport", "mine": "true", "is_draft": "false", "checks": "failing"}))
+	if !f.AuthoredAwaiting || !f.AuthoredMyTurn || f.ReviewRequested {
+		t.Errorf("owned declared-relation PR facts wrong: %+v", f)
+	}
+	// Rows predating the mine flag still count as mine.
+	f = Facts{}
+	ClassifyPR(&f, mk(map[string]string{"relation": "authored", "is_draft": "true"}))
+	if !f.AuthoredDraft {
+		t.Errorf("legacy row without mine should default to owned: %+v", f)
 	}
 }

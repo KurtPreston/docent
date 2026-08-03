@@ -185,8 +185,8 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 				jiraStarted = true
 			}
 		case "authored_pr", "pr_review_status":
-			// Only my authored PRs; pr_review_status carries relation.
-			if rel := ent.State["relation"]; rel != "" && rel != "authored" {
+			// Only PRs I own; pr_review_status carries the mine flag.
+			if ent.State["mine"] == "false" {
 				continue
 			}
 			hasAuthoredPR = true
@@ -490,8 +490,8 @@ func sortStandupLines(lines []standupLine) {
 	})
 }
 
-// readyForReviewPRs returns authored open PRs that are ready (not draft,
-// checks passing) and not yet approved.
+// readyForReviewPRs returns open PRs I own that are ready (not draft, checks
+// passing) and not yet approved.
 func readyForReviewPRs(statuses []collectors.StatusItem) []collectors.StatusItem {
 	var ready []collectors.StatusItem
 	for _, s := range statuses {
@@ -504,7 +504,7 @@ func readyForReviewPRs(statuses []collectors.StatusItem) []collectors.StatusItem
 		if strings.EqualFold(s.Fields["review_decision"], "APPROVED") {
 			continue
 		}
-		if rel := s.Fields["relation"]; rel != "" && rel != "authored" {
+		if s.Fields["mine"] == "false" {
 			continue
 		}
 		ready = append(ready, s)

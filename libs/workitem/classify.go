@@ -43,20 +43,23 @@ type Facts struct {
 	BranchEvidence       bool // a local branch/commit/reflog/session ties work to the ticket
 }
 
-// ClassifyPR folds one PR entity's state into the group facts. Only authored
-// PRs (relation=authored) carry checks/review_decision; review_requested PRs
-// mean my review is still pending on someone else's PR.
+// ClassifyPR folds one PR entity's state into the group facts. Only PRs the
+// user owns carry checks/review_decision; an unowned one means my review is
+// still pending on someone else's PR.
+//
+// Ownership is read from the collector's `mine` flag rather than the relation
+// name, because directives can declare their own relations (a CI bot's
+// backports are owned but are neither "authored" nor "review_requested").
 func ClassifyPR(facts *Facts, ent model.Entity) {
 	if facts == nil || ent.State == nil {
 		return
 	}
-	relation := ent.State["relation"]
-	if relation == "review_requested" {
+	if ent.State["mine"] == "false" {
 		facts.ReviewRequested = true
 		return
 	}
-	// Treat anything else (authored, or legacy rows without a relation) as
-	// my own PR.
+	// Treat everything else (owned PRs, and rows predating the flag) as my
+	// own.
 	draft := ent.State["is_draft"] == "true"
 	if draft {
 		facts.AuthoredDraft = true

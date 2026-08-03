@@ -509,7 +509,7 @@ func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
 		Repo:   "org/repo",
 		Branch: "feature-x",
 		Entities: []model.Entity{
-			{Kind: "pr_review_status", Title: "their PR", URL: "https://github.com/org/repo/pull/9", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "feature-x"}, State: map[string]string{"relation": "review_requested", "is_draft": "false"}},
+			{Kind: "pr_review_status", Title: "their PR", URL: "https://github.com/org/repo/pull/9", Coordinates: map[string]string{"repo": "org/repo", "head_branch": "feature-x"}, State: map[string]string{"relation": "review_requested", "mine": "false", "is_draft": "false"}},
 		},
 	}
 	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
