@@ -38,16 +38,34 @@ type fakeCollector struct {
 	events      []model.Signal
 	stateCalls  int
 	eventsCalls int
+	stateScope  collectors.Scope
 }
 
-func (f *fakeCollector) CollectState(_ context.Context, _ userdata.Directive, _ *collectors.CollectOpts) ([]collectors.StatusItem, error) {
+func (f *fakeCollector) CollectState(_ context.Context, _ userdata.Directive, opts *collectors.CollectOpts) ([]collectors.StatusItem, error) {
 	f.stateCalls++
+	f.stateScope = opts.EffectiveScope()
 	return f.state, nil
 }
 
 func (f *fakeCollector) CollectEvents(_ context.Context, _ userdata.Directive, _ *collectors.CollectOpts) ([]collectors.StatusItem, error) {
 	f.eventsCalls++
 	return f.events, nil
+}
+
+// TestCollectUnitRequestsInvolvedScope pins the scope the daemon collects at.
+// Narrowing it to self would silently stop the GitHub collector from seeing
+// review-requested PRs and any pr_queries a directive declares, which is where
+// the autofix automations get their failing-CI transitions — and nothing else
+// in the suite would fail.
+func TestCollectUnitRequestsInvolvedScope(t *testing.T) {
+	e := newTestEngine(t)
+	f := &fakeCollector{state: []model.Signal{{StableID: "s1", Title: "one", ObservedAt: time.Now()}}}
+	e.reg.Register("fake", f)
+	d := userdata.Directive{ID: "fake", Collector: "fake", Enabled: true}
+	e.collectUnit(context.Background(), e.newUnit(d, collectors.ModeState, nil, time.Now()))
+	if f.stateScope != collectors.ScopeInvolved {
+		t.Fatalf("state collection scope = %q, want %q", f.stateScope, collectors.ScopeInvolved)
+	}
 }
 
 func TestMergeEventsAccumulateDedupAgeout(t *testing.T) {

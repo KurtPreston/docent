@@ -704,9 +704,14 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	opts := &collectors.CollectOpts{
 		UserdataDir: e.cfg.ConfigDir,
 		Until:       now,
-		Scope:       collectors.ScopeInvolved,
-		Mode:        u.mode,
-		CorrCfg:     e.corrCfg,
+		// The dashboard and automations want adjacent context, not just what
+		// the user wrote: PRs awaiting their review, and any pr_queries a
+		// directive declares (e.g. a CI bot's backports). Both are dropped at
+		// ScopeSelf, which would silently starve the autofix rules of the
+		// transitions they trigger on. See TestCollectUnitRequestsInvolvedScope.
+		Scope:   collectors.ScopeInvolved,
+		Mode:    u.mode,
+		CorrCfg: e.corrCfg,
 	}
 	cutoff := now.Add(-u.lookback)
 	if u.mode == collectors.ModeEvents {
