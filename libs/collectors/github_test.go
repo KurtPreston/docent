@@ -237,12 +237,13 @@ func TestPrReviewItemFields(t *testing.T) {
 	row.CreatedAt = "2026-05-04T09:00:00Z"
 	row.Repository.NameWithOwner = "o/r"
 
-	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "authored", "passing", "APPROVED", true, "feature-branch", "conflicting")
+	authoredSpec := prReviewSpec{relation: "authored", mine: true}
+	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, authoredSpec, "passing", "APPROVED", true, "feature-branch", "conflicting")
 	if authored.Kind != "pr_review_status" {
 		t.Fatalf("kind = %q", authored.Kind)
 	}
 	for k, want := range map[string]string{
-		"relation": "authored", "is_draft": "true", "checks": "passing",
+		"relation": "authored", "mine": "true", "is_draft": "true", "checks": "passing",
 		"review_decision": "APPROVED", "ready": "true", "repo": "o/r",
 		"head_branch": "feature-branch", "mergeable": "conflicting",
 		"created_at": "2026-05-04T09:00:00Z",
@@ -252,10 +253,14 @@ func TestPrReviewItemFields(t *testing.T) {
 		}
 	}
 
-	// review-requested rows omit the authored-only fields but carry head_branch.
-	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, "review_requested", "", "", false, "their-branch", "")
+	// review-requested rows omit the owned-only fields but carry head_branch.
+	rrSpec := prReviewSpec{relation: "review_requested", mine: false}
+	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, rrSpec, "", "", false, "their-branch", "")
 	if rr.Fields["relation"] != "review_requested" {
 		t.Errorf("relation = %q", rr.Fields["relation"])
+	}
+	if rr.Fields["mine"] != "false" {
+		t.Errorf("mine = %q, want false", rr.Fields["mine"])
 	}
 	if _, ok := rr.Fields["review_decision"]; ok {
 		t.Errorf("review_requested row should not carry review_decision: %v", rr.Fields)
@@ -265,6 +270,19 @@ func TestPrReviewItemFields(t *testing.T) {
 	}
 	if rr.Fields["head_branch"] != "their-branch" {
 		t.Errorf("head_branch = %q, want their-branch", rr.Fields["head_branch"])
+	}
+
+	// A directive-declared query is owned, so it resolves the same status
+	// fields as an authored PR under its own relation label.
+	declared := prReviewSpec{relation: "backport", mine: true}
+	bp := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, declared, "failing", "", false, "backport/pr-1", "mergeable")
+	for k, want := range map[string]string{
+		"relation": "backport", "mine": "true", "checks": "failing",
+		"mergeable": "mergeable", "head_branch": "backport/pr-1",
+	} {
+		if bp.Fields[k] != want {
+			t.Errorf("declared-query field %q = %q, want %q", k, bp.Fields[k], want)
+		}
 	}
 }
 
@@ -284,12 +302,15 @@ func TestNormalizeMergeable(t *testing.T) {
 	}
 }
 
-func TestDedupePRReviewItemsAuthoredWins(t *testing.T) {
+func TestDedupePRReviewItemsKeepsHighestPrecedence(t *testing.T) {
 	now := time.Now().UTC()
+	// Emitted in buildPRReviewSpecs order: authored, then declared queries,
+	// then review-requested.
 	items := []StatusItem{
-		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "review_requested"}, ObservedAt: now},
 		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "authored", "review_decision": "APPROVED"}, ObservedAt: now},
-		{URL: "https://github.com/o/r/pull/2", Fields: map[string]string{"relation": "authored"}, ObservedAt: now},
+		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "review_requested"}, ObservedAt: now},
+		{URL: "https://github.com/o/r/pull/2", Fields: map[string]string{"relation": "backport"}, ObservedAt: now},
+		{URL: "https://github.com/o/r/pull/2", Fields: map[string]string{"relation": "review_requested"}, ObservedAt: now},
 	}
 	out := dedupePRReviewItems(items)
 	if len(out) != 2 {
@@ -299,8 +320,67 @@ func TestDedupePRReviewItemsAuthoredWins(t *testing.T) {
 	for _, it := range out {
 		byURL[it.URL] = it
 	}
-	if byURL["https://github.com/o/r/pull/1"].Fields["relation"] != "authored" {
-		t.Errorf("authored should win the dedupe, got %v", byURL["https://github.com/o/r/pull/1"].Fields)
+	if got := byURL["https://github.com/o/r/pull/1"].Fields["relation"]; got != "authored" {
+		t.Errorf("authored should win the dedupe, got %q", got)
+	}
+	if got := byURL["https://github.com/o/r/pull/2"].Fields["relation"]; got != "backport" {
+		t.Errorf("declared query should beat review_requested, got %q", got)
+	}
+}
+
+func TestBuildPRReviewSpecsSelf(t *testing.T) {
+	extra := []userdata.PRQuery{{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"}}
+	specs := buildPRReviewSpecs(ScopeSelf, "alice", extra)
+	if len(specs) != 1 {
+		t.Fatalf("self should yield only the authored search, got %d: %+v", len(specs), specs)
+	}
+	if specs[0].relation != "authored" || !specs[0].mine {
+		t.Errorf("expected owned authored spec, got %+v", specs[0])
+	}
+	if !containsArg(specs[0].args, "--author") {
+		t.Errorf("authored spec missing --author: %v", specs[0].args)
+	}
+}
+
+func TestBuildPRReviewSpecsInvolvedIncludesDeclaredQueries(t *testing.T) {
+	extra := []userdata.PRQuery{{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"}}
+	for _, scope := range []Scope{ScopeInvolved, ScopeAll, ScopeUnset} {
+		specs := buildPRReviewSpecs(scope, "alice", extra)
+		if len(specs) != 3 {
+			t.Fatalf("scope %q should yield authored + backport + review-requested, got %d: %+v", scope, len(specs), specs)
+		}
+		// Order defines dedupe precedence: authored beats declared queries,
+		// which beat review-requested.
+		if specs[0].relation != "authored" || specs[1].relation != "backport" || specs[2].relation != "review_requested" {
+			t.Errorf("scope %q spec order = %q/%q/%q", scope, specs[0].relation, specs[1].relation, specs[2].relation)
+		}
+		if !specs[1].mine {
+			t.Errorf("scope %q: declared query should be owned", scope)
+		}
+		if specs[2].mine {
+			t.Errorf("scope %q: review-requested should not be owned", scope)
+		}
+		// Qualifiers become separate positional args; gh collapses a single
+		// combined string into one quoted keyword and rejects it.
+		want := []string{"author:app/ci-bot", "assignee:@me"}
+		if len(specs[1].args) != len(want) {
+			t.Fatalf("scope %q qualifier args = %v, want %v", scope, specs[1].args, want)
+		}
+		for i := range want {
+			if specs[1].args[i] != want[i] {
+				t.Errorf("scope %q qualifier args = %v, want %v", scope, specs[1].args, want)
+			}
+		}
+	}
+}
+
+func TestBuildPRReviewSpecsNoDeclaredQueries(t *testing.T) {
+	specs := buildPRReviewSpecs(ScopeInvolved, "alice", nil)
+	if len(specs) != 2 {
+		t.Fatalf("expected authored + review-requested, got %d: %+v", len(specs), specs)
+	}
+	if specs[0].relation != "authored" || specs[1].relation != "review_requested" {
+		t.Errorf("spec order = %q/%q", specs[0].relation, specs[1].relation)
 	}
 }
 

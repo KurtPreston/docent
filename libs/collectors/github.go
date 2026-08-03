@@ -106,9 +106,15 @@ func (c GitHubCollector) ghContext(directive userdata.Directive, opts *CollectOp
 	return user, host, env
 }
 
-// CollectState lists the user's currently-open authored PRs with draft and
-// aggregate checks status: the "what is true right now" view, independent of
-// the collection window.
+// CollectState lists the user's currently-open PRs with draft and aggregate
+// checks status: the "what is true right now" view, independent of the
+// collection window. Scope decides how far past the user's own PRs to reach:
+//
+//   - ScopeSelf: only PRs the user authored.
+//   - ScopeInvolved (default) / ScopeAll: also PRs awaiting the user's review
+//     and any declared by `pr_queries` on the directive.
+//
+// See buildPRReviewSpecs.
 func (c GitHubCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	user, host, env := c.ghContext(directive, opts)
 	return c.collectPRReviewStatus(ctx, env, directive, user, host, opts)
@@ -452,65 +458,107 @@ func dedupeGitHubItems(items []StatusItem) []StatusItem {
 	return out
 }
 
-// collectPRReviewStatus lists the user's currently-open PRs in two
-// relationships that drive the dashboard's status/action_required
-// classification, independent of the collection window (PRs are open
-// regardless of when they were last touched):
+// prReviewSpec is one open-PR search feeding the review-status view. Args are
+// spliced into `gh search prs` verbatim, so they may be flag pairs
+// ("--author", user) or bare GitHub search qualifiers ("author:app/ci-bot").
+// Mine marks PRs whose outcome the user owns, which decides both how much
+// status we resolve for them and how the dashboard classifies them.
+type prReviewSpec struct {
+	relation string
+	args     []string
+	mine     bool
+}
+
+// buildPRReviewSpecs plans the open-PR searches for the review-status view.
 //
-//   - authored (`--author`): each PR resolves draft state, aggregate
-//     checks, and reviewDecision so the engine can tell "approved" from
-//     "awaiting-response".
-//   - review-requested (`--review-requested`): PRs where the user's
-//     review is still requested (GitHub drops you from the requested
-//     reviewers once you submit a review, so presence is a good proxy for
-//     "my review is not yet given").
+//   - authored (`--author`): the user's own PRs, at every scope.
+//   - review-requested (`--review-requested`): someone else's PR awaiting the
+//     user's review. GitHub drops you from the requested reviewers once you
+//     submit a review, so presence is a good proxy for "my review is not yet
+//     given". Adjacent context, so involved/all only.
+//   - one spec per directive-declared pr_queries entry: PRs a bot opens on the
+//     user's behalf. Owned like authored PRs, but likewise adjacent context
+//     rather than something the user wrote, so involved/all only.
+//
+// Order defines dedupe precedence when a PR matches several searches.
+func buildPRReviewSpecs(scope Scope, user string, extra []userdata.PRQuery) []prReviewSpec {
+	specs := []prReviewSpec{{relation: "authored", args: []string{"--author", user}, mine: true}}
+	if scope == ScopeSelf {
+		return specs
+	}
+	for _, q := range extra {
+		qualifiers := strings.Fields(q.Qualifiers)
+		if len(qualifiers) == 0 {
+			continue
+		}
+		specs = append(specs, prReviewSpec{relation: strings.TrimSpace(q.Relation), args: qualifiers, mine: true})
+	}
+	return append(specs, prReviewSpec{relation: "review_requested", args: []string{"--review-requested", user}, mine: false})
+}
+
+// collectPRReviewStatus lists the user's currently-open PRs across the
+// searches buildPRReviewSpecs plans, independent of the collection window
+// (PRs are open regardless of when they were last touched). The result drives
+// the dashboard's status/action_required classification.
 //
 // Each open PR becomes one StatusItem with Kind "pr_review_status" and
-// Fields: relation (authored|review_requested), is_draft, checks
+// Fields: relation, mine (true|false), is_draft, checks
 // (passing|failing|pending|none|unknown), review_decision, mergeable
-// (mergeable|conflicting|unknown), and ready ("true" only when authored,
-// not a draft, and checks are passing/none).
+// (mergeable|conflicting|unknown), and ready ("true" only when the PR is the
+// user's own, not a draft, and checks are passing/none). Only owned PRs
+// resolve checks/review_decision/mergeable; the rest resolve just the head
+// branch, which correlation needs to anchor the PR to its repo.
 func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string, directive userdata.Directive, user, host string, opts *CollectOpts) ([]StatusItem, error) {
 	now := opts.windowEnd(c.Clock)
+	specs := buildPRReviewSpecs(opts.EffectiveScope(), user, directive.PRQueries)
 
-	authored, err := c.listOpenPRs(ctx, env, directive, opts, "--author", user)
-	if err != nil {
-		return nil, err
-	}
-	reviewRequested, err := c.listOpenPRs(ctx, env, directive, opts, "--review-requested", user)
-	if err != nil {
-		return nil, err
+	rows := make([][]ghSearchActivityRow, len(specs))
+	enrich := 0
+	details := make([]string, 0, len(specs))
+	for i, spec := range specs {
+		found, err := c.listOpenPRs(ctx, env, directive, opts, spec.args...)
+		if err != nil {
+			return nil, err
+		}
+		rows[i] = found
+		if spec.mine {
+			enrich += len(found)
+		}
+		details = append(details, fmt.Sprintf("%d %s", len(found), spec.relation))
 	}
 
-	totalSteps := len(authored) + 1
+	totalSteps := enrich + 1
 	completed := 1
 	reportProgress(opts, DirectiveProgress{
 		DirectiveID: directive.ID,
 		Description: directive.Name,
 		Status:      "running",
-		Detail:      fmt.Sprintf("%d authored, %d review-requested PR(s)", len(authored), len(reviewRequested)),
+		Detail:      strings.Join(details, ", ") + " PR(s)",
 		Completed:   completed,
 		Total:       totalSteps,
 	})
 
 	var items []StatusItem
-	for _, row := range authored {
-		checks, decision, headBranch, mergeable := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
-		completed++
-		reportProgress(opts, DirectiveProgress{
-			DirectiveID: directive.ID,
-			Description: directive.Name,
-			Status:      "running",
-			Detail:      "checking PR status",
-			Completed:   completed,
-			Total:       totalSteps,
-		})
-		ready := !row.IsDraft && (checks == "passing" || checks == "none")
-		items = append(items, prReviewItem(directive, user, host, now, row, "authored", checks, decision, ready, headBranch, mergeable))
-	}
-	for _, row := range reviewRequested {
-		headBranch := c.fetchPRHeadRef(ctx, env, row.URL, directive, opts)
-		items = append(items, prReviewItem(directive, user, host, now, row, "review_requested", "", "", false, headBranch, ""))
+	for i, spec := range specs {
+		for _, row := range rows[i] {
+			if !spec.mine {
+				headBranch := c.fetchPRHeadRef(ctx, env, row.URL, directive, opts)
+				items = append(items, prReviewItem(directive, user, host, now, row, spec, "", "", false, headBranch, ""))
+				continue
+			}
+			checks, decision, headBranch, mergeable := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
+			completed++
+			reportProgress(opts, DirectiveProgress{
+				DirectiveID: directive.ID,
+				Description: directive.Name,
+				Status:      "running",
+				Detail:      "checking PR status",
+				Completed:   completed,
+				Total:       totalSteps,
+			})
+			ready := !row.IsDraft && (checks == "passing" || checks == "none")
+			items = append(items, prReviewItem(directive, user, host, now, row, spec, checks, decision, ready, headBranch, mergeable))
+		}
 	}
 	return dedupePRReviewItems(items), nil
 }
@@ -537,10 +585,10 @@ func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directiv
 	return rows, nil
 }
 
-// prReviewItem builds one pr_review_status StatusItem for an open PR in the
-// given relationship. checks/decision/ready/mergeable are only meaningful for
-// authored PRs; review-requested rows pass zero values.
-func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, relation, checks, decision string, ready bool, headBranch, mergeable string) StatusItem {
+// prReviewItem builds one pr_review_status StatusItem for an open PR found by
+// the given search. checks/decision/ready/mergeable are only meaningful for
+// PRs the user owns; rows from unowned searches pass zero values.
+func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, spec prReviewSpec, checks, decision string, ready bool, headBranch, mergeable string) StatusItem {
 	repo := strings.TrimSpace(row.Repository.NameWithOwner)
 	if repo == "" {
 		repo = gitHubOwnerRepoFromURL(row.URL)
@@ -550,7 +598,11 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		"host":     host,
 		"repo":     repo,
 		"state":    "open",
-		"relation": relation,
+		"relation": spec.relation,
+		// Relations are open-ended (directives declare their own), so
+		// downstream classification keys off this flag rather than trying to
+		// enumerate relation names.
+		"mine":     strconv.FormatBool(spec.mine),
 		"is_draft": strconv.FormatBool(row.IsDraft),
 	}
 	// created_at lets the report tell a PR opened in-window from a pre-existing
@@ -561,7 +613,7 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	if headBranch != "" {
 		fields["head_branch"] = headBranch
 	}
-	if relation == "authored" {
+	if spec.mine {
 		fields["checks"] = checks
 		fields["review_decision"] = decision
 		fields["ready"] = strconv.FormatBool(ready)
@@ -581,7 +633,7 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		Source:      directive.Collector,
 		Kind:        "pr_review_status",
 		Title:       row.Title,
-		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s mergeable=%s", relation, row.IsDraft, checks, decision, mergeable),
+		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s mergeable=%s", spec.relation, row.IsDraft, checks, decision, mergeable),
 		URL:         row.URL,
 		Severity:    "info",
 		ObservedAt:  obs.UTC(),
@@ -591,25 +643,23 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	}
 }
 
-// dedupePRReviewItems collapses PRs that surface in more than one
-// relationship (e.g. authored and review-requested) keyed by URL. The
-// authored row wins because it carries the richer checks/review_decision
-// fields the engine needs.
+// dedupePRReviewItems collapses PRs that surface in more than one search
+// (e.g. both authored and review-requested) keyed by URL, keeping the first
+// occurrence. Callers must pass items in precedence order — collectPRReviewStatus
+// emits them in buildPRReviewSpecs order, which puts authored first so its
+// richer checks/review_decision fields win.
 func dedupePRReviewItems(items []StatusItem) []StatusItem {
-	seen := make(map[string]int, len(items))
+	seen := make(map[string]bool, len(items))
 	out := make([]StatusItem, 0, len(items))
 	for _, it := range items {
 		key := it.URL
 		if key == "" {
 			key = it.Kind + "|" + it.Title
 		}
-		if idx, ok := seen[key]; ok {
-			if it.Fields["relation"] == "authored" && out[idx].Fields["relation"] != "authored" {
-				out[idx] = it
-			}
+		if seen[key] {
 			continue
 		}
-		seen[key] = len(out)
+		seen[key] = true
 		out = append(out, it)
 	}
 	return out
