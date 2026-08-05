@@ -48,6 +48,9 @@ func MatchSignals(rules []Rule, signals []model.Signal, opts MatchOpts) []Event 
 // optional State["is_self"]="true" marker (stamped by the engine from the
 // originating signal) so the "me" sentinel and the self condition can be
 // evaluated without an IsSelf field on model.Entity.
+//
+// A trigger's match.fields narrows which entities are eligible, exactly as it
+// does for signal rules — see entityFieldsMatch.
 func MatchTransitions(rules []Rule, prev, next map[string]model.Entity, opts MatchOpts) []Event {
 	now := opts.Now
 	if now.IsZero() {
@@ -69,6 +72,9 @@ func MatchTransitions(rules []Rule, prev, next map[string]model.Entity, opts Mat
 		wantTo := strings.TrimSpace(rule.Trigger.When.To)
 		for id, ent := range next {
 			if !sourceKindMatch(rule.Trigger, ent) {
+				continue
+			}
+			if !entityFieldsMatch(rule.Trigger.Match.Fields, ent) {
 				continue
 			}
 			newVal := ""
@@ -217,6 +223,21 @@ func kindIn(kinds KindSpec, kind string) bool {
 		}
 	}
 	return false
+}
+
+// entityFieldsMatch applies a trigger's match.fields gate to an entity, so a
+// transition rule can narrow to a subset of entities the same way a signal
+// rule does. correlation.SignalToEntity copies every signal field into
+// Entity.State, so the same keys work in both places — notably `relation`,
+// which is the only handle on the PRs a `pr_queries` entry labels (a bot's
+// backports, say) and is not otherwise expressible in a `when` clause.
+func entityFieldsMatch(want map[string]string, ent model.Entity) bool {
+	for k, v := range want {
+		if ent.State == nil || ent.State[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // valueMatch compares a wanted value against an observed one case-insensitively.

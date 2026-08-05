@@ -154,6 +154,54 @@ func TestMatchTransitions_assigneeToMe(t *testing.T) {
 	}
 }
 
+func TestMatchTransitions_matchFields(t *testing.T) {
+	// A transition rule must be able to narrow to the PRs a pr_queries entry
+	// labels, the way a signal rule can. Every open PR is is_self, and
+	// `relation` is not expressible in a `when` clause, so without this gate a
+	// draft -> ready rule aimed at a bot's backports also fires for every PR
+	// the developer authored or was asked to review.
+	rules := []automation.Rule{{
+		ID:      "backport-review",
+		Enabled: true,
+		Trigger: automation.Trigger{
+			Type:   "transition",
+			Source: "github-enterprise",
+			Kind:   automation.KindSpec{"pr_review_status"},
+			Match:  automation.Match{Fields: map[string]string{"relation": "backport"}},
+			When:   automation.When{Field: "is_draft", To: "false"},
+		},
+		Actions: []automation.Action{{Type: "shell", Command: "true"}},
+	}}
+	// Neither PR exists in prev: both are newly observed, so is_draft reads as
+	// "" -> its current value. Only the backport may fire.
+	next := map[string]model.Entity{
+		"backport": {ID: "backport", Kind: "pr_review_status", State: map[string]string{
+			"relation": "backport", "is_draft": "false", "is_self": "true",
+		}},
+		"authored": {ID: "authored", Kind: "pr_review_status", State: map[string]string{
+			"relation": "authored", "is_draft": "false", "is_self": "true",
+		}},
+	}
+	evs := automation.MatchTransitions(rules, map[string]model.Entity{}, next, automation.MatchOpts{})
+	if len(evs) != 1 || evs[0].Entity.ID != "backport" {
+		t.Fatalf("got %+v, want a single event for backport", evs)
+	}
+
+	// The other half of the rule's job: a conflicted backport opens as a draft
+	// (no fire), then fires once the developer resolves it and marks it ready.
+	prev := map[string]model.Entity{
+		"backport": {ID: "backport", Kind: "pr_review_status", State: map[string]string{
+			"relation": "backport", "is_draft": "true", "is_self": "true",
+		}},
+	}
+	evs = automation.MatchTransitions(rules, prev, map[string]model.Entity{
+		"backport": next["backport"],
+	}, automation.MatchOpts{})
+	if len(evs) != 1 || evs[0].From != "true" || evs[0].To != "false" {
+		t.Fatalf("got %+v, want a single true->false event", evs)
+	}
+}
+
 func TestMatchTransitions_selfCondition(t *testing.T) {
 	self := true
 	rules := []automation.Rule{{

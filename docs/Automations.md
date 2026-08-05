@@ -57,7 +57,7 @@ automations:
 | Type | Fires when | Key fields |
 |------|-----------|------------|
 | `signal` (default) | A newly-collected signal matches the filters. | `source` (collector, e.g. `github`), `kind` (one or a list; friendly aliases like `pr` match `pr_review_status`/`pr_activity`, `ticket`/`issue` are interchangeable), `match.text` (regex against title+summary), `match.ticket_key` (require a JIRA key to be extractable), `match.fields` (exact field equality). |
-| `transition` | An entity's state field changes value between two collects. | `source`, `kind`, `when.field` (required), `when.from` / `when.to` (either can be the sentinel `me`, meaning "belongs to you", e.g. `assignee: me` on an assignment). Empty `from`/`to` matches any value. |
+| `transition` | An entity's state field changes value between two collects. | `source`, `kind`, `when.field` (required), `when.from` / `when.to` (either can be the sentinel `me`, meaning "belongs to you", e.g. `assignee: me` on an assignment). Empty `from`/`to` matches any value. `match.fields` narrows which entities are eligible, as it does for signals — an entity's state carries every field of the signal it came from. |
 | `schedule` | A time is reached. | `cron` (5-field `min hour dom month dow`, local time, supports `*`, ranges, lists, `*/N` steps) **or** `at` (`"HH:MM"`, local time) with an optional `weekday` name to restrict to one day. |
 
 Signal and transition rules are evaluated right after each collector run, so
@@ -65,6 +65,11 @@ they fire close to real time (subject to that directive's poll interval — see
 [the webhook nudge](#webhook-nudge-forcing-a-collect) below to force it).
 Schedule rules are checked once a second in the daemon and deduped so a rule
 fires at most once per calendar minute.
+
+**An entity missing from the previous snapshot reads as an empty old value**,
+so `when.to: <value>` also fires the first time a matching entity is seen —
+one rule covers both "this appeared already in the state I care about" and
+"this later changed into it". Pin `when.from` when you want only the change.
 
 **A daemon restart doesn't replay history**: the first successful collect of
 each unit after startup only seeds a baseline (so docentd knows what
@@ -236,3 +241,4 @@ agent run can't block the daemon's collection loop.
 - **Kind aliases** — e.g. a rule with `kind: pr` also matches the concrete entity kind `pr_review_status`/`pr_activity`; `ticket`/`issue`/`issue_activity` are similarly interchangeable.
 - **The `me` sentinel** in `when.to: me` / `when.from: me` means "the field's new/old value belongs to you" (`is_self`), not the literal string `"me"`.
 - **PRs a bot opens for you need a `pr_queries` entry** — a `checks`/`mergeable` transition can only fire on a PR the collector actually sees, and by default that means PRs you authored. Backport bots author the PR themselves, so declare a search for them on the directive (see [Extra open-PR searches](Reporting.md#extra-open-pr-searches)). Match just those rows with `match.fields: { relation: <your label> }`.
+- **Prefer `transition` over `signal` for GitHub PRs** — PR signals carry no `StableID`, so every PR a rule matches in one collect shares the dedupe key `<rule id>:`, and all but the first are dropped as duplicates. That silently loses four of five sibling backports of the same change. Transitions key off the entity ID (derived from the PR title) instead, which is distinct per PR.
