@@ -46,8 +46,8 @@ type jiraIssue struct {
 	Fields struct {
 		Summary string `json:"summary"`
 		Status  struct {
-			Name            string `json:"name"`
-			StatusCategory  struct {
+			Name           string `json:"name"`
+			StatusCategory struct {
 				Key  string `json:"key"`
 				Name string `json:"name"`
 			} `json:"statusCategory"`

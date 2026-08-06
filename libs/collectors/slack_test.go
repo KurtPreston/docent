@@ -165,14 +165,14 @@ func TestSlackPermalink(t *testing.T) {
 
 func TestIsSlackChannelID(t *testing.T) {
 	cases := map[string]bool{
-		"":         false,
-		"#team":    false,
-		"team":     false,
-		"C12345":   true,
-		"G0AB":     true,
-		"DXYZ":     true,
-		"c12345":   false, // case-sensitive prefix
-		"C 12345":  false,
+		"":        false,
+		"#team":   false,
+		"team":    false,
+		"C12345":  true,
+		"G0AB":    true,
+		"DXYZ":    true,
+		"c12345":  false, // case-sensitive prefix
+		"C 12345": false,
 	}
 	for in, want := range cases {
 		if got := isSlackChannelID(in); got != want {
@@ -815,17 +815,17 @@ func TestSlackCollectFanOutBoundedByConcurrency(t *testing.T) {
 	channels := make([]map[string]any, 0, dmCount)
 	for i := 0; i < dmCount; i++ {
 		channels = append(channels, map[string]any{
-			"id":   fmt.Sprintf("D_PEER%02d", i),
+			"id":    fmt.Sprintf("D_PEER%02d", i),
 			"is_im": true,
-			"user": fmt.Sprintf("U_PEER%02d", i),
+			"user":  fmt.Sprintf("U_PEER%02d", i),
 		})
 	}
 
 	var (
-		mu      sync.Mutex
-		inFlight int
+		mu           sync.Mutex
+		inFlight     int
 		peakInFlight int
-		seen    = map[string]int{}
+		seen         = map[string]int{}
 	)
 	srv, _ := newSlackServer(t, func(req slackTestRequest) (int, any) {
 		switch pathFor(req.Path) {

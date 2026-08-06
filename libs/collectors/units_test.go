@@ -41,9 +41,9 @@ func (c dualCollector) CollectEvents(_ context.Context, d userdata.Directive, _ 
 func TestRegistryCapabilities(t *testing.T) {
 	r := NewRegistry(time.Now)
 	cases := []struct {
-		name        string
-		wantState   bool
-		wantEvents  bool
+		name       string
+		wantState  bool
+		wantEvents bool
 	}{
 		{"wsm", true, false},
 		{"slack", false, true},

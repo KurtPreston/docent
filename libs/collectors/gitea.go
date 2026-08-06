@@ -31,12 +31,12 @@ type giteaRepo struct {
 // PRs and nil/absent for plain issues (Gitea's data model treats both as
 // "issues").
 type giteaIssue struct {
-	Number     int    `json:"number"`
-	Title      string `json:"title"`
-	State      string `json:"state"`
-	HTMLURL    string `json:"html_url"`
-	Updated    string `json:"updated_at"`
-	User       struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	State   string `json:"state"`
+	HTMLURL string `json:"html_url"`
+	Updated string `json:"updated_at"`
+	User    struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Assignees []struct {
