@@ -409,7 +409,7 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .pill.bk-draft { color: var(--text-faint); }
 .pill.st-needs-followup { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, var(--border)); }
 .pill.st-working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-.pill.st-idle { color: var(--text-faint); }
+.pill.st-idle, .pill.st-closed { color: var(--text-faint); }
 
 .lane-detail { border-left: 4px solid var(--g-color, var(--border)); padding-left: 16px; }
 .detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }

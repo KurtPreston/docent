@@ -306,12 +306,16 @@ function WindowRow({
     name: session.name,
     targetHost: session.targetHost,
   };
+  // The record outlives the window it describes: the registry holds it for the
+  // retention window when no close event arrived. Without a heartbeat the
+  // window is gone, so report that rather than its last known activity.
+  const status = session.live ? session.status : "closed";
   const body = (
     <>
       <span className={"live" + (session.live ? " on" : "")} />
       <span className="name">{session.name}</span>
       {session.host ? <span className="chip">{session.host}</span> : null}
-      <span className={"pill st-" + session.status}>{session.status}</span>
+      <span className={"pill st-" + status}>{status}</span>
       {session.lastActivity ? (
         <span className="muted tiny">{timeAgo(session.lastActivity)}</span>
       ) : null}
@@ -320,11 +324,12 @@ function WindowRow({
   if (!canLaunchSession(target)) {
     return <div className="detail-row">{body}</div>;
   }
+  const verb = session.live ? "Reveal this window" : "Reopen this window";
   return (
     <button
       type="button"
       className="detail-row clickable"
-      title={session.path ? "Reveal this window — " + session.path : "Reveal this window"}
+      title={session.path ? verb + " — " + session.path : verb}
       onClick={() => void launchSession(target)}
     >
       {body}
@@ -378,15 +383,17 @@ function LaneDetail({
           </button>
         ) : null}
         {/* Named for what it will do, because the two outcomes are hard to tell
-            apart afterwards: a window on this checkout is revealed, and a lane
-            with none gets a new one. */}
+            apart afterwards: a live window on this checkout is revealed, and a
+            lane with none gets a new one. Liveness decides it, not the presence
+            of a session: a record left behind by a window that died without
+            reporting its close promised to "go to" a window that is not there. */}
         {provider && lane.deepLink ? (
           <button
             type="button"
             className="mini-btn primary"
             onClick={() => void activate(provider, lane).then(() => window.setTimeout(onReload, 400))}
           >
-            {lane.sessions.length > 0 ? "Go to window" : "Open in Cursor"}
+            {lane.sessions.some((s) => s.live) ? "Go to window" : "Open in Cursor"}
           </button>
         ) : null}
       </div>
