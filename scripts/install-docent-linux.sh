@@ -464,6 +464,23 @@ seed_remote_machine_settings() {
 configure_ide_extension
 seed_remote_machine_settings
 
+# --- Cursor agent-activity hook ----------------------------------------------
+# The hook belongs on the machine where Cursor's *agent* runs, which for a
+# Remote-SSH window is this box even though the GUI (and the UI-kind IDE
+# extension) live on the client. Skipping it here is what let a hand-copied hook
+# rot until it was posting to a route that no longer existed, silently costing
+# all agent status while window lifecycle kept working. docentd owns the merge so
+# this needs no jq.
+install_cursor_hooks() {
+  if [ ! -d "$HOME/.cursor" ]; then
+    log "no ~/.cursor on this host; skipping Cursor hook install"
+    return 0
+  fi
+  log "installing Cursor agent-activity hook"
+  run "$DOCENTD_BIN" install-hooks || log "warning: hook install failed; run '$DOCENTD_BIN install-hooks' manually"
+}
+install_cursor_hooks
+
 # --- systemd --user service ---------------------------------------------------
 if [ "$INSTALL_SYSTEMD" -eq 1 ]; then
   log "writing systemd unit $SERVICE_PATH"

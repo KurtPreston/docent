@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -402,6 +403,13 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 // FS in embed builds, else from webRoot on disk.
 func (s *Server) staticOrIndex(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		// Only a client posting to a route that does not exist gets here, and
+		// the reporters that post to docentd (Cursor hooks, the IDE extension)
+		// are all fire-and-forget: they discard the response and exit 0. A
+		// stale hook posting to a renamed endpoint therefore loses every event
+		// in total silence, which is exactly how agent status went missing for
+		// weeks. Log it so the next drift is visible in the daemon log.
+		log.Printf("WARNING: %s %s has no route — if this is a docent reporter it is dropping every event; run `docentd install-hooks` on the host running it", r.Method, r.URL.Path)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -422,6 +430,9 @@ func (s *Server) staticOrIndex(w http.ResponseWriter, r *http.Request) {
 			writeAsset(w, b, "text/html; charset=utf-8")
 			return
 		}
+	}
+	if strings.HasPrefix(name, "api/") {
+		log.Printf("WARNING: GET %s is not a known API route", r.URL.Path)
 	}
 	http.NotFound(w, r)
 }

@@ -754,59 +754,27 @@ if [ "$USE_TUNNEL" != 1 ]; then
   remove_unused_launch_agent com.docent.docent-tunnel "$PLIST_TUNNEL"
 fi
 
+# install_hooks delegates to `docentd install-hooks`, which embeds the canonical
+# script and merges hooks.json itself. Keeping the merge in one place (rather
+# than here in jq and again on Linux) is deliberate: the hook's whole job is
+# reporting agent activity, and a second implementation is a second way for it
+# to drift out of sync and go quiet.
+#
+# Note this only covers a Cursor GUI running on this Mac. A Remote-SSH window
+# executes its agent on the remote box, which needs its own install there.
 install_hooks() {
-  local hooks_dir="$HOME/.cursor/hooks"
-  local hooks_json="$HOME/.cursor/hooks.json"
-  local src="$ROOT/hooks/docent-notify.sh"
-
-  log "installing Cursor hooks"
-  run mkdir -p "$hooks_dir"
-  run cp "$src" "$hooks_dir/docent-notify.sh"
-  run chmod +x "$hooks_dir/docent-notify.sh"
-
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "jq not found; merge hooks/hooks.snippet.json into $hooks_json manually" >&2
-    return 0
-  fi
-
+  log "installing Cursor agent-activity hook"
   if [ "$DRY_RUN" -eq 1 ]; then
-    run printf '%s\n' "merge docent entries into $hooks_json"
+    run printf '%s\n' "$DOCENTD_BIN install-hooks"
     return 0
   fi
-
-  mkdir -p "$(dirname "$hooks_json")"
-  [ -f "$hooks_json" ] || echo '{"version":1,"hooks":{}}' >"$hooks_json"
-
-  local tmp hook_base="$hooks_dir/docent-notify.sh"
-  tmp="$(mktemp)"
-  # The extension now owns window lifecycle + heartbeats, so the hook only wires
-  # the two agent events Cursor doesn't expose to extensions. Any docent entries
-  # on the retired events (sessionStart/sessionEnd/afterShellExecution) are
-  # stripped so re-installs clean up after the old hook.
-  jq --arg hook "$hook_base" '
-    def addhook(ev; suffix):
-      .hooks[ev] = (((.hooks[ev]) // []) | map(select((.command // "") | contains("docent-notify.sh") | not))
-        + [{command: ($hook + " " + suffix), timeout: 5}]);
-    def stripdocent(ev):
-      if (.hooks[ev]) != null
-      then .hooks[ev] = ((.hooks[ev]) | map(select((.command // "") | contains("docent-notify.sh") | not)))
-      else . end;
-    if (.hooks | type) == "object" then
-      .version = (.version // 1)
-      | .hooks = (.hooks // {})
-      | addhook("beforeSubmitPrompt"; "agent_request_sent")
-      | addhook("stop"; "agent_response_received")
-      | stripdocent("sessionStart")
-      | stripdocent("sessionEnd")
-      | stripdocent("afterShellExecution")
-    else
-      .["beforeSubmitPrompt"] = ([(.["beforeSubmitPrompt"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " agent_request_sent")}])
-      | .["stop"] = ([(.["stop"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)] + [{command: ($hook + " agent_response_received")}])
-      | .["sessionStart"] = [(.["sessionStart"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)]
-      | .["sessionEnd"] = [(.["sessionEnd"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)]
-      | .["afterShellExecution"] = [(.["afterShellExecution"] // [])[] | select((.command // "") | contains("docent-notify.sh") | not)]
-    end
-  ' "$hooks_json" >"$tmp" && mv "$tmp" "$hooks_json"
+  # In remote mode docentd runs on the dev box and is never built here, so the
+  # binary that owns the merge may be absent.
+  if [ ! -x "$DOCENTD_BIN" ]; then
+    echo "no docentd binary at $DOCENTD_BIN; run 'docentd install-hooks' on this Mac once one is available" >&2
+    return 0
+  fi
+  run "$DOCENTD_BIN" install-hooks || echo "hook install failed; run '$DOCENTD_BIN install-hooks' manually" >&2
 }
 
 install_hammerspoon() {
