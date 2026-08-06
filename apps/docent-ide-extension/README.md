@@ -12,10 +12,24 @@ A session's identity is the composite of `ide` + `ideHost` + `targetHost` +
 `path`, matching docentd's registry key:
 
 - `ide` — `cursor`, `vscode`, or `windsurf` (derived from the app name).
-- `ideHost` — this machine's hostname (`os.hostname()`). For a Remote-SSH
-  window this is the remote host, since the extension host runs there.
-- `targetHost` — `vscode.env.remoteName` when the window is remote, else empty.
-- `path` — each open workspace folder (a folderless window still reports).
+- `ideHost` — this machine's hostname (`os.hostname()`). This is declared as a
+  UI extension (`"extensionKind": ["ui"]`), so it always runs on the machine
+  with the GUI, even for a Remote-SSH window. `ideHost` is therefore the host
+  you sit at, never the remote.
+- `targetHost` — the ssh alias the window edits, parsed out of the workspace
+  folder's `vscode-remote` URI authority (`ssh-remote+<host>`), else empty. The
+  authority is used rather than `vscode.env.remoteName`, which only names the
+  resolver kind (`ssh-remote`) and not which host.
+- `path` — each open workspace folder (a folderless window still reports). For a
+  remote folder this is `uri.path`, the path as the *remote* spells it, not
+  `uri.fsPath`. On a Windows client `fsPath` would render `/home/me/x` as
+  `\home\me\x`, which no longer matches what the agent hook reports from the
+  remote, and docentd would file one window as two sessions.
+
+Because the extension runs on the GUI host while the agent hook runs wherever
+the agent executes, a single Remote-SSH window is reported by two clients on two
+different machines. docentd reconciles them by `ide` + normalized path; see
+`resolveKeyLocked` in the session registry.
 
 Events sent:
 

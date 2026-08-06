@@ -39,7 +39,7 @@ func (id Identity) Key() string {
 		norm(id.IDE),
 		norm(id.IDEHost),
 		norm(id.TargetHost),
-		strings.TrimRight(strings.TrimSpace(id.Path), "/"),
+		NormPath(id.Path),
 	}, keyDelim)
 }
 
@@ -52,8 +52,24 @@ func norm(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// NormPath canonicalizes a session path to forward slashes with no trailing
+// separator.
+//
+// The separator rewrite is not cosmetic. A single window is reported by two
+// clients on two different machines: the IDE extension (client-side, so on
+// Windows for a Remote-SSH window) and the Cursor agent hook (on the remote).
+// A client-side extension asked for a remote path in local convention answers
+// \home\me\Code\x, while the hook can only ever say /home/me/Code/x. Paths are
+// part of the session identity, so without normalization the same window
+// arrives as two records and agent status attaches to neither the window the
+// user sees nor the work item it belongs to. Normalizing here means an older
+// extension build still joins correctly instead of failing silently.
+func NormPath(p string) string {
+	return strings.TrimRight(strings.ReplaceAll(strings.TrimSpace(p), `\`, "/"), "/")
+}
+
 func leaf(path string) string {
-	p := strings.TrimRight(strings.TrimSpace(path), "/")
+	p := NormPath(path)
 	if p == "" {
 		return ""
 	}
@@ -121,7 +137,41 @@ func (s *Store) load() error {
 	if len(b) == 0 {
 		return nil
 	}
-	return json.Unmarshal(b, &s.data)
+	if err := json.Unmarshal(b, &s.data); err != nil {
+		return err
+	}
+	s.migratePaths()
+	return nil
+}
+
+// migratePaths rewrites records persisted before paths were normalized. Both the
+// stored path and the composite key embed the separator, so a record written by
+// an older client-side extension keeps its \home\me\Code\x spelling — and its
+// key — until it is rewritten here. Without this, existing sessions stay
+// unmatchable by the agent hook and keep producing malformed deep links until
+// each window happens to be reopened.
+func (s *Store) migratePaths() {
+	for key, rec := range s.data {
+		normalized := NormPath(rec.Path)
+		if normalized == rec.Path {
+			continue
+		}
+		rec.Path = normalized
+		delete(s.data, key)
+		want := Identity{
+			IDE:        rec.IDE,
+			IDEHost:    rec.IDEHost,
+			TargetHost: rec.TargetHost,
+			Path:       rec.Path,
+			Remote:     rec.Remote,
+		}.Key()
+		// Prefer whichever record has seen activity more recently, so a merge
+		// cannot resurrect a stale duplicate over a live session.
+		if existing, ok := s.data[want]; ok && parseISO(LatestActivity(existing)).After(parseISO(LatestActivity(rec))) {
+			continue
+		}
+		s.data[want] = rec
+	}
 }
 
 func (s *Store) save() error {
@@ -189,14 +239,14 @@ func (s *Store) resolveKeyLocked(id Identity) string {
 		return direct
 	}
 	wantIDE := norm(id.IDE)
-	wantPath := strings.TrimRight(strings.TrimSpace(id.Path), "/")
+	wantPath := NormPath(id.Path)
 	var bestKey string
 	var bestTime time.Time
 	for k, r := range s.data {
 		if norm(r.IDE) != wantIDE {
 			continue
 		}
-		if strings.TrimRight(strings.TrimSpace(r.Path), "/") != wantPath {
+		if NormPath(r.Path) != wantPath {
 			continue
 		}
 		if strings.TrimSpace(r.TargetHost) == "" {
@@ -235,7 +285,7 @@ func (s *Store) ApplyEvent(id Identity, event, name, color string) (string, erro
 			IDE:        id.IDE,
 			IDEHost:    id.IDEHost,
 			TargetHost: id.TargetHost,
-			Path:       strings.TrimRight(strings.TrimSpace(id.Path), "/"),
+			Path:       NormPath(id.Path),
 			Remote:     id.Remote,
 			CreatedAt:  now,
 		}

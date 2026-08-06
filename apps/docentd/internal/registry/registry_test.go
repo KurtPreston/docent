@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,6 +110,81 @@ func TestRemoteEventBindsToExtensionRecord(t *testing.T) {
 	}
 	if rec.LastAgentStopAt == "" {
 		t.Fatal("agent stop should be recorded on the bound extension record")
+	}
+}
+
+// The real-world shape of the bug this reconciliation exists for: a Windows
+// client-side extension reporting a remote path in Windows convention, and the
+// agent hook on the Ubuntu box reporting the same path in POSIX convention.
+// Before normalization these produced two records and no agent status.
+func TestRemoteEventBindsAcrossPathSeparators(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext := Identity{IDE: "cursor", IDEHost: "REWWD-KPRESTON2", TargetHost: "desktop", Path: `\home\kpreston\Code\salsa\salsa-12722`}
+	if _, err := store.ApplyEvent(ext, "open", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	hook := Identity{IDE: "cursor", Remote: true, TargetHost: "desktop", Path: "/home/kpreston/Code/salsa/salsa-12722"}
+	if _, err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.data) != 1 {
+		t.Fatalf("separator difference forked the session: got %d records %+v", len(store.data), store.data)
+	}
+	for _, rec := range store.data {
+		if rec.LastPromptAt == "" {
+			t.Error("agent activity did not attach to the window record")
+		}
+		if strings.Contains(rec.Path, `\`) {
+			t.Errorf("stored path should be normalized, got %q", rec.Path)
+		}
+		if SessionStatus(rec) != "working" {
+			t.Errorf("status = %q, want working", SessionStatus(rec))
+		}
+	}
+}
+
+// Records persisted before normalization must be re-keyed on load, otherwise
+// existing sessions stay unmatchable until each window is reopened.
+func TestLoadMigratesWindowsStylePaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	legacy := `{
+  "cursor\u001frewwd-kpreston2\u001fdesktop\u001f\\home\\me\\Code\\proj": {
+    "ide": "cursor",
+    "ideHost": "REWWD-KPRESTON2",
+    "targetHost": "desktop",
+    "path": "\\home\\me\\Code\\proj",
+    "name": "proj",
+    "lastHeartbeatAt": "2026-01-02T00:00:00Z"
+  }
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Identity{IDE: "cursor", IDEHost: "REWWD-KPRESTON2", TargetHost: "desktop", Path: "/home/me/Code/proj"}
+	rec, ok := store.Get(want.Key())
+	if !ok {
+		t.Fatalf("record was not re-keyed; store = %+v", store.data)
+	}
+	if rec.Path != "/home/me/Code/proj" {
+		t.Errorf("path = %q, want normalized", rec.Path)
+	}
+	if len(store.data) != 1 {
+		t.Errorf("migration should not duplicate: %+v", store.data)
+	}
+
+	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/Code/proj"}
+	if _, err := store.ApplyEvent(hook, "agent_response_received", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.data) != 1 {
+		t.Errorf("migrated record should accept hook events, got %+v", store.data)
 	}
 }
 

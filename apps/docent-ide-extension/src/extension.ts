@@ -123,6 +123,21 @@ function hostFromJSON(s: string): string {
   return "";
 }
 
+// pathFor returns the workspace path as the machine that owns it spells it.
+//
+// This matters because a session's identity includes its path, and the other
+// reporter for the same window — the Cursor agent hook — runs on the *remote*
+// box and can only ever report a POSIX path. Since this extension runs
+// client-side, uri.fsPath renders a remote path in the client's local
+// convention: on Windows, /home/me/Code/x becomes \home\me\Code\x. The two
+// reporters then never agree, docentd files them as separate sessions, and agent
+// status silently detaches from the window it belongs to. uri.path keeps the
+// remote's own spelling. Local folders still use fsPath, where the platform
+// convention is the correct one (c:\Users\me, not /c:/Users/me).
+function pathFor(uri: vscode.Uri): string {
+  return uri.scheme === "vscode-remote" ? uri.path : uri.fsPath;
+}
+
 // currentFolders returns the workspace folders this window has open, each with
 // its remote host. A window with no folder yields a single empty entry so it is
 // still tracked.
@@ -131,7 +146,7 @@ function currentFolders(): FolderTarget[] {
   if (!folders || folders.length === 0) {
     return [{ path: "", targetHost: "" }];
   }
-  return folders.map((f) => ({ path: f.uri.fsPath, targetHost: targetHostFor(f.uri) }));
+  return folders.map((f) => ({ path: pathFor(f.uri), targetHost: targetHostFor(f.uri) }));
 }
 
 function leaf(p: string): string {
@@ -224,10 +239,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders((e) => {
       const cfg = readConfig();
       for (const added of e.added) {
-        postEvent(cfg, ide, ideHost, targetHostFor(added.uri), added.uri.fsPath, "open");
+        postEvent(cfg, ide, ideHost, targetHostFor(added.uri), pathFor(added.uri), "open");
       }
       for (const removed of e.removed) {
-        postEvent(cfg, ide, ideHost, targetHostFor(removed.uri), removed.uri.fsPath, "close");
+        postEvent(cfg, ide, ideHost, targetHostFor(removed.uri), pathFor(removed.uri), "close");
       }
     }),
   );
