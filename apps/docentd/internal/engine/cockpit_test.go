@@ -76,11 +76,54 @@ func TestTicketLaneRequiresJiraTier(t *testing.T) {
 func TestDoneTicketWithOpenWindowStillShows(t *testing.T) {
 	g := DashboardGroup{
 		Key: "SALSA-5", JiraDone: true, JiraStatus: "Done",
-		Sessions: []DashboardSession{{Name: "salsa-5", Status: "needs-followup"}},
+		Sessions: []DashboardSession{{Name: "salsa-5", Status: "needs-followup", Live: true}},
 	}
 	lane, _ := laneFor(g)
 	if lane.Attention != AttentionAgentWaiting {
 		t.Errorf("attention = %q, want %q", lane.Attention, AttentionAgentWaiting)
+	}
+}
+
+// A window that stopped heartbeating is gone, but its record survives in the
+// registry for the whole retention window when no "close" event arrived — the
+// app quitting, a crash, the machine sleeping. The cockpit used to read mere
+// registration as proof of an open window, so a dead one advertised "window
+// open" and held a lane for half an hour after the user closed it.
+func TestStaleSessionEarnsNoLane(t *testing.T) {
+	cases := []string{"idle", "working", "needs-followup"}
+	for _, status := range cases {
+		t.Run(status, func(t *testing.T) {
+			g := DashboardGroup{
+				Key:      "SALSA-40",
+				Sessions: []DashboardSession{{Name: "salsa-40", Status: status, Live: false}},
+			}
+			lane, inbox := laneFor(g)
+			if lane.AttentionRank < rankNotInCockpit {
+				t.Errorf("dead window earned a lane (%s: %v)", lane.Attention, lane.Reasons)
+			}
+			if len(inbox) != 0 {
+				t.Errorf("dead window produced inbox items: %+v", inbox)
+			}
+		})
+	}
+}
+
+// A dead window must not drag a lane that has its own reason to exist out of
+// the cockpit, nor add a reason of its own.
+func TestStaleSessionDoesNotMaskOtherReasons(t *testing.T) {
+	g := DashboardGroup{
+		Key:      "SALSA-41",
+		Sessions: []DashboardSession{{Name: "salsa-41", Status: "idle", Live: false}},
+		PRs:      []DashboardPR{{Title: "fix", Mine: true, Checks: "failing"}},
+	}
+	lane, _ := laneFor(g)
+	if lane.Attention != AttentionMyTurnPR {
+		t.Errorf("attention = %q, want %q", lane.Attention, AttentionMyTurnPR)
+	}
+	for _, r := range lane.Reasons {
+		if r == "window open" {
+			t.Errorf("reasons = %v: the window is not open", lane.Reasons)
+		}
 	}
 }
 
@@ -95,7 +138,7 @@ func TestLaneClassification(t *testing.T) {
 			name: "agent finished waiting on human",
 			group: DashboardGroup{
 				Key:      "SALSA-1",
-				Sessions: []DashboardSession{{Name: "salsa-1", Status: "needs-followup"}},
+				Sessions: []DashboardSession{{Name: "salsa-1", Status: "needs-followup", Live: true}},
 			},
 			want:       AttentionAgentWaiting,
 			wantReason: "agent finished and is waiting on you",
@@ -104,7 +147,7 @@ func TestLaneClassification(t *testing.T) {
 			name: "agent mid-turn",
 			group: DashboardGroup{
 				Key:      "SALSA-2",
-				Sessions: []DashboardSession{{Name: "salsa-2", Status: "working"}},
+				Sessions: []DashboardSession{{Name: "salsa-2", Status: "working", Live: true}},
 			},
 			want:       AttentionAgentWorking,
 			wantReason: "agent is working",
@@ -113,7 +156,7 @@ func TestLaneClassification(t *testing.T) {
 			name: "idle window",
 			group: DashboardGroup{
 				Key:      "SALSA-3",
-				Sessions: []DashboardSession{{Name: "salsa-3", Status: "idle"}},
+				Sessions: []DashboardSession{{Name: "salsa-3", Status: "idle", Live: true}},
 			},
 			want:       AttentionInProgress,
 			wantReason: "window open",
@@ -367,7 +410,7 @@ func TestBucketDoesNotDuplicateAnExistingReason(t *testing.T) {
 func TestMostUrgentWinsButAllReasonsKept(t *testing.T) {
 	g := DashboardGroup{
 		Key:      "SALSA-30",
-		Sessions: []DashboardSession{{Name: "s", Status: "needs-followup"}},
+		Sessions: []DashboardSession{{Name: "s", Status: "needs-followup", Live: true}},
 		PRs: []DashboardPR{
 			{Title: "mine", Mine: true, Checks: "failing"},
 			{Title: "theirs", Mine: false},
@@ -385,7 +428,7 @@ func TestMostUrgentWinsButAllReasonsKept(t *testing.T) {
 func TestCockpitFiltersAndCounts(t *testing.T) {
 	e := &Engine{}
 	e.lastDashboard = Dashboard{Groups: []DashboardGroup{
-		{Key: "keep-agent", Sessions: []DashboardSession{{Name: "a", Status: "needs-followup"}}},
+		{Key: "keep-agent", Sessions: []DashboardSession{{Name: "a", Status: "needs-followup", Live: true}}},
 		{Key: "keep-pr", PRs: []DashboardPR{{Title: "p", Mine: true, Checks: "failing"}}},
 		{Key: "keep-todo", Status: statusAssigned, JiraTier: "assigned", JiraStatus: "To Do"},
 		{Key: "drop-branch-1", Status: statusStarted, ActionRequired: true},
@@ -464,7 +507,7 @@ func TestQueueIsSeparateFromLanes(t *testing.T) {
 func TestEveryLaneHasAReason(t *testing.T) {
 	e := &Engine{}
 	e.lastDashboard = Dashboard{Groups: []DashboardGroup{
-		{Key: "a", Sessions: []DashboardSession{{Name: "a", Status: "idle"}}},
+		{Key: "a", Sessions: []DashboardSession{{Name: "a", Status: "idle", Live: true}}},
 		{Key: "b", PRs: []DashboardPR{{Title: "p", Mine: true, Checks: "passing", ReviewDecision: "APPROVED"}}},
 		{Key: "c", Status: statusAssigned, JiraTier: "assigned"},
 	}}

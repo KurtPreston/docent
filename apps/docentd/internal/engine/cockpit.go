@@ -282,6 +282,14 @@ func laneFor(g DashboardGroup) (CockpitLane, []InboxItem) {
 	}
 
 	for _, s := range g.Sessions {
+		// Only a session with a fresh heartbeat speaks for a window that is
+		// still there. A window that dies without delivering its "close" event
+		// — the app quitting, a crash, the machine sleeping — leaves its record
+		// behind for the whole retention window, and claiming it is open,
+		// working, or waiting on you is wrong in all three cases.
+		if !s.Live {
+			continue
+		}
 		switch s.Status {
 		case "needs-followup":
 			promote(AttentionAgentWaiting, rankAgentWaiting)
