@@ -26,6 +26,15 @@ type Manager struct {
 	// than a grove dependency so the manager stays testable and so the policy
 	// for finding a project stays with the caller that knows the config.
 	Provision func(ctx context.Context, req ProvisionRequest) (ProvisionResult, error)
+	// ForeignAgent reports an agent docent does not control -- an IDE window's
+	// own -- that appears to be working in dir, as a phrase to put in the error,
+	// or "" when the worktree looks free. Optional: nil means docent guards only
+	// against its own sessions, which is what it did before.
+	//
+	// A function for the same reason Provision is one. The evidence lives in the
+	// daemon's session registry, and how stale a report may be before it is
+	// ignored is config the manager should not have to know.
+	ForeignAgent func(dir string) string
 	// Now is overridable for tests.
 	Now func() time.Time
 	// TurnTimeout bounds a single turn. Zero means DefaultTurnTimeout.
@@ -87,6 +96,9 @@ type StartRequest struct {
 	Prompt string
 	// Color is the lane color, normally the branch's grove color.
 	Color string
+	// Force starts even when ForeignAgent says someone else is working in the
+	// worktree. It does not override docent's own in-flight turns.
+	Force bool
 }
 
 // Errors callers are expected to distinguish.
@@ -95,6 +107,12 @@ var (
 	// agents in one worktree share a git index and corrupt each other, so this
 	// is refused rather than queued.
 	ErrBusy = errors.New("agentsession: a turn is already running in this worktree")
+	// ErrForeignAgent means an agent docent does not control appears to be
+	// mid-turn in the worktree. Kept distinct from ErrBusy because it is a
+	// weaker claim: docent cannot stop that agent, and the report is inferred
+	// from an editor's own reporting rather than known. Callers are expected to
+	// offer the user an override instead of only refusing.
+	ErrForeignAgent = errors.New("agentsession: another agent appears to be working in this worktree")
 	// ErrNoRunner means no runner is registered for the requested provider.
 	ErrNoRunner = errors.New("agentsession: no runner for provider")
 )
@@ -152,6 +170,11 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 	if busy := m.dirBusy(dir); busy != "" {
 		return Session{}, fmt.Errorf("%w (session %s)", ErrBusy, busy)
 	}
+	if !req.Force {
+		if who := m.foreignAgent(dir); who != "" {
+			return Session{}, fmt.Errorf("%w: %s", ErrForeignAgent, who)
+		}
+	}
 
 	id, err := runner.NewSession(ctx, dir)
 	if err != nil {
@@ -173,7 +196,10 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 	if strings.TrimSpace(req.Prompt) == "" {
 		return sess, nil
 	}
-	if err := m.Turn(id, req.Prompt); err != nil {
+	// The opening turn inherits Force: having already accepted the conflict and
+	// created the session, refusing its first turn would leave exactly the
+	// idle-looking lane the check above exists to prevent.
+	if err := m.turn(id, req.Prompt, req.Force); err != nil {
 		return sess, err
 	}
 	return m.Store.Get(id)
@@ -183,6 +209,18 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 // HTTP caller is not held for the minutes a turn takes. Progress arrives through
 // Subscribe and is persisted regardless of whether anyone is listening.
 func (m *Manager) Turn(id, prompt string) error {
+	return m.turn(id, prompt, false)
+}
+
+// TurnForce is Turn with the foreign-agent check skipped, for a user who has
+// been shown what else is running there and asked for it anyway. docent's own
+// in-flight turns are still refused: that conflict is certain rather than
+// inferred, and there is nothing to weigh.
+func (m *Manager) TurnForce(id, prompt string) error {
+	return m.turn(id, prompt, true)
+}
+
+func (m *Manager) turn(id, prompt string, force bool) error {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return errors.New("agentsession: a turn needs a prompt")
@@ -194,6 +232,14 @@ func (m *Manager) Turn(id, prompt string) error {
 	runner, err := m.runnerFor(sess.Provider)
 	if err != nil {
 		return err
+	}
+	// Checked outside the critical section below: it calls out to the caller's
+	// registry, which takes its own lock, and holding m.mu across that invites a
+	// lock-order problem for no benefit.
+	if !force {
+		if who := m.foreignAgent(sess.Dir); who != "" {
+			return fmt.Errorf("%w: %s", ErrForeignAgent, who)
+		}
 	}
 
 	// Claim the worktree and the session in one critical section, so two
@@ -304,6 +350,13 @@ func (m *Manager) release(id string) {
 	m.mu.Lock()
 	delete(m.live, id)
 	m.mu.Unlock()
+}
+
+func (m *Manager) foreignAgent(dir string) string {
+	if m.ForeignAgent == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.ForeignAgent(dir))
 }
 
 func (m *Manager) dirBusy(dir string) string {

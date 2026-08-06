@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
+	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
 	"github.com/KurtPreston/docent/libs/agentsession"
 	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/model"
 )
 
@@ -20,7 +23,10 @@ const agentSessionsDir = "agent-sessions"
 
 // newAgentManager wires the session manager from daemon config: a store under
 // the state dir, a runner per provider, and worktrees provisioned through grove.
-func newAgentManager(cfg config.DaemonConfig) (*agentsession.Manager, error) {
+//
+// sessions is the IDE session registry, consulted so docent does not start an
+// agent in a worktree an editor's own agent is already editing.
+func newAgentManager(cfg config.DaemonConfig, sessions *registry.Store) (*agentsession.Manager, error) {
 	store, err := agentsession.NewStore(filepath.Join(docentconfig.StateDir(), agentSessionsDir))
 	if err != nil {
 		return nil, err
@@ -32,6 +38,9 @@ func newAgentManager(cfg config.DaemonConfig) (*agentsession.Manager, error) {
 		Runners: map[agentsession.Provider]agentsession.Runner{
 			agentsession.ProviderClaude: agentsession.Claude{Command: cfg.AI.Claude.Command},
 			agentsession.ProviderCursor: agentsession.Cursor{Command: cfg.AI.Cursor.Command},
+		},
+		ForeignAgent: func(dir string) string {
+			return foreignAgentAt(sessions, cfg.Sessions, dir, time.Now())
 		},
 		Provision: func(ctx context.Context, req agentsession.ProvisionRequest) (agentsession.ProvisionResult, error) {
 			wd, err := automation.ProvisionWorkdir(ctx, automation.WorkdirRequest{
@@ -48,6 +57,43 @@ func newAgentManager(cfg config.DaemonConfig) (*agentsession.Manager, error) {
 			return agentsession.ProvisionResult{Dir: wd.Path, Project: wd.ProjectDir}, nil
 		},
 	}, nil
+}
+
+// foreignTurnMaxAge is how long an IDE's reported turn may keep claiming a
+// worktree before docent stops believing it. Pinned to the longest a turn docent
+// runs itself may take: past that, "still working" is far likelier to be a lost
+// stop event than an agent still going, and a dropped event must not lock the
+// developer out of their own directory.
+const foreignTurnMaxAge = agentsession.DefaultTurnTimeout
+
+// foreignAgentAt describes an editor's agent that is mid-turn in dir, or "" when
+// the worktree looks free.
+//
+// This is a warning rather than a lock, and the phrasing is doing real work: the
+// caller turns it into the reason a start was refused, and the user decides from
+// it whether to wait or override. "Something is busy" would leave them nothing to
+// act on, so the editor and how long ago the turn began are both named -- a turn
+// that started seconds ago is a real conflict, one from twenty minutes ago is
+// worth a second look.
+func foreignAgentAt(sessions *registry.Store, cfg userdata.SessionsConfig, dir string, now time.Time) string {
+	if sessions == nil || strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	rec, ok := sessions.AgentWorkingAt(dir, cfg.TTL(), foreignTurnMaxAge, now)
+	if !ok {
+		return ""
+	}
+	ide := strings.TrimSpace(rec.IDE)
+	if ide == "" {
+		// A reporter that did not name itself is still evidence of an agent.
+		ide = "an editor"
+	}
+	started := registry.ParseTime(rec.LastPromptAt)
+	if started.IsZero() {
+		return fmt.Sprintf("%s has an agent running here", ide)
+	}
+	return fmt.Sprintf("%s has an agent running here, started %s ago",
+		ide, now.Sub(started).Round(time.Second))
 }
 
 // sessionAgentRunner runs an `agent` automation action as a hosted session.

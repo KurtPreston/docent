@@ -349,6 +349,95 @@ func TestASecondSessionInTheSameWorktreeIsRefused(t *testing.T) {
 	waitStatus(t, m, "sess-a", StatusIdle)
 }
 
+// An agent docent did not start is the conflict it cannot see from its own
+// bookkeeping, and the one most likely to happen: the developer opens the
+// worktree in Cursor and prompts it there.
+func TestStartRefusesAWorktreeAForeignAgentIsWorkingIn(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := newManager(t, r)
+	var asked []string
+	m.ForeignAgent = func(dir string) string {
+		asked = append(asked, dir)
+		return "a cursor agent, since 14:02"
+	}
+
+	_, err := m.Start(context.Background(), StartRequest{Prompt: "go"})
+	if !errors.Is(err, ErrForeignAgent) {
+		t.Fatalf("err = %v, want ErrForeignAgent", err)
+	}
+	// The reason is the whole value of the refusal: "busy" with no account of
+	// what is busy leaves the user with nothing to act on.
+	if !strings.Contains(err.Error(), "since 14:02") {
+		t.Errorf("error should carry the reason, got %q", err)
+	}
+	if _, err := m.Store.Get("sess-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a session was created anyway: %v", err)
+	}
+	if len(asked) != 1 {
+		t.Errorf("asked about %d dirs, want the provisioned one only: %v", len(asked), asked)
+	}
+}
+
+// The refusal is a warning, not a lock: docent is inferring this from an
+// editor's own reporting, so the user has to be able to overrule it.
+func TestForceStartsDespiteAForeignAgent(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := newManager(t, r)
+	m.ForeignAgent = func(string) string { return "a cursor agent" }
+
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "go", Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Force has to reach the opening turn too, or the session exists but its
+	// first turn was refused -- the idle-looking dead lane.
+	waitStatus(t, m, "sess-1", StatusIdle)
+	if len(r.requests()) != 1 {
+		t.Errorf("opening turn did not run: %+v", r.requests())
+	}
+}
+
+func TestTurnRefusesAndTurnForceOverrides(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := newManager(t, r)
+	if _, err := m.Start(context.Background(), StartRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	m.ForeignAgent = func(string) string { return "a cursor agent" }
+
+	if err := m.Turn("sess-1", "follow up"); !errors.Is(err, ErrForeignAgent) {
+		t.Fatalf("turn err = %v, want ErrForeignAgent", err)
+	}
+	if err := m.TurnForce("sess-1", "follow up anyway"); err != nil {
+		t.Fatalf("forced turn: %v", err)
+	}
+	waitStatus(t, m, "sess-1", StatusIdle)
+}
+
+// docent's own in-flight turn is a certainty, not an inference, so Force has
+// nothing to weigh and must not override it.
+func TestForceDoesNotOverrideDocentsOwnTurn(t *testing.T) {
+	release := make(chan struct{})
+	r := &fakeRunner{provider: ProviderClaude}
+	r.turn = func(ctx context.Context, _ TurnRequest, _ func(Event)) (TurnResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return TurnResult{Text: "ok"}, nil
+	}
+	m := newManager(t, r)
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusRunning)
+
+	if err := m.TurnForce("sess-1", "two"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy", err)
+	}
+	close(release)
+	waitStatus(t, m, "sess-1", StatusIdle)
+}
+
 // Stopping is a pause, not an end: the conversation lives inside the CLI, so the
 // session must stay resumable.
 func TestStopLeavesTheSessionResumable(t *testing.T) {

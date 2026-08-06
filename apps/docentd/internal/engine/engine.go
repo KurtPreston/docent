@@ -323,7 +323,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 	e.units = e.buildUnits()
 	// Built before the automation connectors, because the "agent" action runs
 	// through it.
-	if mgr, err := newAgentManager(cfg); err != nil {
+	if mgr, err := newAgentManager(cfg, store); err != nil {
 		e.agentsErr = err
 		log.Printf("agent sessions unavailable: %v", err)
 	} else {

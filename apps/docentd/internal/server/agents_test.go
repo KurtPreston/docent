@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,48 @@ func TestAgentSubRoutesReportWhatWentWrong(t *testing.T) {
 				t.Fatalf("%s %s = %d, want %d\n%s", tc.method, tc.path, rr.Code, tc.want, rr.Body.String())
 			}
 		})
+	}
+}
+
+// A start into a worktree an editor's agent is already working in is refused,
+// and the refusal says so in a way the client can act on: the cockpit offers
+// "start anyway" off the conflict marker, not off the message text.
+func TestStartIsRefusedWhileAnEditorAgentHoldsTheWorktree(t *testing.T) {
+	h := newTestServer(t, "")
+	const dir = "/home/k/Code/salsa/SALSA-1"
+	rr := doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":"mac","path":"`+dir+`","event":"agent_request_sent"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("session event: %d\n%s", rr.Code, rr.Body.String())
+	}
+
+	rr = doJSON(t, h, http.MethodPost, "/api/agents", "", `{"dir":"`+dir+`","prompt":"hi"}`)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("start = %d, want 409\n%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Error    string `json:"error"`
+		Conflict string `json:"conflict"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Conflict != "foreign-agent" {
+		t.Errorf("conflict = %q, want foreign-agent", got.Conflict)
+	}
+	if !strings.Contains(got.Error, "cursor") {
+		t.Errorf("error should name what is running there, got %q", got.Error)
+	}
+
+	// Once that agent reports it is done, the worktree is available again.
+	rr = doJSON(t, h, http.MethodPost, "/api/sessions/events", "",
+		`{"ide":"cursor","ideHost":"mac","path":"`+dir+`","event":"agent_response_received"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("session event: %d\n%s", rr.Code, rr.Body.String())
+	}
+	rr = doJSON(t, h, http.MethodPost, "/api/agents", "", `{"dir":"`+dir+`"}`)
+	if rr.Code == http.StatusConflict {
+		t.Fatalf("still refused after the agent stopped\n%s", rr.Body.String())
 	}
 }
 

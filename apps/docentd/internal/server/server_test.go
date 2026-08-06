@@ -18,6 +18,10 @@ import (
 
 func newTestServer(t *testing.T, token string) http.Handler {
 	t.Helper()
+	// Agent sessions and their transcripts live under the state dir, so point it
+	// at a temp one: a test that starts a session must not write it into the
+	// developer's real state.
+	t.Setenv("DOCENT_STATE_DIR", t.TempDir())
 	reg, err := registry.NewStore(filepath.Join(t.TempDir(), "sessions.json"))
 	if err != nil {
 		t.Fatal(err)

@@ -95,11 +95,11 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 | `POST` | `/api/automations/{id}/run` | Manually fires a rule's actions now, bypassing its trigger, cooldown, and enabled flag; an optional JSON body supplies synthetic event context. |
 | `POST` | `/api/sessions/events` | Session ingest: IDE extensions and Cursor hooks POST session lifecycle/activity events (`open`/`close`/`agent_request_sent`/`agent_response_received`/`heartbeat`) keyed by `ide`+`ideHost`+`targetHost`+`path`. See [Cursor hooks → docentd](../README.md#cursor-hooks--docentd). |
 | `GET` | `/api/sessions` | The ingest view of live/known sessions from the registry (composite-keyed), with heartbeat-derived liveness. |
-| `POST` | `/api/agents` | Starts an [agent session](#agent-sessions): provisions the branch's grove worktree and runs the opening turn in the background. Returns `202 { session }`. |
+| `POST` | `/api/agents` | Starts an [agent session](#agent-sessions): provisions the branch's grove worktree and runs the opening turn in the background. Returns `202 { session }`, or `409 { conflict: "foreign-agent" }` when an editor's own agent is working there — retry with `force: true` to proceed anyway. |
 | `GET` | `/api/agents` | Every persisted session, most recently updated first. |
 | `GET` | `/api/agents/{id}` | One session's record. |
 | `DELETE` | `/api/agents/{id}` | Stops any running turn and deletes the session and its transcript. The worktree is left alone — it is grove's, not docent's. |
-| `POST` | `/api/agents/{id}/turn` | Runs another turn, resuming the conversation. `409` when one is already running in that worktree. |
+| `POST` | `/api/agents/{id}/turn` | Runs another turn, resuming the conversation. `409` when one is already running in that worktree, or when an editor's agent is; `force: true` overrides the latter. |
 | `POST` | `/api/agents/{id}/stop` | Cancels the running turn. The session stays resumable. |
 | `POST` | `/api/agents/{id}/promote` | Stops the agent and writes `HANDOFF.md` into the worktree; returns the deep link and prompt text for the client to open an editor with. See [Promoting to Cursor](#promoting-to-cursor). |
 | `GET` | `/api/agents/{id}/events` | Server-Sent Events transcript. Replays the whole session, then streams; stays open across turns. |
@@ -147,6 +147,14 @@ transcript under `$XDG_STATE_HOME/docent/agent-sessions/`.
 - **One agent per worktree**, enforced. Two agents share a git index and corrupt
   each other, so a second turn in the same directory is refused with `409`
   rather than queued.
+- **That includes agents docent did not start.** An IDE window's own agent is
+  visible through the session registry — the Cursor hook reports each turn's
+  start and end against the workspace path — so a start into a worktree Cursor
+  is already working in is refused too. That claim is inferred rather than known,
+  so it is a warning with an override (`force: true`) rather than a lock, and it
+  is ignored once the window stops heartbeating or its turn outlasts
+  `agentsession.DefaultTurnTimeout`, so a dropped hook event cannot fence docent
+  out of a directory permanently.
 - **Sessions outlive turns and restarts.** The stream stays open across turns,
   and a record left marked `running` by a restart is reconciled to `stopped`
   rather than shown as work that will never finish.

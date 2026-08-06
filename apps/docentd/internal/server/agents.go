@@ -26,10 +26,14 @@ type agentStartRequest struct {
 	BaseRef  string `json:"baseRef"`
 	OpenPath string `json:"openPath"`
 	Prompt   string `json:"prompt"`
+	// Force proceeds even when another agent appears to be working in the
+	// worktree. It is the client's way of saying the user saw the warning.
+	Force bool `json:"force"`
 }
 
 type agentTurnRequest struct {
 	Prompt string `json:"prompt"`
+	Force  bool   `json:"force"`
 }
 
 // provisionTimeout bounds the part of a start request the caller waits on:
@@ -91,12 +95,13 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 		BaseRef:  strings.TrimSpace(req.BaseRef),
 		OpenPath: strings.TrimSpace(req.OpenPath),
 		Prompt:   req.Prompt,
+		Force:    req.Force,
 		// The lane's color is the branch's grove color, so a cockpit lane and
 		// the editor title bar for the same branch agree.
 		Color: model.ColorForName(branch),
 	})
 	if err != nil {
-		writeJSON(w, agentErrorStatus(err), map[string]any{"ok": false, "error": err.Error()})
+		writeAgentError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "session": agentView(sess)})
@@ -177,8 +182,12 @@ func (s *Server) agentsSub(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
 			return
 		}
-		if err := s.agents.Turn(id, req.Prompt); err != nil {
-			writeJSON(w, agentErrorStatus(err), map[string]any{"ok": false, "error": err.Error()})
+		turn := s.agents.Turn
+		if req.Force {
+			turn = s.agents.TurnForce
+		}
+		if err := turn(id, req.Prompt); err != nil {
+			writeAgentError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
@@ -312,6 +321,18 @@ func (s *Server) agentsUnavailable(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": msg})
 }
 
+// writeAgentError renders a failed agent request. A foreign agent's claim on the
+// worktree is flagged as such, because it is the one refusal the user can
+// overrule: docent inferred it from an editor's own reporting, so the client is
+// told it may retry with force rather than being left at a dead end.
+func writeAgentError(w http.ResponseWriter, err error) {
+	body := map[string]any{"ok": false, "error": err.Error()}
+	if errors.Is(err, agentsession.ErrForeignAgent) {
+		body["conflict"] = "foreign-agent"
+	}
+	writeJSON(w, agentErrorStatus(err), body)
+}
+
 // agentErrorStatus maps the manager's sentinel errors onto status codes, so a
 // client can tell "you asked for something that does not exist" from "the
 // worktree is busy" from "this broke".
@@ -319,7 +340,7 @@ func agentErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, agentsession.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, agentsession.ErrBusy):
+	case errors.Is(err, agentsession.ErrBusy), errors.Is(err, agentsession.ErrForeignAgent):
 		return http.StatusConflict
 	case errors.Is(err, agentsession.ErrNoRunner):
 		return http.StatusBadRequest

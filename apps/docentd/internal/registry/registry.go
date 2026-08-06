@@ -468,6 +468,13 @@ func nowISO() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
+// ParseTime reads one of a Record's timestamp fields. The fields are exported
+// strings, so every consumer has to parse them; this is the one place that knows
+// which formats are written.
+func ParseTime(s string) time.Time {
+	return parseISO(s)
+}
+
 func parseISO(s string) time.Time {
 	if s == "" {
 		return time.Time{}
