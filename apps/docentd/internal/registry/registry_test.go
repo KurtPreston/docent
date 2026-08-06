@@ -287,6 +287,54 @@ func TestRemoteEventFallbackCreatesRecord(t *testing.T) {
 	}
 }
 
+func TestAgentWorkingAt(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{IDE: "cursor", IDEHost: "mac", Path: "/code/proj"}
+	if _, err := store.ApplyEvent(id, "agent_request_sent", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+
+	rec, ok := store.AgentWorkingAt("/code/proj", time.Minute, time.Hour, now)
+	if !ok {
+		t.Fatal("a window mid-turn should be reported")
+	}
+	if rec.IDE != "cursor" {
+		t.Errorf("IDE = %q, want cursor", rec.IDE)
+	}
+	// The path is part of the answer, not just the query: a different worktree
+	// in the same project is a different directory and must not match.
+	if _, ok := store.AgentWorkingAt("/code/other", time.Minute, time.Hour, now); ok {
+		t.Error("another path should not match")
+	}
+	// Trailing separators and Windows separators are the same path (see NormPath).
+	if _, ok := store.AgentWorkingAt(`\code\proj/`, time.Minute, time.Hour, now); !ok {
+		t.Error("a differently spelled path should match")
+	}
+	// A window silent past the liveness TTL is gone, whatever it was last doing.
+	if _, ok := store.AgentWorkingAt("/code/proj", time.Minute, time.Hour, now.Add(2*time.Minute)); ok {
+		t.Error("a window that stopped heartbeating should not hold the worktree")
+	}
+	// A turn older than any real turn means the stop event was lost. The window
+	// is still heartbeating, so only maxTurnAge can free the directory.
+	if _, ok := store.AgentWorkingAt("/code/proj", 0, time.Hour, now.Add(2*time.Hour)); ok {
+		t.Error("a turn past maxTurnAge should be treated as a lost stop event")
+	}
+	if _, ok := store.AgentWorkingAt("/code/proj", 0, 0, now.Add(2*time.Hour)); !ok {
+		t.Error("a non-positive maxTurnAge should disable the turn-age bound")
+	}
+
+	if _, err := store.ApplyEvent(id, "agent_response_received", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.AgentWorkingAt("/code/proj", time.Minute, time.Hour, now); ok {
+		t.Error("a finished turn should release the worktree")
+	}
+}
+
 func TestSweep(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
 	if err != nil {

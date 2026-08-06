@@ -254,6 +254,55 @@ func (s *Store) RemoteAuthorityForPath(path string) string {
 	return best
 }
 
+// AgentWorkingAt returns a window open on path whose agent is mid-turn, or false
+// when nothing appears to be editing there.
+//
+// This is what lets docent decline to run its own agent in a worktree an IDE
+// agent already has: two agents sharing a git index corrupt each other, and
+// docent's session manager can only see its own sessions. The evidence is the
+// same the cockpit already shows -- a prompt with no response after it -- so a
+// lane that reads "working" and a refused start agree about why.
+//
+// Both bounds are needed, because either timestamp can strand a record in
+// "working" forever. ttl is heartbeat freshness, for a window that died mid-turn
+// without delivering its "close" event: whatever it was doing, it is not doing it
+// now. maxTurnAge bounds the turn itself, which is the case that actually happens
+// -- the agent hook is best-effort (no jq, no curl, not installed, docentd
+// restarting between the prompt and the stop), and a single lost stop event would
+// otherwise lock docent out of the directory until someone found the record and
+// cleared it by hand. A non-positive maxTurnAge disables that bound.
+//
+// When several windows are open on the same path, the one whose turn started most
+// recently is reported: it is the freshest evidence, and the caller only needs one
+// reason to stay out.
+func (s *Store) AgentWorkingAt(path string, ttl, maxTurnAge time.Duration, now time.Time) (Record, bool) {
+	want := NormPath(path)
+	if want == "" {
+		return Record{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var (
+		best   Record
+		bestAt time.Time
+		found  bool
+	)
+	for _, r := range s.data {
+		if NormPath(r.Path) != want || SessionStatus(r) != "working" || !IsFresh(r, ttl, now) {
+			continue
+		}
+		// Non-zero by construction: "working" means a prompt was seen.
+		promptAt := parseISO(r.LastPromptAt)
+		if maxTurnAge > 0 && now.Sub(promptAt) > maxTurnAge {
+			continue
+		}
+		if !found || promptAt.After(bestAt) {
+			best, bestAt, found = r, promptAt, true
+		}
+	}
+	return best, found
+}
+
 // resolveKeyLocked maps an incoming identity to the storage key its event
 // should apply to. It returns the exact composite key when a record for it
 // already exists. For a Remote reporter that cannot name its host (IDEHost
