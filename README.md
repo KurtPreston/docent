@@ -8,8 +8,7 @@ Monorepo suite containing local-first tooling for developer activity: **docentd*
 libs/           shared Go packages (model, collectors, correlation, ai,
                 automation, goals, report, workitem, sessionmanager, config, …)
 apps/
-  docentd/              merged daemon (collectors, dashboard, automations, session ingest)
-  docent-automations/   worker that drains queued agent automations
+  docentd/              merged daemon (collectors, dashboard, automations, agent sessions, session ingest)
   docent-launcher-*/    hotkey + webview launchers
   docent-reporter/      stateless CLI reporter (was `slakkr`)
   docent-setup/         config wizard + `check` validator
@@ -109,11 +108,11 @@ automations:
 
 Rules are edited as YAML (Settings, or by hand) and take effect on the next
 `docentd` restart; the dashboard's Automations tab lists rules and job
-history and can fire one manually. `agent` actions run on a separate worker
-binary, [`apps/docent-automations`](apps/docent-automations) — see
+history and can fire one manually. An `agent` action starts a hosted agent
+session inside `docentd`, streamed live into the cockpit — see
 **[docs/Automations.md](docs/Automations.md)** for the full reference:
 every trigger/condition/action type, delivery destinations, the dashboard
-API, running the agent worker, and a list of gotchas.
+API, agent sessions, and a list of gotchas.
 
 ## Goals
 
@@ -224,7 +223,6 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - `apps/docent-reporter/` — reporter CLI
 - `apps/docent-setup/` — config wizard + `check`
 - `apps/docentd/` — daemon + dashboard (Vite/React SPA in `apps/docentd/web`, embedded via `-tags embed`)
-- `apps/docent-automations/` — worker that drains queued `agent` automation actions
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
 - `apps/docent-tunnel/` — workstation SSH local-forward helper for a remote, loopback-only docentd
 - the local window manager lives in the separate [wsm](https://github.com/KurtPreston/wsm) repo
@@ -232,6 +230,6 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers
 - `~/.config/docent/` — `config.yaml` (reporter/automations), `docentd.yaml` (daemon), `goals.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
 - `~/.local/state/docent/logs/<run>/` — reporter run logs (`$XDG_STATE_HOME/docent`)
-- `~/.local/state/docent/automation-jobs/` — durable queue for `agent` automation actions
+- `~/.local/state/docent/agent-sessions/` — hosted agent sessions and their transcripts
 - `~/docent/` — saved markdown from the reporter (override via `output_dir` in config.yaml or `--out-dir`)
 - `--userdata DIR` keeps the legacy all-in-one layout (config + .env + logs + output under one dir)

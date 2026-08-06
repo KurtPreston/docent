@@ -12,6 +12,7 @@ import (
 
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/libs/agentsession"
 	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
@@ -262,6 +263,12 @@ type Engine struct {
 	// rules are configured.
 	automations *automation.Dispatcher
 
+	// agents hosts coding-agent sessions in this process. Nil (with agentsErr
+	// set) when its state directory could not be opened, which disables agent
+	// hosting without taking the rest of the daemon with it.
+	agents    *agentsession.Manager
+	agentsErr error
+
 	// entitySnapshots holds the previous entity state per unit key, used for
 	// transition detection. Keyed by unitKey string (directive/mode). Guarded
 	// by mu; updated only from collectUnit after a successful collect.
@@ -304,11 +311,26 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
 	e.jiraBaseURL = jiraBaseURL(cfg)
 	e.units = e.buildUnits()
+	// Built before the automation connectors, because the "agent" action runs
+	// through it.
+	if mgr, err := newAgentManager(cfg); err != nil {
+		e.agentsErr = err
+		log.Printf("agent sessions unavailable: %v", err)
+	} else {
+		e.agents = mgr
+	}
 	if len(cfg.Automations) > 0 {
 		e.automations = automation.NewDispatcher(cfg.Automations)
 		e.wireAutomationConnectors()
 	}
 	return e
+}
+
+// Agents returns the agent session manager, nil when unavailable. The error
+// explaining why is returned alongside so callers can report it rather than
+// present a missing feature as a missing endpoint.
+func (e *Engine) Agents() (*agentsession.Manager, error) {
+	return e.agents, e.agentsErr
 }
 
 // jiraBaseURL returns the first configured jira directive's base_url (trailing

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -148,24 +147,24 @@ func (e *Engine) wireAutomationConnectors() {
 			return e.reg.PostMessage(ctx, dir, opts, channel, body)
 		}),
 	})
-	// Agent actions are enqueued to the durable queue for apps/docent-automations.
-	// Persist the JIRA directive + config dir so the worker can run
-	// post.jira_comment steps with real credentials.
-	var jiraDirJSON []byte
-	if dir, ok := firstDirective(e.cfg.Directives, "jira"); ok {
-		jiraDirJSON, _ = json.Marshal(dir)
-	}
-	e.automations.Registry.Register("agent", automation.QueuingAgentRunner{
-		ConfigDir:         e.cfg.ConfigDir,
-		JiraDirectiveJSON: jiraDirJSON,
+	// Agent actions become hosted sessions in this process: a visible lane with
+	// a durable transcript, rather than a job on a queue nothing drained.
+	e.automations.Registry.Register("agent", sessionAgentRunner{
+		manager:         e.agents,
+		err:             e.agentsErr,
+		defaultProvider: e.cfg.AI.Provider,
 	})
-	// Also register an in-process agent runner under "agent-inline" for tests /
-	// environments without the worker.
+	// agent-inline keeps the older shape: run the agent to completion in-process
+	// and then run the action's post-steps. Sessions do not do post-steps, so
+	// this is still the way to express "fix it, validate, commit, push" as one
+	// unattended unit.
 	e.automations.Registry.Register("agent-inline", automation.AgentRunner{
 		DefaultProvider: e.cfg.AI.Provider,
 		CursorCommand:   e.cfg.AI.Cursor.Command,
 		ClaudeCommand:   e.cfg.AI.Claude.Command,
-		ResolveRemote:   automation.ResolveRemoteURL,
+		// Agent worktrees come from grove, so the runner needs to know where the
+		// developer's grove projects live. The local-git roots are exactly that.
+		GroveRoots: collectors.LocalGitRoots(e.cfg.Directives),
 		Commenter: automation.IssueCommenterFunc(func(ctx context.Context, issueKey, body string) error {
 			dir, ok := firstDirective(e.cfg.Directives, "jira")
 			if !ok {

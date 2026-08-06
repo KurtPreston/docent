@@ -5,104 +5,232 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/KurtPreston/docent/libs/automation"
+	"github.com/KurtPreston/docent/libs/grove"
 )
 
-// TestProvisionWorkdirHealsCorruptedWorktree reproduces the SALSA-12529
-// incident shape: a worktree directory that still exists on disk but is no
-// longer a valid git worktree (its .git is gone, and stray files were left
-// behind). The previous behavior took the reuse path and failed the run with
-// "fatal: not a git repository". ProvisionWorkdir must now discard the
-// corrupted leftover and rebuild it instead.
-func TestProvisionWorkdirHealsCorruptedWorktree(t *testing.T) {
+// mkGroveProject builds a directory grove would recognize as a project: a .base
+// bare repo carrying the given origin.
+func mkGroveProject(t *testing.T, dir, origin string) string {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	ctx := context.Background()
-	root := t.TempDir()
-
-	// A "remote" repo with a single commit on test-branch. file:// forces the
-	// smart transport so the blob:none partial clone in ensureBareClone is
-	// honored (allowFilter avoids a fallback warning).
-	remote := filepath.Join(root, "remote")
-	if err := os.MkdirAll(remote, 0o755); err != nil {
+	base := filepath.Join(dir, ".base")
+	if err := os.MkdirAll(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGitT(t, remote, "init", "-q")
-	runGitT(t, remote, "config", "uploadpack.allowFilter", "true")
-	runGitT(t, remote, "checkout", "-q", "-b", "test-branch")
-	if err := os.WriteFile(filepath.Join(remote, "hello.txt"), []byte("hi\n"), 0o644); err != nil {
-		t.Fatal(err)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = base
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
 	}
-	runGitT(t, remote, "add", "-A")
-	runGitT(t, remote,
-		"-c", "user.email=test@example.com",
-		"-c", "user.name=test",
-		"-c", "commit.gpgsign=false",
-		"commit", "-q", "-m", "initial")
-
-	req := automation.WorkdirRequest{
-		Mode:      automation.WorkdirWorktree,
-		Repo:      "owner/repo",
-		Branch:    "test-branch",
-		RemoteURL: "file://" + remote,
-		StateDir:  filepath.Join(root, "state"),
+	run("init", "--bare", "-q")
+	if origin != "" {
+		run("remote", "add", "origin", origin)
 	}
-
-	// First provision: produces a valid worktree.
-	res, err := automation.ProvisionWorkdir(ctx, req)
-	if err != nil {
-		t.Fatalf("first ProvisionWorkdir: %v", err)
-	}
-	if !isInsideWorkTree(res.Path) {
-		t.Fatalf("first provision did not produce a valid worktree at %s", res.Path)
-	}
-
-	// Corrupt it: remove .git and leave stray files behind, mirroring the
-	// orphaned vitest cache that survived a prior run's cleanup.
-	if err := os.RemoveAll(filepath.Join(res.Path, ".git")); err != nil {
-		t.Fatal(err)
-	}
-	stray := filepath.Join(res.Path, "libs", "node_modules", "stray.txt")
-	if err := os.MkdirAll(filepath.Dir(stray), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(stray, []byte("junk"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if isInsideWorkTree(res.Path) {
-		t.Fatal("expected corrupted dir to be an invalid worktree before re-provision")
-	}
-
-	// Second provision with the same request must self-heal, not fail.
-	res2, err := automation.ProvisionWorkdir(ctx, req)
-	if err != nil {
-		t.Fatalf("second ProvisionWorkdir should self-heal, got: %v", err)
-	}
-	if !isInsideWorkTree(res2.Path) {
-		t.Fatalf("healed worktree is not valid at %s", res2.Path)
-	}
-	if _, err := os.Stat(stray); !os.IsNotExist(err) {
-		t.Fatalf("stray file should have been removed during heal (stat err=%v)", err)
-	}
-	if _, err := os.Stat(filepath.Join(res2.Path, "hello.txt")); err != nil {
-		t.Fatalf("healed worktree missing the committed file: %v", err)
-	}
+	return dir
 }
 
-func runGitT(t *testing.T, dir string, args ...string) {
+// fakeGrove stands in for the grove binary, recording the directory it was run
+// in and printing a path back.
+func fakeGrove(t *testing.T, printPath string) (cli grove.CLI, cwdFile string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake grove is a shell script")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-grove")
+	cwdFile = filepath.Join(dir, "cwd")
+	script := "#!/bin/sh\npwd > " + cwdFile + "\necho '" + printPath + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return grove.CLI{Command: bin}, cwdFile
+}
+
+func resolved(t *testing.T, p string) string {
+	t.Helper()
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+func TestOpenPathModeUsesTheDirectoryAsIs(t *testing.T) {
+	dir := t.TempDir()
+	res, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+		Mode: automation.WorkdirOpenPath, OpenPath: dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != dir {
+		t.Errorf("path = %q, want %q", res.Path, dir)
 	}
 }
 
-func isInsideWorkTree(path string) bool {
-	out, err := exec.Command("git", "-C", path, "rev-parse", "--is-inside-work-tree").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
+func TestOpenPathModeRejectsBadPaths(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"empty":   "",
+		"missing": filepath.Join(t.TempDir(), "nope"),
+		"a file":  file,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+				Mode: automation.WorkdirOpenPath, OpenPath: path,
+			})
+			if err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
+}
+
+func TestUnknownModeIsRejected(t *testing.T) {
+	_, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{Mode: "sandbox"})
+	if err == nil || !strings.Contains(err.Error(), "unknown workdir mode") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// The open path is a worktree of the project, so walking up from it lands in the
+// project the developer's own activity happened in.
+func TestWorktreeModeUsesTheProjectContainingOpenPath(t *testing.T) {
+	proj := mkGroveProject(t, filepath.Join(t.TempDir(), "salsa"), "git@host:Chip/salsa.git")
+	openPath := filepath.Join(proj, "some-branch")
+	wt := filepath.Join(proj, "SALSA-1-fix")
+	for _, d := range []string{openPath, wt} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cli, cwdFile := fakeGrove(t, wt)
+
+	res, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+		Mode: automation.WorkdirWorktree, Repo: "Chip/salsa", Branch: "SALSA-1/fix",
+		OpenPath: openPath, Grove: cli,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != wt {
+		t.Errorf("path = %q, want %q", res.Path, wt)
+	}
+	if resolved(t, res.ProjectDir) != resolved(t, proj) {
+		t.Errorf("projectDir = %q, want %q", res.ProjectDir, proj)
+	}
+	b, err := os.ReadFile(cwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved(t, strings.TrimSpace(string(b))); got != resolved(t, proj) {
+		t.Errorf("grove ran in %q, want the project root %q", got, proj)
+	}
+}
+
+// A PR event usually carries no local path, which is exactly when the repo has
+// to be matched against the configured roots.
+func TestWorktreeModeFindsTheProjectByRepo(t *testing.T) {
+	code := t.TempDir()
+	proj := mkGroveProject(t, filepath.Join(code, "salsa"), "git@git.drwholdings.com:Chip/salsa.git")
+	mkGroveProject(t, filepath.Join(code, "gui"), "git@git.drwholdings.com:Tango/tango_gui.git")
+	wt := filepath.Join(proj, "SALSA-2-fix")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli, cwdFile := fakeGrove(t, wt)
+
+	res, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+		Mode: automation.WorkdirWorktree, Repo: "Chip/salsa", Branch: "SALSA-2/fix",
+		GroveRoots: []string{code}, Grove: cli,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Path != wt {
+		t.Errorf("path = %q, want %q", res.Path, wt)
+	}
+	b, _ := os.ReadFile(cwdFile)
+	if got := resolved(t, strings.TrimSpace(string(b))); got != resolved(t, proj) {
+		t.Errorf("grove ran in %q, want salsa's project %q", got, proj)
+	}
+}
+
+// Evidence beats inference: the open path says where this work item actually
+// happened, while the repo lookup is a guess among clones of the same repo.
+func TestOpenPathWinsOverTheRepoLookup(t *testing.T) {
+	code := t.TempDir()
+	byRepo := mkGroveProject(t, filepath.Join(code, "salsa"), "git@host:Chip/salsa.git")
+	elsewhere := mkGroveProject(t, filepath.Join(t.TempDir(), "salsa-fork"), "git@host:Chip/salsa.git")
+	openPath := filepath.Join(elsewhere, "a-worktree")
+	if err := os.MkdirAll(openPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := automation.ResolveGroveProject(openPath, []string{code}, "Chip/salsa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved(t, got) != resolved(t, elsewhere) {
+		t.Errorf("resolved to %q, want the open path's project %q (not %q)", got, elsewhere, byRepo)
+	}
+}
+
+// Cloning the repo behind the developer's back is what produced the parallel
+// universe this replaced, so a missing project is an error that says what to do.
+func TestMissingProjectExplainsItself(t *testing.T) {
+	code := t.TempDir()
+	mkGroveProject(t, filepath.Join(code, "gui"), "git@host:Tango/tango_gui.git")
+
+	_, err := automation.ResolveGroveProject("", []string{code}, "Chip/salsa")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"Chip/salsa", "grove clone"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to mention %q", err, want)
+		}
+	}
+
+	// With no roots configured at all, the fix is a config change, not a clone.
+	_, err = automation.ResolveGroveProject("", nil, "Chip/salsa")
+	if err == nil || !strings.Contains(err.Error(), "code_home") {
+		t.Errorf("err = %v, want it to point at the local-git config", err)
+	}
+
+	// With nothing to look up by, say that rather than blaming the config.
+	_, err = automation.ResolveGroveProject("", []string{code}, "")
+	if err == nil || !strings.Contains(err.Error(), "no repo") {
+		t.Errorf("err = %v, want it to name the missing repo", err)
+	}
+}
+
+func TestWorktreeModeRequiresABranch(t *testing.T) {
+	_, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+		Mode: automation.WorkdirWorktree, Repo: "Chip/salsa",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Branch") {
+		t.Fatalf("err = %v, want a missing-branch error", err)
+	}
+}
+
+// Worktree mode is the default, since it is what an automation almost always
+// wants and the alternative edits a directory the developer may have open.
+func TestEmptyModeDefaultsToWorktree(t *testing.T) {
+	_, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{})
+	if err == nil || !strings.Contains(err.Error(), "Branch") {
+		t.Fatalf("err = %v, want the worktree path's missing-branch error", err)
+	}
 }

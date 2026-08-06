@@ -95,8 +95,8 @@ Optional gates evaluated after the trigger matches, before any action runs:
 | `jira-comment` | Post a JIRA comment | `issue` (defaults to the matched ticket key), `body` (required). Uses the first enabled `jira` directive. |
 | `slack-post` | Post a Slack message | `channel`, `body` (required). Uses the first enabled `slack` directive. |
 | `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`, and the optional prompt controls `prompt` / `context` (see [Report delivery](#report-delivery)). |
-| `agent` | Run a write-capable coding agent (`cursor` or `claude`) in a provisioned workdir | `provider`, `workdir` (`worktree` default, or `open_path`), `prompt` (required), `post` (see below). **Queued** to the [`docent-automations`](#the-docent-automations-worker) worker — see that section. |
-| `agent-inline` | Same as `agent`, but runs in-process instead of queuing | Same fields as `agent`; used by tests or setups that don't run the worker. |
+| `agent` | Start a hosted agent session in a provisioned workdir | `provider`, `workdir` (`worktree` default, or `open_path`), `base_ref` (branch point for a brand-new branch), `prompt` (required). Streams to the cockpit and ignores `post` — see [`agent` vs `agent-inline`](#agent-vs-agent-inline). |
+| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, plus `post` (see below). |
 | `open` | Open a path in the editor via the configured [open trigger](Dashboard.md#open-trigger--live-window-polling-cursor--wsm--none) | An optional templated `cwd`. Only available when `open_trigger` is configured. |
 
 An action's failure doesn't stop the chain: every action in a rule runs even
@@ -108,20 +108,50 @@ reports what actually went wrong). The job as a whole is marked failed if
 
 ### Agent post-steps
 
-`agent` / `agent-inline` actions accept a `post:` map run after the agent
-finishes, in the provisioned workdir:
+`agent-inline` actions accept a `post:` map run after the agent finishes, in
+the provisioned workdir:
 
 - **`validate: "cmd1|cmd2"`** — pipe-separated shell commands (e.g. lint/test); any failure fails the action.
 - **`commit: "true"`** and optional `commit_message` — `git add -A && git commit` (a clean tree is not an error).
 - **`push: "true"`** — `git push -u origin HEAD:<branch>`.
 - **`jira_comment: "true"`** and optional `jira_comment_body` (templated) — posts a comment to the matched ticket; requires an enabled `jira` directive.
-- **`keep_workdir: "true"`** — skip cleanup of the provisioned worktree/clone (useful for debugging a failed run).
 
-`workdir: worktree` (the default) clones/reuses a docent-owned worktree for
-the signal's repo+branch; `workdir: open_path` runs the agent directly in the
-work item's existing local path instead. Concurrent agent actions targeting
-the same worktree are serialized so two rules can't provision/reset it at
-once.
+### Where an agent runs
+
+`workdir: worktree` (the default) resolves the branch's worktree through
+[grove](https://github.com/KurtPreston/grove): `grove path <branch>`, run in the
+grove project for the repo, creating the worktree if it does not exist yet. The
+agent therefore lands in your normal `~/Code/<project>/<branch>` checkout, with
+grove's copied `.env` files and its deterministic branch color, and promoting a
+session to an editor is just opening a directory that is already right.
+
+docent used to keep its own bare clone and worktree tree under the state dir.
+That produced a second universe: a checkout you had never opened, missing every
+piece of per-worktree setup. Nothing there is used any more, and
+`~/.local/state/docent/repos` and `.../worktrees` can be deleted.
+
+Two consequences of the worktree being yours:
+
+- **Nothing is cleaned up after a run.** Deleting a real worktree because an
+  agent finished with it would take uncommitted work with it. Use `grove prune`,
+  which knows what has been merged.
+- **The repository must already be a grove project.** docent will not clone it
+  for you; run `grove clone` once. The project is found by walking up from the
+  work item's local path when it has one, and otherwise by matching the repo's
+  `origin` against the grove projects at (or one level below) the `code_home` /
+  `paths` roots of your enabled `local-git` directives.
+
+`base_ref` (templated) picks the ref a brand-new branch is created from. It is
+ignored when the branch already exists locally or on the remote, which is the
+usual case for a PR-triggered action; it matters when an automation opens fresh
+work, e.g. `base_ref: release/4.1` for a backport.
+
+`workdir: open_path` runs the agent directly in the work item's existing local
+path instead, without involving grove.
+
+Concurrent agent actions targeting the same repo+branch are serialized: two
+agents sharing a git index corrupt each other, and now that the worktree is
+yours, the damage would be to real work.
 
 ### Report delivery
 
@@ -200,36 +230,31 @@ rule has a **Run** button that fires it immediately via `POST
 `GET /api/automations` (`?limit=N`, default 50) returns the rule list plus
 job history; `GET /api/automations/{id}` returns one rule's definition. Job
 history is **in-memory only** — capped at 256 entries with a 24h TTL, and
-lost on restart. That's separate from the durable, on-disk queue described
-next.
+lost on restart. Agent sessions are the exception: they persist, because a
+conversation you come back to is not a job you forget.
 
-## The `docent-automations` worker
+## `agent` vs `agent-inline`
 
-`agent` actions are **not** run in-process by `docentd`. Because a coding
-agent run can take up to 30 minutes and needs a provisioned git
-worktree/clone, `docentd` instead writes a job to a durable, on-disk queue
-(`$XDG_STATE_HOME/docent/automation-jobs/*.json` by default), and a separate
-binary drains it:
+An `agent` action starts a **hosted session**: `docentd` provisions the
+worktree, runs the turn in the background, streams the transcript to
+[`/api/agents/{id}/events`](Dashboard.md#agent-sessions), and persists both the
+record and the transcript under `$XDG_STATE_HOME/docent/agent-sessions/`. The
+job itself completes as soon as the session starts, so a thirty-minute agent
+run never blocks the collection loop. The result is a lane in the cockpit you
+can watch, follow up on, and resume after a restart.
 
-```sh
-go run ./apps/docent-automations           # daemon: polls the queue every 5s
-go run ./apps/docent-automations --once     # drain whatever's pending, then exit
-```
+Sessions do **not** run the action's `post:` steps. Tell the agent to commit
+and push in the prompt, or use `agent-inline`.
 
-| Flag | Default | Meaning |
-|------|---------|---------|
-| `--state-dir` | XDG state dir | Root containing `automation-jobs/`; must match `docentd`'s. |
-| `--once` | `false` | Process pending jobs once and exit, instead of polling. |
-| `--poll` | `5s` | Poll interval in daemon mode. |
-| `--provider` | `cursor` | Default agent provider (`cursor` or `claude`) when an action omits `provider`. |
+An `agent-inline` action is the older shape: run the agent to completion
+in-process and then run `post:` (validate, commit, push, jira_comment) as one
+unattended unit. Use it when you want a rule to finish a job end to end with
+nobody watching; use `agent` when you want a session you will interact with.
 
-**This worker is not installed by any of the per-OS installers** — if you
-have any `agent` (not `agent-inline`) actions configured, you need to build
-and run `docent-automations` yourself (e.g. as its own `systemd --user`
-service alongside `docentd`) or those actions will queue forever and never
-execute. `agent-inline` runs in-process inside `docentd` instead and needs no
-worker — use it for quick testing, but prefer `agent` in production so a slow
-agent run can't block the daemon's collection loop.
+This replaced a queue-to-disk handoff to a separate `docent-automations`
+worker. No installer ever installed that worker, so every `agent` action had
+been queuing forever with nothing to say so — the failure mode that made
+hosting sessions in `docentd` worth doing.
 
 ## Gotchas
 
@@ -237,7 +262,7 @@ agent run can't block the daemon's collection loop.
 - **Manual Run bypasses cooldown** and works on disabled rules — don't be surprised if a "disabled" rule still fires when you click Run.
 - **No hot reload** — edits to `automations:` in `config.yaml` take effect on the next `docentd` restart.
 - **Action chains keep going after a failure** — a later action still runs (and can see `.ActionError` / `DOCENT_ACTION_ERROR`), but the job is recorded as failed overall.
-- **`agent` actions silently queue with no worker running** — see [The `docent-automations` worker](#the-docent-automations-worker) above.
+- **`agent` actions ignore `post:` steps** — they start a session, which is interactive by nature; see [`agent` vs `agent-inline`](#agent-vs-agent-inline) above.
 - **Kind aliases** — e.g. a rule with `kind: pr` also matches the concrete entity kind `pr_review_status`/`pr_activity`; `ticket`/`issue`/`issue_activity` are similarly interchangeable.
 - **The `me` sentinel** in `when.to: me` / `when.from: me` means "the field's new/old value belongs to you" (`is_self`), not the literal string `"me"`.
 - **PRs a bot opens for you need a `pr_queries` entry** — a `checks`/`mergeable` transition can only fire on a PR the collector actually sees, and by default that means PRs you authored. Backport bots author the PR themselves, so declare a search for them on the directive (see [Extra open-PR searches](Reporting.md#extra-open-pr-searches)). Match just those rows with `match.fields: { relation: <your label> }`.

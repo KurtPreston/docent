@@ -26,15 +26,12 @@ type AgentRunner struct {
 	// CursorCommand / ClaudeCommand override the CLI binaries.
 	CursorCommand string
 	ClaudeCommand string
-	// ResolveRemote looks up a git remote URL when EventContext has OpenPath
-	// but no RemoteURL. Optional.
-	ResolveRemote func(ctx context.Context, openPath string) (string, error)
 	// Commenter is used when post.jira_comment is set.
 	Commenter IssueCommenter
-	// StateDir roots the docent-owned clones/worktrees (worktree mode). Empty
-	// falls back to docentconfig.StateDir(); set it so the worktree location
-	// matches the queue's state dir.
-	StateDir string
+	// GroveRoots are the directories searched for the grove project that owns a
+	// repository, when the event carries no local path to infer one from. These
+	// are the roots local-git already scans.
+	GroveRoots []string
 }
 
 func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
@@ -52,33 +49,18 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	if mode == "" {
 		mode = WorkdirWorktree
 	}
-	remote := ""
-	if mode == WorkdirWorktree {
-		if actx.OpenPath != "" && r.ResolveRemote != nil {
-			remote, _ = r.ResolveRemote(ctx, actx.OpenPath)
-		}
-		if remote == "" && actx.Repo != "" {
-			// Build an HTTPS clone URL from the PR's host (carried in the
-			// entity/signal fields) so enterprise repos resolve correctly.
-			// HTTPS lets `gh` act as the git credential helper, avoiding a
-			// dependency on SSH keys in the daemon's environment. Defaults to
-			// github.com when no host is present.
-			host := strings.TrimSpace(actx.Fields["host"])
-			if host == "" {
-				host = "github.com"
-			}
-			remote = "https://" + host + "/" + actx.Repo + ".git"
-		}
-		if remote == "" {
-			return fmt.Errorf("agent: cannot resolve remote URL for worktree (need OpenPath or Repo)")
-		}
+	baseRef, err := RenderTemplate(action.BaseRef, actx)
+	if err != nil {
+		return err
 	}
+	baseRef = strings.TrimSpace(baseRef)
 
 	// Serialize with any other agent action targeting the same working
-	// directory (e.g. a different rule matching the same PR) so they don't
-	// provision/reset/clean up the same worktree concurrently. Wait on a
-	// budget detached from the incoming ctx so time spent blocked here isn't
-	// deducted from the run itself.
+	// directory (e.g. a different rule matching the same PR) so they don't run
+	// concurrently in it. Two agents sharing a git index corrupt each other, and
+	// now that the worktree is the developer's own, the damage would be to real
+	// work rather than a scratch directory. Wait on a budget detached from the
+	// incoming ctx so time spent blocked here isn't deducted from the run.
 	lockKey := worktreeLockKey(mode, actx.Repo, actx.Branch, actx.OpenPath)
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), worktreeAcquireTimeout)
 	release, err := worktreeLocks.acquire(waitCtx, lockKey)
@@ -95,22 +77,19 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	runCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
 
+	// The worktree is grove's and outlives the run: it is the developer's own
+	// checkout of the branch, so there is nothing to tear down afterwards.
 	wd, err := ProvisionWorkdir(runCtx, WorkdirRequest{
-		Mode:      mode,
-		Repo:      actx.Repo,
-		Branch:    actx.Branch,
-		RemoteURL: remote,
-		OpenPath:  actx.OpenPath,
-		StateDir:  r.StateDir,
+		Mode:       mode,
+		Repo:       actx.Repo,
+		Branch:     actx.Branch,
+		From:       baseRef,
+		OpenPath:   actx.OpenPath,
+		GroveRoots: r.GroveRoots,
 	})
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if wd.Cleanup != nil && action.Post["keep_workdir"] != "true" {
-			_ = wd.Cleanup()
-		}
-	}()
 
 	provider := strings.TrimSpace(action.Provider)
 	if provider == "" {

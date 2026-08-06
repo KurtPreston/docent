@@ -152,6 +152,7 @@
         "channel": { "type": "string" },
         "provider": { "type": "string" },
         "workdir": { "type": "string", "enum": ["worktree", "open_path"] },
+        "base_ref": { "type": "string" },
         "prompt": { "type": "string" },
         "post": {
           "type": "object",

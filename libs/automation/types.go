@@ -108,10 +108,15 @@ type Action struct {
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 
 	// agent
-	Provider string            `yaml:"provider,omitempty" json:"provider,omitempty"`
-	Workdir  string            `yaml:"workdir,omitempty" json:"workdir,omitempty"` // worktree | open_path
-	Prompt   string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
-	Post     map[string]string `yaml:"post,omitempty" json:"post,omitempty"`
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Workdir  string `yaml:"workdir,omitempty" json:"workdir,omitempty"` // worktree | open_path
+	// BaseRef is the ref a brand-new branch is created from (a template
+	// string). It is ignored when the branch already exists locally or on the
+	// remote, which is the usual case for a PR-triggered action. Empty means
+	// the project's default branch.
+	BaseRef string            `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	Prompt  string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Post    map[string]string `yaml:"post,omitempty" json:"post,omitempty"`
 
 	// report
 	Mode    string `yaml:"mode,omitempty" json:"mode,omitempty"`       // execution mode id
