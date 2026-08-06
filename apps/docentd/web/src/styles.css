@@ -520,6 +520,13 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 .ag-tool-arg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-note { font-size: 11.5px; color: var(--text-faint); }
 .ag-note.error { color: var(--red); }
+.ag-conflict {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border));
+  background: color-mix(in srgb, var(--amber) 8%, var(--bg-elev));
+  border-radius: 8px; padding: 6px 8px;
+}
 
 .ag-compose { display: flex; gap: 8px; align-items: flex-end; }
 .ag-compose textarea {

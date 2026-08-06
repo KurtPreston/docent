@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AgentConflictError,
   deleteAgent,
   promoteAgent,
   sendAgentTurn,
@@ -167,6 +168,9 @@ export function AgentPanel({
   // status is tracked locally so the panel reacts to the stream immediately,
   // rather than at the next five-second poll.
   const [status, setStatus] = useState(session?.status);
+  // The reason the daemon refused this send, when it was something the user can
+  // overrule -- an agent already working in the worktree.
+  const [conflict, setConflict] = useState("");
 
   const id = session?.id;
   // A lane that already knows its worktree does not ask; one that does not
@@ -214,32 +218,44 @@ export function AgentPanel({
 
   const targetReady = !needsTarget || (repo.trim() !== "" && branch.trim() !== "");
 
-  const send = useCallback(async () => {
-    const prompt = draft.trim();
-    if (!prompt || busy || !targetReady) return;
-    setBusy(true);
-    try {
-      if (id) {
-        await sendAgentTurn(id, prompt);
-      } else {
-        // Creating the worktree fetches from the remote, so this can take a
-        // while; say so rather than leaving a disabled button.
-        toast("provisioning the worktree…");
-        await startAgent({
-          ...start,
-          repo: repo.trim() || start.repo,
-          branch: branch.trim() || start.branch,
-          prompt,
-        });
-        onChanged();
+  // force carries the user's answer to the conflict note below. It is deliberately
+  // not sticky: each send asks again, because whether someone else is editing the
+  // worktree is a fact about right now.
+  const send = useCallback(
+    async (force = false) => {
+      const prompt = draft.trim();
+      if (!prompt || busy || !targetReady) return;
+      setBusy(true);
+      setConflict("");
+      try {
+        if (id) {
+          await sendAgentTurn(id, prompt, force);
+        } else {
+          // Creating the worktree fetches from the remote, so this can take a
+          // while; say so rather than leaving a disabled button.
+          toast("provisioning the worktree…");
+          await startAgent({
+            ...start,
+            repo: repo.trim() || start.repo,
+            branch: branch.trim() || start.branch,
+            prompt,
+            force,
+          });
+          onChanged();
+        }
+        setDraft("");
+      } catch (e) {
+        // A conflict is shown in place rather than as a toast: it needs an
+        // answer, the draft is still sitting there, and a message that vanishes
+        // on a timer is the wrong shape for a decision.
+        if (e instanceof AgentConflictError) setConflict(e.message);
+        else toast(errMsg(e), true);
+      } finally {
+        setBusy(false);
       }
-      setDraft("");
-    } catch (e) {
-      toast(errMsg(e), true);
-    } finally {
-      setBusy(false);
-    }
-  }, [branch, busy, draft, id, onChanged, repo, start, targetReady]);
+    },
+    [branch, busy, draft, id, onChanged, repo, start, targetReady],
+  );
 
   // promote is the escape hatch for work that needs hands: it stops the agent,
   // leaves HANDOFF.md in the worktree, opens that folder in an editor window,
@@ -373,6 +389,19 @@ export function AgentPanel({
           every lane that has never run an agent is noise on the surface meant to
           be glanced at. It appears the moment a session does. */}
       {session || busy ? <Transcript blocks={blocks} busy={busy} /> : null}
+
+      {conflict ? (
+        <div className="ag-conflict">
+          <span>{conflict}</span>
+          <span className="grow" />
+          <button type="button" className="mini-btn" onClick={() => void send(true)}>
+            {session ? "send anyway" : "start anyway"}
+          </button>
+          <button type="button" className="mini-btn" onClick={() => setConflict("")}>
+            wait
+          </button>
+        </div>
+      ) : null}
 
       <div className="ag-compose">
         <textarea

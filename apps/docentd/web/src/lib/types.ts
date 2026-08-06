@@ -257,6 +257,8 @@ export type AgentStartRequest = {
   baseRef?: string;
   openPath?: string;
   prompt: string;
+  /** Proceed even though another agent appears to be working in the worktree. */
+  force?: boolean;
 };
 
 export type SignalView = {

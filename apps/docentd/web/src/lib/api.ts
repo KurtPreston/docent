@@ -143,14 +143,35 @@ export const fetchAgents = (): Promise<AgentSession[]> =>
 export const fetchProjects = (): Promise<GroveProject[]> =>
   getJSON<{ projects: GroveProject[] }>("/api/projects").then((r) => r.projects ?? []);
 
+/** A refusal the user can overrule, e.g. an editor's own agent already working
+ * in the worktree. `conflict` is what the UI keys off: matching on message text
+ * to decide whether to offer an override would break the first time the wording
+ * changed. */
+export class AgentConflictError extends Error {
+  readonly conflict: string;
+  constructor(message: string, conflict: string) {
+    super(message);
+    this.name = "AgentConflictError";
+    this.conflict = conflict;
+  }
+}
+
 async function agentPost<T>(url: string, body?: unknown): Promise<T> {
   const r = await docentFetch(url, {
     method: "POST",
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const d = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string } & T;
-  if (!r.ok || !d.ok) throw new Error(d.error ?? "HTTP " + r.status);
+  const d = (await r.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    conflict?: string;
+  } & T;
+  if (!r.ok || !d.ok) {
+    const msg = d.error ?? "HTTP " + r.status;
+    if (d.conflict) throw new AgentConflictError(msg, d.conflict);
+    throw new Error(msg);
+  }
   return d;
 }
 
@@ -159,8 +180,8 @@ export async function startAgent(req: AgentStartRequest): Promise<AgentSession> 
   return d.session;
 }
 
-export const sendAgentTurn = (id: string, prompt: string): Promise<unknown> =>
-  agentPost(`/api/agents/${encodeURIComponent(id)}/turn`, { prompt });
+export const sendAgentTurn = (id: string, prompt: string, force = false): Promise<unknown> =>
+  agentPost(`/api/agents/${encodeURIComponent(id)}/turn`, { prompt, force });
 
 export const stopAgent = (id: string): Promise<unknown> =>
   agentPost(`/api/agents/${encodeURIComponent(id)}/stop`);
