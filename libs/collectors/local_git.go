@@ -3,7 +3,6 @@ package collectors
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
+	"github.com/KurtPreston/docent/libs/model"
 )
 
 // gitSem bounds concurrent git subprocesses across all collector goroutines, so
@@ -237,36 +237,36 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			if len(parts) < 3 {
 				continue
 			}
-		hash := strings.TrimSpace(parts[0])
-		gd := strings.TrimSpace(parts[1])
-		gs := strings.TrimSpace(parts[2])
-		// A reflog row records an action the user took locally (checkout,
-		// commit, reset, ...). Its activity time is when that action
-		// happened — carried in the `%gd` selector because we ask for
-		// --date=iso — not the referenced commit's author/committer date,
-		// which can be far older (e.g. checking out a months-old branch).
-		// Fall back to the commit date only when the selector lacks a
-		// parseable timestamp.
-		obs, ok := parseReflogTime(gd)
-		if !ok {
-			obs, ok = commitTimes[hash]
+			hash := strings.TrimSpace(parts[0])
+			gd := strings.TrimSpace(parts[1])
+			gs := strings.TrimSpace(parts[2])
+			// A reflog row records an action the user took locally (checkout,
+			// commit, reset, ...). Its activity time is when that action
+			// happened — carried in the `%gd` selector because we ask for
+			// --date=iso — not the referenced commit's author/committer date,
+			// which can be far older (e.g. checking out a months-old branch).
+			// Fall back to the commit date only when the selector lacks a
+			// parseable timestamp.
+			obs, ok := parseReflogTime(gd)
 			if !ok {
-				ci, err := gitOutput(ctx, abs, opts, directive.ID, "show", "-s", "--format=%cI", hash)
-				if err != nil {
-					continue
+				obs, ok = commitTimes[hash]
+				if !ok {
+					ci, err := gitOutput(ctx, abs, opts, directive.ID, "show", "-s", "--format=%cI", hash)
+					if err != nil {
+						continue
+					}
+					ci = strings.TrimSpace(ci)
+					var perr error
+					obs, perr = time.Parse(time.RFC3339, ci)
+					if perr != nil {
+						continue
+					}
+					commitTimes[hash] = obs
 				}
-				ci = strings.TrimSpace(ci)
-				var perr error
-				obs, perr = time.Parse(time.RFC3339, ci)
-				if perr != nil {
-					continue
-				}
-				commitTimes[hash] = obs
 			}
-		}
-		if obs.Before(since) || obs.After(now) {
-			continue
-		}
+			if obs.Before(since) || obs.After(now) {
+				continue
+			}
 			short := hash
 			if len(hash) > 7 {
 				short = hash[:7]
@@ -628,55 +628,44 @@ func localGitRepositoryKey(ctx context.Context, abs string, opts *CollectOpts, d
 	return fallback
 }
 
-// parseGitRemoteToRepositoryKey returns the path portion of a remote URL as host-relative
-// repo identity (e.g. "org/repo"), or "" if the URL does not look like a standard forge URL.
+// parseGitRemoteToRepositoryKey returns the path portion of a remote URL as
+// host-relative repo identity (e.g. "org/repo"), or "" if the URL does not look
+// like a standard forge URL. It delegates to model so local-git, the forge
+// collectors, and grove project discovery all derive the same key from the same
+// remote.
 func parseGitRemoteToRepositoryKey(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	if !strings.Contains(raw, "://") {
-		if path, ok := splitSCPLikeGitRemote(raw); ok {
-			return normalizeRepositoryPath(path)
+	return model.RepoKeyFromRemote(raw)
+}
+
+// LocalGitRoots returns the directories the enabled local-git directives scan,
+// as absolute paths, in configuration order and without duplicates.
+//
+// This is the answer to "where does this developer keep code", which docent
+// needs beyond collection: provisioning an agent worktree means finding the
+// grove project for a repository, and these roots are where to look. It reads
+// the configured values rather than the scan results, so a root that currently
+// holds nothing is still reported -- the caller is looking for projects, not for
+// the repositories local-git happened to find.
+func LocalGitRoots(directives []userdata.Directive) []string {
+	expand := fallbackExpandRepoPath()
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p = expand(strings.TrimSpace(p)); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
 		}
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return ""
+	for _, d := range directives {
+		if d.Collector != "local-git" || !d.Enabled {
+			continue
+		}
+		add(d.CodeHome)
+		for _, p := range d.Paths {
+			add(p)
+		}
 	}
-	path := strings.TrimPrefix(u.Path, "/")
-	return normalizeRepositoryPath(path)
-}
-
-func splitSCPLikeGitRemote(raw string) (path string, ok bool) {
-	at := strings.LastIndex(raw, "@")
-	if at < 0 {
-		return "", false
-	}
-	rest := raw[at+1:]
-	colon := strings.Index(rest, ":")
-	if colon < 0 {
-		return "", false
-	}
-	host := rest[:colon]
-	path = rest[colon+1:]
-	if host == "" || path == "" {
-		return "", false
-	}
-	return path, true
-}
-
-func normalizeRepositoryPath(path string) string {
-	path = strings.TrimSpace(path)
-	path = strings.TrimSuffix(path, ".git")
-	path = strings.Trim(path, "/")
-	if path == "" {
-		return ""
-	}
-	if strings.Count(path, "/") < 1 {
-		return ""
-	}
-	return path
+	return out
 }
 
 func localGitRepoDirs(directive userdata.Directive, opts *CollectOpts, expand func(string) string) ([]string, error) {
