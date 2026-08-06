@@ -19,6 +19,7 @@ import (
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/libs/agentsession"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/webhook"
 )
@@ -30,13 +31,23 @@ type Server struct {
 	webRoot  string
 	web      fs.FS
 	reports  *reportStore
+	agents   *agentsession.Manager
+	// agentsErr records why agent hosting is unavailable, so the endpoints can
+	// say so instead of 404ing as though the feature did not exist.
+	agentsErr error
 }
 
 // New builds the HTTP server. webRoot is the on-disk dashboard directory used
 // in dev/disk mode; webFS, when non-nil (embed builds), takes precedence and
 // serves the dashboard from assets baked into the binary.
 func New(cfg config.DaemonConfig, eng *engine.Engine, reg *registry.Store, webRoot string, webFS fs.FS) *Server {
-	return &Server{cfg: cfg, engine: eng, registry: reg, webRoot: webRoot, web: webFS, reports: newReportStore()}
+	s := &Server{cfg: cfg, engine: eng, registry: reg, webRoot: webRoot, web: webFS, reports: newReportStore()}
+	// The engine owns the session manager, because automation rules run agents
+	// through it too. Agent hosting is one feature among many: when its state
+	// directory cannot be opened the rest of the daemon still works, and the
+	// /api/agents endpoints report the reason instead of 404ing.
+	s.agents, s.agentsErr = eng.Agents()
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -61,6 +72,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/automations/", s.requireAuth(s.automationsSub))
 	mux.HandleFunc("/api/sessions", s.requireAuth(s.sessionsList))
 	mux.HandleFunc("/api/sessions/events", s.requireAuth(s.sessionEvents))
+	mux.HandleFunc("/api/agents", s.requireAuth(s.agentsAPI))
+	mux.HandleFunc("/api/agents/", s.requireAuth(s.agentsSub))
+	mux.HandleFunc("/api/projects", s.requireAuth(s.projectsAPI))
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux
 }

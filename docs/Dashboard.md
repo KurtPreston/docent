@@ -72,6 +72,7 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 |--------|------|---------|
 | `GET` | `/health` | Liveness probe; always open. |
 | `GET` | `/api/workitems` | Dashboard payload (work-item groups); triggers an on-request refresh of any collectors flagged `onRequest`. |
+| `GET` | `/api/cockpit` | The actionable subset of the same data — lanes, the follow-up inbox, the assigned-but-unstarted queue, and per-source load state — for the Cockpit page. |
 | `GET` | `/api/workitems/{key}` | One work item's full detail (sessions, PRs, JIRA, entities, signals). |
 | `POST` | `/api/workitems/{key}/launch` | Runs the [`onClickScript`](#docentdyaml-reference) hook with `DOCENT_*` env vars describing the work item. |
 | `POST` | `/api/workitems/{key}/open` | Cursor session manager only: syncs the work item's color into `.vscode/settings.json`, then returns a `cursor://` deep link for the client to navigate. |
@@ -92,7 +93,80 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 | `POST` | `/api/automations/{id}/run` | Manually fires a rule's actions now, bypassing its trigger, cooldown, and enabled flag; an optional JSON body supplies synthetic event context. |
 | `POST` | `/api/sessions/events` | Session ingest: IDE extensions and Cursor hooks POST session lifecycle/activity events (`open`/`close`/`agent_request_sent`/`agent_response_received`/`heartbeat`) keyed by `ide`+`ideHost`+`targetHost`+`path`. See [Cursor hooks → docentd](../README.md#cursor-hooks--docentd). |
 | `GET` | `/api/sessions` | The ingest view of live/known sessions from the registry (composite-keyed), with heartbeat-derived liveness. |
+| `POST` | `/api/agents` | Starts an [agent session](#agent-sessions): provisions the branch's grove worktree and runs the opening turn in the background. Returns `202 { session }`. |
+| `GET` | `/api/agents` | Every persisted session, most recently updated first. |
+| `GET` | `/api/agents/{id}` | One session's record. |
+| `DELETE` | `/api/agents/{id}` | Stops any running turn and deletes the session and its transcript. The worktree is left alone — it is grove's, not docent's. |
+| `POST` | `/api/agents/{id}/turn` | Runs another turn, resuming the conversation. `409` when one is already running in that worktree. |
+| `POST` | `/api/agents/{id}/stop` | Cancels the running turn. The session stays resumable. |
+| `POST` | `/api/agents/{id}/promote` | Stops the agent and writes `HANDOFF.md` into the worktree; returns the deep link and prompt text for the client to open an editor with. See [Promoting to Cursor](#promoting-to-cursor). |
+| `GET` | `/api/agents/{id}/events` | Server-Sent Events transcript. Replays the whole session, then streams; stays open across turns. |
+| `GET` | `/api/projects` | The grove projects an agent can be started in, for the Cockpit's repository picker. |
 | `GET` | `/*` | Serves the built SPA; any extensionless, unmatched path falls back to `index.html` so client-side routes work. |
+
+## Cockpit
+
+The Dashboard answers "what am I working on"; the Cockpit answers "what needs me
+right now", which is a much shorter list. It is the surface meant to be left
+open all day as its own window.
+
+`GET /api/cockpit` returns only lanes that can say why they are there: a live
+session, a PR of yours with unresolved comments or failing checks or an
+approval, a PR awaiting your review, or an in-progress ticket. Everything
+assigned but unstarted goes to a collapsed queue instead of a lane, because a
+backlog rendered at the same weight as live work hides the live work. The rail's
+colors come from `model.ColorForName`, the same hash grove uses, so a lane
+matches the title bar of the window it opens.
+
+Three columns: the lane rail, the selected lane's detail (windows, PRs, the
+threads waiting on a reply, and its agent), and the follow-up inbox. Each inbox
+row has a default action that seeds an agent prompt into the row's lane —
+addressing a review comment, fixing CI, merging an approved PR, or summarizing a
+PR you were asked to review — and each ticket lane offers a **plan it** action
+that asks for a `PLAN.md` rather than a change. Seeding fills the compose box; it
+does not send, so the prompt is always editable first.
+
+For running it as a pinned app window with hotkey access, see
+[`apps/docent-launcher-windows/docent-cockpit.ps1`](../apps/docent-launcher-windows/docent-cockpit.ps1).
+
+## Agent sessions
+
+`docentd` runs coding agents itself, in the browser, one lane per branch.
+[`libs/agentsession`](../libs/agentsession) drives Claude Code and `cursor-agent`
+as one short-lived subprocess per turn (neither has a server mode; both can
+resume a conversation by id), normalizes their two streaming JSON dialects into
+one event vocabulary, and persists both the session record and the full
+transcript under `$XDG_STATE_HOME/docent/agent-sessions/`.
+
+- **Worktrees come from grove**, never from docent: `grove path <branch>` places
+  the agent in your normal `~/Code/<project>/<branch>` checkout with grove's
+  `.env` copying and color, so a session and the editor are looking at the same
+  directory. Deleting a session leaves the worktree alone.
+- **One agent per worktree**, enforced. Two agents share a git index and corrupt
+  each other, so a second turn in the same directory is refused with `409`
+  rather than queued.
+- **Sessions outlive turns and restarts.** The stream stays open across turns,
+  and a record left marked `running` by a restart is reconciled to `stopped`
+  rather than shown as work that will never finish.
+- **A headless turn cannot ask you for approval.** This build of Claude Code has
+  no `--permission-prompt-tool`, so "needs a decision" is the signal to promote
+  the session rather than something to answer in the browser.
+
+### Promoting to Cursor
+
+Cursor exposes no way to open a new scoped chat programmatically. The only
+deeplink is `cursor://anysphere.cursor-deeplink/prompt?text=`, which pre-fills
+whichever window has focus and still needs a manual send. So promotion is built
+around that limit rather than pretending past it:
+
+1. `POST /api/agents/{id}/promote` stops the agent — you are taking the worktree
+   over — and writes `HANDOFF.md` at the worktree root summarizing the session,
+   its last few turns, and where it stopped. The file is added to the worktree's
+   own `.git/info/exclude`, so the next `git add -A` cannot commit it into the PR.
+2. The browser opens that directory through wsm's `/open` (falling back to the
+   `cursor://` folder deep link when wsm is not running).
+3. A moment later it fires the prompt deeplink, pre-filling the new window's chat
+   box with an instruction to read `HANDOFF.md` and continue.
 
 ## Report page
 
