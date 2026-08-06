@@ -261,6 +261,16 @@ Besides polling collectors, docentd receives session events directly at
   (`agent_request_sent` / `agent_response_received`), which the extension API
   cannot observe.
 
+The extension additionally reports each window's `remoteAuthority` — the
+workspace URI authority verbatim — which docentd stores alongside the session
+and echoes back in the `cursor://` deep link. Cursor decides whether a link
+reveals an open window or opens a new one by comparing whole workspace URIs, and
+recent builds spell the ssh target as hex-encoded JSON
+(`ssh-remote+7b22686f73744e616d65223a226465736b746f70227d` for
+`{"hostName":"desktop"}`), so a link synthesized from the ssh alias addresses a
+*different* workspace and opens a duplicate window. The ssh alias remains the
+fallback for a checkout no window has open.
+
 Build the extension with `scripts/build-extension.sh`; the platform installers
 offer to install it (and write `docent.url` / `docent.token` into the editor's
 settings) when they detect Cursor or VS Code. See

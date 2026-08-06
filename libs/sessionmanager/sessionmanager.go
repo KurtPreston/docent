@@ -74,6 +74,15 @@ type DeepLinker interface {
 	DeepLink(path, host string) string
 }
 
+// AuthorityDeepLinker is the optional refinement of DeepLinker for providers
+// whose links are matched against an existing window by a remote authority
+// string the editor assigns. Passing that authority back verbatim is what makes
+// a link reveal the window already open on path instead of opening a second one
+// beside it; host is the fallback for a path no window has open.
+type AuthorityDeepLinker interface {
+	DeepLinkAuthority(path, authority, host string) string
+}
+
 // Select returns the SessionManager described by the open-trigger config, or
 // nil when no provider is configured. A nil manager means "no open trigger":
 // callers render no clickable open/focus links.

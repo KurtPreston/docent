@@ -739,6 +739,32 @@ func TestBuildDashboardCursorDeepLink(t *testing.T) {
 	}
 }
 
+// A work item whose checkout already has a window open must link to that
+// window's own authority. Building ssh-remote+<alias> instead is what made
+// "Open in Cursor" spawn a duplicate window beside the one already there.
+func TestBuildDashboardDeepLinkAdoptsOpenWindowAuthority(t *testing.T) {
+	e := newCursorTestEngine(t, "devbox", nil)
+	const authority = "ssh-remote+7b22686f73744e616d65223a226465736b746f70227d"
+	id := registry.Identity{
+		IDE: "cursor", IDEHost: "mac", TargetHost: "devbox",
+		RemoteAuthority: authority, Path: "/code/repo",
+	}
+	if _, err := e.store.ApplyEvent(id, "open", "repo", ""); err != nil {
+		t.Fatal(err)
+	}
+	wi := model.WorkItem{
+		Key: "wb:org/repo@feature-x", Title: "feature-x", OpenPath: "/code/repo",
+		Entities: []model.Entity{
+			{Kind: "session", Title: "repo", State: map[string]string{"live": "true"}, Coordinates: map[string]string{}},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	want := "cursor://vscode-remote/" + authority + "/code/repo"
+	if dash.Groups[0].DeepLink != want {
+		t.Errorf("deepLink = %q, want %q", dash.Groups[0].DeepLink, want)
+	}
+}
+
 func TestOpenWorkItemSyncsColor(t *testing.T) {
 	e := newCursorTestEngine(t, "devbox", nil)
 	dir := t.TempDir()

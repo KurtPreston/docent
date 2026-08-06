@@ -37,6 +37,40 @@ func TestIdentityKey(t *testing.T) {
 	}
 }
 
+// Only the IDE extension can see the remote authority. The agent hook reports
+// the same window without one, so a heartbeat from it must not erase the value
+// the deep link depends on.
+func TestRemoteAuthorityIsRecordedAndNeverBlanked(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const authority = "ssh-remote+7b22686f73744e616d65223a226465736b746f70227d"
+	ext := Identity{IDE: "cursor", IDEHost: "mac", TargetHost: "desktop", RemoteAuthority: authority, Path: "/home/me/proj"}
+	if _, err := store.ApplyEvent(ext, "open", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.RemoteAuthorityForPath("/home/me/proj"); got != authority {
+		t.Fatalf("RemoteAuthorityForPath = %q, want %q", got, authority)
+	}
+
+	hook := Identity{IDE: "cursor", Remote: true, Path: "/home/me/proj"}
+	if _, err := store.ApplyEvent(hook, "agent_request_sent", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.RemoteAuthorityForPath("/home/me/proj"); got != authority {
+		t.Fatalf("hook event cleared the authority: got %q, want %q", got, authority)
+	}
+	// The authority is descriptive, not part of the identity: reporting the
+	// same window with a different one must not fork a second record.
+	if len(store.data) != 1 {
+		t.Fatalf("got %d records, want 1: %+v", len(store.data), store.data)
+	}
+	if got := store.RemoteAuthorityForPath("/home/me/elsewhere"); got != "" {
+		t.Fatalf("unknown path should have no authority, got %q", got)
+	}
+}
+
 func TestApplyEventAndClose(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "sessions.json"))
 	if err != nil {

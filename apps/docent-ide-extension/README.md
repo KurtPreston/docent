@@ -26,6 +26,18 @@ A session's identity is the composite of `ide` + `ideHost` + `targetHost` +
   `\home\me\x`, which no longer matches what the agent hook reports from the
   remote, and docentd would file one window as two sessions.
 
+It also reports one field that is **not** part of the identity:
+
+- `remoteAuthority` — the workspace URI's authority verbatim, e.g.
+  `ssh-remote+desktop` or `ssh-remote+7b22686f73744e616d65223a226465736b746f70227d`
+  (hex for `{"hostName":"desktop"}`, the form recent Cursor builds produce).
+  docentd echoes it back in the `cursor://` deep link, which is what makes
+  "Open" reveal *this* window: the editor decides between revealing and opening
+  by comparing whole workspace URIs, so a link built from the friendly host name
+  is a different workspace and lands you in a second window on the same folder.
+  Only this extension can see the authority — the agent hook never reports one,
+  and docentd keeps the last value it was given rather than blanking it.
+
 Because the extension runs on the GUI host while the agent hook runs wherever
 the agent executes, a single Remote-SSH window is reported by two clients on two
 different machines. docentd reconciles them by `ide` + normalized path; see

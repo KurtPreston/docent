@@ -79,6 +79,42 @@ func TestCursorDeepLink(t *testing.T) {
 	}
 }
 
+// The authority is echoed back byte-for-byte because Cursor matches an existing
+// window on the whole workspace URI. The hex case is the real one: a window on
+// the "desktop" ssh alias reports {"hostName":"desktop"} hex-encoded, and the
+// synthesized ssh-remote+desktop form opened a second window onto the folder
+// the first already had open.
+func TestCursorDeepLinkAuthority(t *testing.T) {
+	const hexAuth = "ssh-remote+7b22686f73744e616d65223a226465736b746f70227d"
+	cases := []struct {
+		name      string
+		mgr       CursorManager
+		path      string
+		authority string
+		host      string
+		want      string
+	}{
+		{"hex-encoded authority is preserved", CursorManager{}, "/home/me/proj", hexAuth, "desktop",
+			"cursor://vscode-remote/" + hexAuth + "/home/me/proj"},
+		{"plain authority is preserved", CursorManager{}, "/home/me/proj", "ssh-remote+desktop", "desktop",
+			"cursor://vscode-remote/ssh-remote+desktop/home/me/proj"},
+		{"authority wins over a disagreeing host", CursorManager{}, "/home/me/proj", "ssh-remote+box", "desktop",
+			"cursor://vscode-remote/ssh-remote+box/home/me/proj"},
+		{"no authority falls back to the ssh alias", CursorManager{}, "/home/me/proj", "", "desktop",
+			"cursor://vscode-remote/ssh-remote+desktop/home/me/proj"},
+		{"no authority and no host is local", CursorManager{}, "/home/me/proj", "", "",
+			"cursor://file/home/me/proj"},
+		{"empty path", CursorManager{}, "", hexAuth, "desktop", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.mgr.DeepLinkAuthority(tc.path, tc.authority, tc.host); got != tc.want {
+				t.Errorf("DeepLinkAuthority(%q,%q,%q) = %q, want %q", tc.path, tc.authority, tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCursorOpenBuildsFolderURI(t *testing.T) {
 	cases := []struct {
 		name    string

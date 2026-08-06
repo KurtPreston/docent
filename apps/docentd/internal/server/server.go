@@ -279,6 +279,12 @@ type SessionEventRequest struct {
 	IDEHost hostField `json:"ideHost"`
 	// TargetHost is the remote server the IDE is editing, when applicable.
 	TargetHost string `json:"targetHost,omitempty"`
+	// RemoteAuthority is the verbatim remote authority of the window's
+	// workspace URI (e.g. "ssh-remote+desktop", or the hex-encoded form recent
+	// Cursor builds use). Only the IDE extension can report it, and it is what
+	// a deep link must carry to reach that exact window. Empty for local
+	// windows and for reporters that cannot see it.
+	RemoteAuthority string `json:"remoteAuthority,omitempty"`
 	// Path is the workspace path being edited.
 	Path string `json:"path,omitempty"`
 	// Event is one of: open, close, agent_request_sent,
@@ -340,11 +346,12 @@ func (s *Server) sessionEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := registry.Identity{
-		IDE:        payload.IDE,
-		IDEHost:    payload.IDEHost.Host,
-		TargetHost: payload.TargetHost,
-		Path:       payload.Path,
-		Remote:     payload.IDEHost.Remote,
+		IDE:             payload.IDE,
+		IDEHost:         payload.IDEHost.Host,
+		TargetHost:      payload.TargetHost,
+		RemoteAuthority: strings.TrimSpace(payload.RemoteAuthority),
+		Path:            payload.Path,
+		Remote:          payload.IDEHost.Remote,
 	}
 	name := strings.TrimSpace(payload.Name)
 	if name == "" {
@@ -416,7 +423,7 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 			LastActivity: registry.LatestActivity(rec),
 			Provider:     provider,
 			WorkItemKey:  s.engine.WorkItemKeyForSession(key, rec.Name, rec.Path),
-			DeepLink:     s.engine.SessionDeepLink(rec.Path, rec.TargetHost),
+			DeepLink:     s.engine.SessionDeepLink(rec.Path, rec.TargetHost, rec.RemoteAuthority),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})

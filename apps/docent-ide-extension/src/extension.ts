@@ -55,10 +55,27 @@ function deriveIDE(): string {
   return "vscode";
 }
 
-// A folder this window has open, paired with the remote host it lives on.
+// A folder this window has open, paired with the remote host it lives on and
+// the verbatim remote authority that identifies it to the editor.
 interface FolderTarget {
   path: string;
   targetHost: string;
+  remoteAuthority: string;
+}
+
+// remoteAuthorityFor returns the authority verbatim, exactly as this window
+// spells it ("" for a local folder).
+//
+// This is what a cursor:// deep link has to carry to reach *this* window.
+// The editor decides whether a link targets an already-open window by comparing
+// whole workspace URIs, and the authority is part of that comparison — so
+// `ssh-remote+{"hostName":"desktop"}` (hex-encoded, the form recent Cursor
+// builds produce) and `ssh-remote+desktop` are two different workspaces even
+// though both resolve to the same box over the same ssh alias. Rebuilding the
+// authority from the friendly host name therefore produces a link that always
+// opens a second window onto the folder already open in the first.
+function remoteAuthorityFor(uri: vscode.Uri): string {
+  return uri.scheme === "vscode-remote" ? uri.authority || "" : "";
 }
 
 // targetHostFor derives the remote server a folder lives on ("" for a local
@@ -66,10 +83,12 @@ interface FolderTarget {
 // URI whose authority encodes the remote as "<resolver>+<host>"
 // (e.g. "ssh-remote+desktop"); local folders have no authority. We read the URI
 // authority rather than vscode.env.remoteName because remoteName only reports
-// the resolver *kind* ("ssh-remote"), not which host. Using the real host makes
-// the target-host column meaningful and lets docentd build a cursor:// deep
-// link that focuses the existing window instead of opening a mismatched new one
-// (matching the ssh alias `cursor --status` shows as "[SSH: <host>]").
+// the resolver *kind* ("ssh-remote"), not which host.
+//
+// Unlike remoteAuthorityFor this is the *friendly* host: the ssh alias
+// `cursor --status` shows as "[SSH: <host>]", which is what makes the
+// target-host column readable and what docentd falls back to when it has to
+// build a link for a folder no window has open.
 function targetHostFor(uri: vscode.Uri): string {
   if (uri.scheme !== "vscode-remote" || !uri.authority) {
     return "";
@@ -138,15 +157,23 @@ function pathFor(uri: vscode.Uri): string {
   return uri.scheme === "vscode-remote" ? uri.path : uri.fsPath;
 }
 
+function folderTarget(uri: vscode.Uri): FolderTarget {
+  return {
+    path: pathFor(uri),
+    targetHost: targetHostFor(uri),
+    remoteAuthority: remoteAuthorityFor(uri),
+  };
+}
+
 // currentFolders returns the workspace folders this window has open, each with
 // its remote host. A window with no folder yields a single empty entry so it is
 // still tracked.
 function currentFolders(): FolderTarget[] {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
-    return [{ path: "", targetHost: "" }];
+    return [{ path: "", targetHost: "", remoteAuthority: "" }];
   }
-  return folders.map((f) => ({ path: pathFor(f.uri), targetHost: targetHostFor(f.uri) }));
+  return folders.map((f) => folderTarget(f.uri));
 }
 
 function leaf(p: string): string {
@@ -157,7 +184,7 @@ function leaf(p: string): string {
 
 // postEvent fires a single session event at docentd. It is fire-and-forget with
 // a short timeout: a slow or down docentd must never disrupt the editor.
-function postEvent(cfg: Config, ide: string, ideHost: string, targetHost: string, path: string, event: SessionEvent): void {
+function postEvent(cfg: Config, ide: string, ideHost: string, folder: FolderTarget, event: SessionEvent): void {
   if (!cfg.url) {
     return;
   }
@@ -168,12 +195,15 @@ function postEvent(cfg: Config, ide: string, ideHost: string, targetHost: string
     return;
   }
   const bodyObj: Record<string, unknown> = { ide, ideHost, event };
-  if (targetHost) {
-    bodyObj.targetHost = targetHost;
+  if (folder.targetHost) {
+    bodyObj.targetHost = folder.targetHost;
   }
-  if (path) {
-    bodyObj.path = path;
-    bodyObj.name = leaf(path);
+  if (folder.remoteAuthority) {
+    bodyObj.remoteAuthority = folder.remoteAuthority;
+  }
+  if (folder.path) {
+    bodyObj.path = folder.path;
+    bodyObj.name = leaf(folder.path);
   }
   const data = JSON.stringify(bodyObj);
   const mod = u.protocol === "https:" ? https : http;
@@ -215,7 +245,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const send = (event: SessionEvent): void => {
     const cfg = readConfig();
     for (const f of currentFolders()) {
-      postEvent(cfg, ide, ideHost, f.targetHost, f.path, event);
+      postEvent(cfg, ide, ideHost, f, event);
     }
   };
 
@@ -239,10 +269,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders((e) => {
       const cfg = readConfig();
       for (const added of e.added) {
-        postEvent(cfg, ide, ideHost, targetHostFor(added.uri), pathFor(added.uri), "open");
+        postEvent(cfg, ide, ideHost, folderTarget(added.uri), "open");
       }
       for (const removed of e.removed) {
-        postEvent(cfg, ide, ideHost, targetHostFor(removed.uri), pathFor(removed.uri), "close");
+        postEvent(cfg, ide, ideHost, folderTarget(removed.uri), "close");
       }
     }),
   );
@@ -267,6 +297,6 @@ export function deactivate(): void {
   const ide = deriveIDE();
   const ideHost = os.hostname();
   for (const f of currentFolders()) {
-    postEvent(cfg, ide, ideHost, f.targetHost, f.path, "close");
+    postEvent(cfg, ide, ideHost, f, "close");
   }
 }

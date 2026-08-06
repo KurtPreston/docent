@@ -25,12 +25,18 @@ const keyDelim = "\x1f"
 // the most-recently-active live remote session matching by ide + path (see
 // Store.resolveKeyLocked), so agent activity attaches to the session the
 // (client-side) IDE extension created instead of forking a duplicate record.
+// RemoteAuthority is how the editor itself names the window's workspace, e.g.
+// "ssh-remote+desktop" or the hex-encoded "ssh-remote+7b22686f...7d". It is
+// deliberately not part of Key: it is a second spelling of TargetHost, only the
+// IDE extension can see it, and keying on it would fork a record every time a
+// reporter that cannot report it (the agent hook) touches the same window.
 type Identity struct {
-	IDE        string
-	IDEHost    string
-	TargetHost string
-	Path       string
-	Remote     bool
+	IDE             string
+	IDEHost         string
+	TargetHost      string
+	RemoteAuthority string
+	Path            string
+	Remote          bool
 }
 
 // Key returns the stable composite key for this identity.
@@ -83,11 +89,12 @@ func leaf(path string) string {
 // composite Identity.Key().
 type Record struct {
 	// Identity fields.
-	IDE        string `json:"ide,omitempty"`
-	IDEHost    string `json:"ideHost,omitempty"`
-	TargetHost string `json:"targetHost,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Remote     bool   `json:"remote,omitempty"`
+	IDE             string `json:"ide,omitempty"`
+	IDEHost         string `json:"ideHost,omitempty"`
+	TargetHost      string `json:"targetHost,omitempty"`
+	RemoteAuthority string `json:"remoteAuthority,omitempty"`
+	Path            string `json:"path,omitempty"`
+	Remote          bool   `json:"remote,omitempty"`
 
 	Name        string `json:"name,omitempty"`
 	Color       string `json:"color,omitempty"`
@@ -222,6 +229,31 @@ func (s *Store) All() map[string]Record {
 	return out
 }
 
+// RemoteAuthorityForPath returns the remote authority reported by the
+// most-recently-active window open on path, or "" when no window is open there
+// or none has reported one. It is how a deep link built from a work item's
+// checkout path (rather than from a session) still addresses the window that
+// already has that folder open.
+func (s *Store) RemoteAuthorityForPath(path string) string {
+	want := NormPath(path)
+	if want == "" {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var best string
+	var bestTime time.Time
+	for _, r := range s.data {
+		if r.RemoteAuthority == "" || NormPath(r.Path) != want {
+			continue
+		}
+		if t := parseISO(r.LastHeartbeatAt); best == "" || t.After(bestTime) {
+			best, bestTime = r.RemoteAuthority, t
+		}
+	}
+	return best
+}
+
 // resolveKeyLocked maps an incoming identity to the storage key its event
 // should apply to. It returns the exact composite key when a record for it
 // already exists. For a Remote reporter that cannot name its host (IDEHost
@@ -289,6 +321,12 @@ func (s *Store) ApplyEvent(id Identity, event, name, color string) (string, erro
 			Remote:     id.Remote,
 			CreatedAt:  now,
 		}
+	}
+	// Only the IDE extension knows the authority, and it may reach a record the
+	// agent hook created first, so fill it in whenever it arrives — but never
+	// blank it, or the hook's next heartbeat would undo the deep link.
+	if id.RemoteAuthority != "" {
+		rec.RemoteAuthority = id.RemoteAuthority
 	}
 	if name != "" {
 		rec.Name = name

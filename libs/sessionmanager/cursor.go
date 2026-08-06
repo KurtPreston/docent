@@ -78,6 +78,10 @@ func (m *CursorManager) Focus(ctx context.Context, req FocusReq) error {
 
 // DeepLink builds a cursor:// URI that opens/reveals path (on ssh host when
 // set). Returns "" when path is empty.
+//
+// The authority it synthesizes ("ssh-remote+<host>") is the right one for a
+// folder no window has open, but it is a guess: see DeepLinkAuthority for why a
+// window that is already open needs its own spelling instead.
 func (m *CursorManager) DeepLink(path, host string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -88,6 +92,29 @@ func (m *CursorManager) DeepLink(path, host string) string {
 		return "cursor://vscode-remote/ssh-remote+" + host + ensureLeadingSlash(path)
 	}
 	return "cursor://file" + ensureLeadingSlash(path)
+}
+
+// DeepLinkAuthority builds a cursor:// URI addressed to the remote authority a
+// window reports for itself, falling back to DeepLink when that authority is
+// unknown.
+//
+// Cursor decides whether a deep link means "reveal that window" or "open a new
+// one" by comparing whole workspace URIs, authority included. Recent builds
+// encode the ssh target as hex-encoded JSON rather than a bare alias — a window
+// on the "desktop" alias reports
+// ssh-remote+7b22686f73744e616d65223a226465736b746f70227d, which is
+// {"hostName":"desktop"} — so the ssh-remote+desktop form DeepLink synthesizes
+// is a different workspace to Cursor even though it resolves to the same folder
+// on the same box. The result was two windows on one folder, identical down to
+// the title bar. Echoing the authority back verbatim avoids guessing at an
+// encoding that is not ours to define.
+func (m *CursorManager) DeepLinkAuthority(path, authority, host string) string {
+	path = strings.TrimSpace(path)
+	authority = strings.TrimSpace(authority)
+	if path == "" || authority == "" {
+		return m.DeepLink(path, host)
+	}
+	return "cursor://vscode-remote/" + authority + ensureLeadingSlash(path)
 }
 
 // folderURI builds the --folder-uri argument for opening a folder.

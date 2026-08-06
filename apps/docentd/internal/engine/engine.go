@@ -235,9 +235,12 @@ type Engine struct {
 	corrCfg correlation.Config
 
 	// sessionMgr is the configured session provider (nil when none). sessionLinker
-	// is set when that provider can produce clickable deep links (cursor, not wsm).
-	sessionMgr    sessionmanager.SessionManager
-	sessionLinker sessionmanager.DeepLinker
+	// is set when that provider can produce clickable deep links (cursor, not wsm),
+	// and sessionAuthLinker when it can also address a window by the remote
+	// authority the window reports for itself.
+	sessionMgr        sessionmanager.SessionManager
+	sessionLinker     sessionmanager.DeepLinker
+	sessionAuthLinker sessionmanager.AuthorityDeepLinker
 
 	// jiraBaseURL is the configured jira collector's base_url (trailing slash
 	// trimmed), used to synthesize /browse/<key> links for ticket keys that
@@ -310,6 +313,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.OpenTrigger)
 	e.sessionLinker, _ = e.sessionMgr.(sessionmanager.DeepLinker)
+	e.sessionAuthLinker, _ = e.sessionMgr.(sessionmanager.AuthorityDeepLinker)
 	e.jiraBaseURL = jiraBaseURL(cfg)
 	e.units = e.buildUnits()
 	// Built before the automation connectors, because the "agent" action runs
@@ -397,12 +401,27 @@ func (e *Engine) providerKey() string {
 }
 
 // deepLinkFor returns the provider deep link for a work-item path, or "" when
-// the provider has no deep link or the path is empty.
+// the provider has no deep link or the path is empty. When a window is already
+// open on that path it is addressed by the authority that window reports, so
+// the link reveals it rather than opening a duplicate beside it.
 func (e *Engine) deepLinkFor(openPath string) string {
 	if e.sessionLinker == nil || openPath == "" {
 		return ""
 	}
-	return e.sessionLinker.DeepLink(openPath, e.cfg.SSHHost)
+	return e.linkTo(openPath, e.store.RemoteAuthorityForPath(openPath), e.cfg.SSHHost)
+}
+
+// linkTo builds the provider deep link for path, preferring the window's own
+// remote authority and falling back to the ssh alias when it is unknown (no
+// window open there, an older IDE extension, or a provider that cannot use it).
+func (e *Engine) linkTo(path, authority, host string) string {
+	if e.sessionLinker == nil || path == "" {
+		return ""
+	}
+	if e.sessionAuthLinker != nil {
+		return e.sessionAuthLinker.DeepLinkAuthority(path, authority, host)
+	}
+	return e.sessionLinker.DeepLink(path, host)
 }
 
 // PathDeepLink returns the provider deep link for a path on the docentd host,
@@ -422,16 +441,12 @@ func (e *Engine) Provider() string {
 // SessionDeepLink returns the provider deep link that opens a session's own
 // workspace path on its own host, or "" when the provider has no deep link or
 // the path is empty. Unlike deepLinkFor it keys off the session's exact
-// path+targetHost (rather than a work item's openPath and the daemon's ssh
-// alias), so a launch focuses that specific window: a remote session yields an
-// ssh-remote link to its targetHost, while a local session (no targetHost)
-// yields a local file link. This is what makes the Sessions-page launch reveal
-// the existing window instead of opening a mismatched new one.
-func (e *Engine) SessionDeepLink(path, targetHost string) string {
-	if e.sessionLinker == nil || path == "" {
-		return ""
-	}
-	return e.sessionLinker.DeepLink(path, targetHost)
+// coordinates (rather than a work item's openPath and the daemon's ssh alias),
+// so a launch reaches that specific window: the authority the window reported
+// when it has one, else an ssh-remote link to its targetHost, else — for a
+// local session with neither — a local file link.
+func (e *Engine) SessionDeepLink(path, targetHost, remoteAuthority string) string {
+	return e.linkTo(path, remoteAuthority, targetHost)
 }
 
 // WorkItemKeyForSession resolves the key of the work item that surfaces the
@@ -1204,6 +1219,9 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 		if rec.TargetHost != "" {
 			ent.Coordinates["host"] = rec.TargetHost
 			ent.Coordinates["targetHost"] = rec.TargetHost
+		}
+		if rec.RemoteAuthority != "" {
+			ent.Coordinates["remoteAuthority"] = rec.RemoteAuthority
 		}
 		if rec.IDEHost != "" {
 			ent.Coordinates["ideHost"] = rec.IDEHost
