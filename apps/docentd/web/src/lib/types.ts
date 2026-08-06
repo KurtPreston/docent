@@ -17,6 +17,18 @@ export type DashboardSession = {
   lastActivity?: string;
 };
 
+export type DashboardThread = {
+  id?: string;
+  author?: string;
+  body?: string;
+  url?: string;
+  file?: string;
+  line?: number;
+  /** True when the last comment in the thread is the user's own. */
+  mine: boolean;
+  updatedAt?: string;
+};
+
 export type DashboardPR = {
   prNumber: number;
   title: string;
@@ -25,6 +37,20 @@ export type DashboardPR = {
   state?: string;
   draft: boolean;
   ticket?: string;
+  mine?: boolean;
+  checks?: string;
+  reviewDecision?: string;
+  unresolved?: number;
+  threads?: DashboardThread[];
+  /**
+   * The six-bucket classification, absent when docent could not read the PR's
+   * timeline. Values: ready_to_merge, failing_validation, awaiting_author,
+   * awaiting_review, pending_validation, draft.
+   */
+  bucket?: string;
+  /** "author" or "reviewer": whose court the ball is in. */
+  lastAction?: string;
+  lastActionAt?: string;
 };
 
 export type DashboardTicket = {
@@ -64,6 +90,171 @@ export type Dashboard = {
   provider?: string;
   sshHost?: string;
   groups: DashboardGroup[];
+};
+
+/** Attention buckets from GET /api/cockpit, most urgent first. */
+export type Attention =
+  | "agent-waiting"
+  | "pr-my-turn"
+  | "ready-to-merge"
+  | "review-requested"
+  | "agent-working"
+  | "in-progress"
+  | "todo";
+
+export type CockpitLane = {
+  key: string;
+  title?: string;
+  ticket?: string;
+  repo?: string;
+  branch?: string;
+  openPath?: string;
+  deepLink?: string;
+  jiraUrl?: string;
+  jiraStatus?: string;
+  color?: string;
+  fg?: string;
+  attention: Attention;
+  attentionRank: number;
+  /** Every concrete thing wanting attention; never empty. */
+  reasons: string[];
+  lastActivity?: string;
+  sessions: DashboardSession[];
+  prs: DashboardPR[];
+};
+
+export type InboxKind =
+  | "agent-waiting"
+  | "review-comment"
+  | "checks-failing"
+  | "changes-requested"
+  | "ready-to-merge"
+  | "review-requested";
+
+export type InboxItem = {
+  kind: InboxKind;
+  laneKey: string;
+  title: string;
+  body?: string;
+  author?: string;
+  url?: string;
+  repo?: string;
+  prNumber?: number;
+  file?: string;
+  line?: number;
+  ticket?: string;
+  branch?: string;
+  openPath?: string;
+  color?: string;
+  at?: string;
+};
+
+export type CockpitCounts = {
+  agentWaiting: number;
+  myTurnPR: number;
+  readyToMerge: number;
+  reviewRequested: number;
+  agentWorking: number;
+  inProgress: number;
+  todo: number;
+  actionable: number;
+};
+
+export type CockpitSource = {
+  id: string;
+  lastRun?: string;
+  items: number;
+  error?: string;
+  /** False until the collector's first successful report. */
+  loaded: boolean;
+};
+
+export type Cockpit = {
+  generatedAt: string;
+  provider?: string;
+  sshHost?: string;
+  /** How many work items exist in total, so the UI can say what it is hiding. */
+  total: number;
+  counts: CockpitCounts;
+  lanes: CockpitLane[];
+  queue: CockpitLane[];
+  inbox: InboxItem[];
+  sources: CockpitSource[];
+};
+
+// Agent sessions: mirrors the /api/agents payloads (agentSessionView in
+// apps/docentd/internal/server/agents.go) and the normalized event vocabulary
+// from libs/agentsession.
+
+export type AgentStatus = "running" | "idle" | "failed" | "stopped";
+
+export type AgentTurnResult = {
+  text?: string;
+  isError?: boolean;
+  sessionId?: string;
+  durationMs?: number;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  numTurns?: number;
+};
+
+export type AgentSession = {
+  id: string;
+  provider: string;
+  model?: string;
+  title?: string;
+  repo?: string;
+  branch?: string;
+  dir?: string;
+  project?: string;
+  color?: string;
+  status: AgentStatus;
+  error?: string;
+  turns: number;
+  lastResult?: AgentTurnResult;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentEventKind =
+  | "prompt"
+  | "started"
+  | "text"
+  | "thinking"
+  | "tool"
+  | "tool-result"
+  | "done"
+  | "error"
+  | "stopped"
+  | "status";
+
+export type AgentEvent = {
+  kind: AgentEventKind;
+  text?: string;
+  tool?: string;
+  sessionId?: string;
+  error?: string;
+  result?: AgentTurnResult;
+  at: string;
+};
+
+/** A grove project from GET /api/projects: somewhere an agent can be started. */
+export type GroveProject = {
+  repo: string;
+  dir: string;
+  name: string;
+};
+
+export type AgentStartRequest = {
+  provider?: string;
+  title?: string;
+  repo?: string;
+  branch?: string;
+  dir?: string;
+  baseRef?: string;
+  openPath?: string;
+  prompt: string;
 };
 
 export type SignalView = {

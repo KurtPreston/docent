@@ -33,6 +33,24 @@ export async function focusWSMSession(name: string, host?: string): Promise<void
   }
 }
 
+// openWSMPath asks the local wsm daemon to open a folder in a new IDE window
+// on the given host. Unlike focusWSMSession this is for a directory that may
+// have no window yet, which is the case when promoting an agent session.
+export async function openWSMPath(path: string, name: string, host?: string): Promise<boolean> {
+  try {
+    const r = await fetch(WSM_URL + "/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, name, host: host ?? null }),
+    });
+    return r.ok;
+  } catch {
+    // wsm is optional: on a machine without it the cursor:// deep link is the
+    // fallback, so a failure here is not worth a toast of its own.
+    return false;
+  }
+}
+
 type OpenResult = { ok?: boolean; deepLink?: string; colorSynced?: boolean; error?: string };
 
 // openViaDeepLink is the cursor-provider path: POST /open lets docentd sync the

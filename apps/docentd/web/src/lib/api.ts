@@ -16,6 +16,11 @@ import type {
   ConfigSaveResult,
   AutomationsView,
   SessionsView,
+  Cockpit,
+  AgentSession,
+  AgentEvent,
+  AgentStartRequest,
+  GroveProject,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -25,6 +30,7 @@ async function getJSON<T>(url: string): Promise<T> {
 }
 
 export const fetchDashboard = (): Promise<Dashboard> => getJSON<Dashboard>("/api/workitems");
+export const fetchCockpit = (): Promise<Cockpit> => getJSON<Cockpit>("/api/cockpit");
 export const fetchSignals = (): Promise<SignalsView> => getJSON<SignalsView>("/api/signals");
 export const fetchCollectors = (): Promise<CollectorsView> => getJSON<CollectorsView>("/api/collectors");
 export const fetchSessions = (): Promise<SessionsView> => getJSON<SessionsView>("/api/sessions");
@@ -78,14 +84,18 @@ export type StreamReportHandlers = {
   signal?: AbortSignal;
 };
 
-/** Consume the report SSE feed. Uses docentFetch so the bearer token rides
- * along (EventSource cannot set Authorization). Resolves when the stream
- * ends (terminal event or connection close). Throws on non-OK HTTP. */
-export async function streamReport(id: string, h: StreamReportHandlers): Promise<void> {
-  const r = await docentFetch("/api/report/" + encodeURIComponent(id) + "/stream", {
+/** Consume an SSE feed of JSON `data:` frames. Uses docentFetch so the bearer
+ * token rides along (EventSource cannot set Authorization). Resolves when the
+ * stream ends (terminal event or connection close). Throws on non-OK HTTP. */
+async function streamJSON<T>(
+  url: string,
+  onEvent: (ev: T) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const r = await docentFetch(url, {
     cache: "no-store",
     headers: { Accept: "text/event-stream" },
-    signal: h.signal,
+    signal,
   });
   if (!r.ok) {
     const d = (await r.json().catch(() => ({}))) as { error?: string };
@@ -111,7 +121,7 @@ export async function streamReport(id: string, h: StreamReportHandlers): Promise
         const raw = line.slice(5).trimStart();
         if (!raw) continue;
         try {
-          h.onEvent(JSON.parse(raw) as ReportEvent);
+          onEvent(JSON.parse(raw) as T);
         } catch {
           /* ignore malformed frames */
         }
@@ -119,6 +129,72 @@ export async function streamReport(id: string, h: StreamReportHandlers): Promise
     }
   }
 }
+
+export const streamReport = (id: string, h: StreamReportHandlers): Promise<void> =>
+  streamJSON<ReportEvent>("/api/report/" + encodeURIComponent(id) + "/stream", h.onEvent, h.signal);
+
+// Agent sessions. Starting one provisions a grove worktree, which fetches from
+// the remote, so startAgent can take a while; the turn itself runs in the
+// background and is watched through streamAgent.
+
+export const fetchAgents = (): Promise<AgentSession[]> =>
+  getJSON<{ sessions: AgentSession[] }>("/api/agents").then((r) => r.sessions ?? []);
+
+export const fetchProjects = (): Promise<GroveProject[]> =>
+  getJSON<{ projects: GroveProject[] }>("/api/projects").then((r) => r.projects ?? []);
+
+async function agentPost<T>(url: string, body?: unknown): Promise<T> {
+  const r = await docentFetch(url, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const d = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string } & T;
+  if (!r.ok || !d.ok) throw new Error(d.error ?? "HTTP " + r.status);
+  return d;
+}
+
+export async function startAgent(req: AgentStartRequest): Promise<AgentSession> {
+  const d = await agentPost<{ session: AgentSession }>("/api/agents", req);
+  return d.session;
+}
+
+export const sendAgentTurn = (id: string, prompt: string): Promise<unknown> =>
+  agentPost(`/api/agents/${encodeURIComponent(id)}/turn`, { prompt });
+
+export const stopAgent = (id: string): Promise<unknown> =>
+  agentPost(`/api/agents/${encodeURIComponent(id)}/stop`);
+
+export async function deleteAgent(id: string): Promise<void> {
+  const r = await docentFetch("/api/agents/" + encodeURIComponent(id), { method: "DELETE" });
+  const d = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (!r.ok || !d.ok) throw new Error(d.error ?? "HTTP " + r.status);
+}
+
+export type PromoteResult = {
+  session: AgentSession;
+  handoffPath: string;
+  dir: string;
+  deepLink?: string;
+  sshHost?: string;
+  prompt: string;
+};
+
+/** Stop the agent and write HANDOFF.md into its worktree. The daemon does not
+ * open anything: the editor and its chat box live on the user's machine, so
+ * that half is the browser's. */
+export const promoteAgent = (id: string): Promise<PromoteResult> =>
+  agentPost<PromoteResult>(`/api/agents/${encodeURIComponent(id)}/promote`);
+
+/** Stream one session's transcript. The daemon replays the whole transcript
+ * before live events, so a late subscriber sees the full conversation, and the
+ * stream stays open across turns until the caller aborts. */
+export const streamAgent = (
+  id: string,
+  onEvent: (ev: AgentEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> =>
+  streamJSON<AgentEvent>("/api/agents/" + encodeURIComponent(id) + "/events", onEvent, signal);
 
 // Settings API: fetch every editable docent config file, then validate/save
 // one at a time. saveConfigFile and validateConfigFile never throw on

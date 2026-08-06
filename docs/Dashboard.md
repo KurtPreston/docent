@@ -12,14 +12,16 @@ for the monorepo overview.
 
 ## Pages
 
-The SPA (`apps/docentd/web`) has six nav tabs plus one deep-linked detail
+The SPA (`apps/docentd/web`) has eight nav tabs plus one deep-linked detail
 route, all served by `docentd` itself:
 
 | Route | Page | What it's for |
 |-------|------|----------------|
-| `/` | **Dashboard** | The main table: work items grouped by ticket/branch, with JIRA/PR/session columns (each gated on whether that collector/session manager is configured), status pills, and an **open** action per row. Auto-refreshes every 5s. |
+| `/` | **Cockpit** | The default surface, and the one meant to be left open: a rail of actionable lanes (one per branch or ticket, colored to match grove's title bars), the selected lane's detail with its [hosted agent](#agent-sessions), and a follow-up inbox whose rows each seed an agent prompt. See [Cockpit](#cockpit) below. |
+| `/dashboard` | **Dashboard** | The full, unfiltered table: work items grouped by ticket/branch, with JIRA/PR/session columns (each gated on whether that collector/session manager is configured), status pills, and an **open** action per row. Auto-refreshes every 5s. |
 | `/signals` | **Signals** | Every collection unit (directive × collector × mode) with its last run/error, and the raw signals it produced — useful for debugging what a collector actually saw. |
 | `/collectors` | **Collectors** | Operational view of collection units: poll interval, last run, next due, item counts, errors. A **collect** button force-runs one unit immediately. |
+| `/sessions` | **Sessions** | The raw session registry as reported by IDE extensions and Cursor hooks, with liveness and a launch action per session. |
 | `/report` | **Report** | Generate a Markdown report in-browser: pick a mode, lookback, scope, and collect mode, watch live progress (collector-by-collector, then token-by-token), and download the result. See [Report page](#report-page) below. |
 | `/automations` | **Automations** | Lists configured rules and recent job history, with a manual **Run** button per rule. Rules themselves are edited as YAML in Settings. See [docs/Automations.md](Automations.md). |
 | `/settings` | **Settings** | A Monaco YAML editor (lazy-loaded, so its editor bundle doesn't cost other pages) for `config.yaml`, `docentd.yaml`, and `goals.yaml`, with JSON Schema validation. Saves write straight to disk; **docentd restart is required** to pick up changes (no hot reload). |

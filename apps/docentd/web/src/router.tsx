@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
+import { Cockpit } from "./pages/Cockpit";
 import { Dashboard } from "./pages/Dashboard";
 import { Signals } from "./pages/Signals";
 import { Collectors } from "./pages/Collectors";
@@ -17,7 +18,10 @@ const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m
 // so navigating swaps only the page body. docentd serves index.html for any
 // of these client routes in production; Vite's dev server does the same.
 export const router = createBrowserRouter([
-  { path: "/", element: <Dashboard /> },
+  // The cockpit is the default surface: it answers "what needs me now", while
+  // the dashboard remains the full, unfiltered view one click away.
+  { path: "/", element: <Cockpit /> },
+  { path: "/dashboard", element: <Dashboard /> },
   { path: "/signals", element: <Signals /> },
   { path: "/collectors", element: <Collectors /> },
   { path: "/sessions", element: <Sessions /> },

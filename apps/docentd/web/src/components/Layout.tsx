@@ -24,6 +24,9 @@ export function Layout({ mainClass, stats, controls, children }: Props) {
         </div>
         <nav className="nav">
           <NavLink to="/" end className={navClass}>
+            Cockpit
+          </NavLink>
+          <NavLink to="/dashboard" className={navClass}>
             Dashboard
           </NavLink>
           <NavLink to="/signals" className={navClass}>
