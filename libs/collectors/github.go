@@ -62,6 +62,61 @@ type ghCheckRollupEntry struct {
 	State      string `json:"state"`
 }
 
+// ReviewThread is one review conversation on a PR, reduced to what a follow-up
+// queue needs: where it is, who spoke last, and what they said.
+//
+// Threads are the unit of PR follow-up, not individual comments: a reviewer's
+// question plus your reply plus their acknowledgement is one item of work, and
+// whether it still needs you depends only on who spoke last.
+type ReviewThread struct {
+	ID     string `json:"id"`
+	Author string `json:"author,omitempty"`
+	Body   string `json:"body,omitempty"`
+	URL    string `json:"url,omitempty"`
+	File   string `json:"file,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	// Mine reports whether the most recent comment is the viewer's own, which
+	// separates "a reviewer is waiting on me" from "I replied and am waiting on
+	// them".
+	Mine      bool   `json:"mine"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+// ghReviewThreadsResponse is the `gh api graphql` reply for a PR's review
+// threads. gh pr view cannot report threads at all (there is no reviewThreads
+// JSON field), so this is the only route to resolution state.
+type ghReviewThreadsResponse struct {
+	Data struct {
+		Repository struct {
+			PullRequest struct {
+				ReviewThreads struct {
+					Nodes []ghReviewThread `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+type ghReviewThread struct {
+	ID         string `json:"id"`
+	IsResolved bool   `json:"isResolved"`
+	IsOutdated bool   `json:"isOutdated"`
+	Path       string `json:"path"`
+	Line       *int   `json:"line"`
+	Comments   struct {
+		Nodes []ghReviewComment `json:"nodes"`
+	} `json:"comments"`
+}
+
+type ghReviewComment struct {
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	Body      string `json:"body"`
+	URL       string `json:"url"`
+	CreatedAt string `json:"createdAt"`
+}
+
 type ghSearchCommitRow struct {
 	SHA        string `json:"sha"`
 	URL        string `json:"url"`
@@ -344,7 +399,7 @@ func runGitHubSearch(ctx context.Context, env []string, spec ghSearchSpec, direc
 			ObservedAt:  obs.UTC(),
 			Author:      user,
 			IsSelf:      spec.userAnchored,
-			Fields: buildGitHubSearchFields(spec, user, host, repo, row),
+			Fields:      buildGitHubSearchFields(spec, user, host, repo, row),
 		})
 	}
 	return items, nil
@@ -543,10 +598,10 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 		for _, row := range rows[i] {
 			if !spec.mine {
 				headBranch := c.fetchPRHeadRef(ctx, env, row.URL, directive, opts)
-				items = append(items, prReviewItem(directive, user, host, now, row, spec, "", "", false, headBranch, ""))
+				items = append(items, prReviewItem(directive, user, host, now, row, spec, prDetail{HeadBranch: headBranch}))
 				continue
 			}
-			checks, decision, headBranch, mergeable := c.fetchPRStatus(ctx, env, row.URL, directive, opts)
+			detail := c.fetchPRDetail(ctx, env, row.URL, user, directive, opts)
 			completed++
 			reportProgress(opts, DirectiveProgress{
 				DirectiveID: directive.ID,
@@ -556,8 +611,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 				Completed:   completed,
 				Total:       totalSteps,
 			})
-			ready := !row.IsDraft && (checks == "passing" || checks == "none")
-			items = append(items, prReviewItem(directive, user, host, now, row, spec, checks, decision, ready, headBranch, mergeable))
+			items = append(items, prReviewItem(directive, user, host, now, row, spec, detail))
 		}
 	}
 	return dedupePRReviewItems(items), nil
@@ -586,9 +640,10 @@ func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directiv
 }
 
 // prReviewItem builds one pr_review_status StatusItem for an open PR found by
-// the given search. checks/decision/ready/mergeable are only meaningful for
-// PRs the user owns; rows from unowned searches pass zero values.
-func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, spec prReviewSpec, checks, decision string, ready bool, headBranch, mergeable string) StatusItem {
+// the given search. detail is only fully resolved for PRs the user owns; rows
+// from unowned searches pass a detail carrying just the head branch, which
+// correlation needs to anchor the PR to its repo.
+func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, spec prReviewSpec, detail prDetail) StatusItem {
 	repo := strings.TrimSpace(row.Repository.NameWithOwner)
 	if repo == "" {
 		repo = gitHubOwnerRepoFromURL(row.URL)
@@ -610,14 +665,35 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	if ca := strings.TrimSpace(row.CreatedAt); ca != "" {
 		fields["created_at"] = ca
 	}
-	if headBranch != "" {
-		fields["head_branch"] = headBranch
+	if detail.HeadBranch != "" {
+		fields["head_branch"] = detail.HeadBranch
 	}
 	if spec.mine {
-		fields["checks"] = checks
-		fields["review_decision"] = decision
-		fields["ready"] = strconv.FormatBool(ready)
-		fields["mergeable"] = mergeable
+		fields["checks"] = detail.Checks
+		fields["review_decision"] = detail.ReviewDecision
+		fields["ready"] = strconv.FormatBool(!row.IsDraft && (detail.Checks == "passing" || detail.Checks == "none"))
+		fields["mergeable"] = detail.Mergeable
+		// Unresolved review threads are the "someone commented and is waiting
+		// on me" signal, which review_decision alone misses: a reviewer can
+		// leave blocking questions without ever setting CHANGES_REQUESTED.
+		fields["unresolved"] = strconv.Itoa(len(detail.Threads))
+		fields["unresolved_mine"] = strconv.Itoa(countThreadsAwaitingMe(detail.Threads))
+		if len(detail.Threads) > 0 {
+			// Fields are flat strings, so the thread list travels as JSON.
+			if b, err := json.Marshal(detail.Threads); err == nil {
+				fields["unresolved_threads"] = string(b)
+			}
+		}
+		// The six-bucket classification and whose court the ball is in. Omitted
+		// rather than defaulted when the timeline could not be read, so a
+		// consumer can tell "not classified" from "awaiting review".
+		if detail.Status.Bucket != "" {
+			fields["bucket"] = string(detail.Status.Bucket)
+			fields["last_action"] = string(detail.Status.Side)
+			if !detail.Status.At.IsZero() {
+				fields["last_action_at"] = detail.Status.At.UTC().Format(time.RFC3339)
+			}
+		}
 	}
 	// Prefer the PR's real last-updated time so an open PR reports when it was
 	// actually touched (opened / pushed / commented / reviewed) rather than the
@@ -633,13 +709,14 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		Source:      directive.Collector,
 		Kind:        "pr_review_status",
 		Title:       row.Title,
-		Summary:     fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s mergeable=%s", spec.relation, row.IsDraft, checks, decision, mergeable),
-		URL:         row.URL,
-		Severity:    "info",
-		ObservedAt:  obs.UTC(),
-		Author:      user,
-		IsSelf:      true,
-		Fields:      fields,
+		Summary: fmt.Sprintf("open pr relation=%s draft=%t checks=%s review=%s mergeable=%s bucket=%s",
+			spec.relation, row.IsDraft, detail.Checks, detail.ReviewDecision, detail.Mergeable, detail.Status.Bucket),
+		URL:        row.URL,
+		Severity:   "info",
+		ObservedAt: obs.UTC(),
+		Author:     user,
+		IsSelf:     true,
+		Fields:     fields,
 	}
 }
 
@@ -736,6 +813,138 @@ func normalizeMergeable(raw string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// reviewThreadsQuery asks for a PR's review threads with enough of each
+// conversation to decide whether it is still waiting on someone. 50 threads and
+// 50 comments per thread is not paginated on purpose: a PR that exceeds either
+// is past the point where a follow-up queue helps, and an unbounded walk would
+// multiply API calls across every open PR on every poll.
+const reviewThreadsQuery = `
+query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$number){
+      reviewThreads(first:50){
+        nodes{
+          id isResolved isOutdated path line
+          comments(first:50){ nodes{ author{login} body url createdAt } }
+        }
+      }
+    }
+  }
+}`
+
+// fetchPRUnresolvedThreads returns the PR's unresolved review threads.
+//
+// Failure is non-fatal and yields no threads: unresolved comments are one
+// attention signal among several, and a PR whose threads cannot be read should
+// still surface for its checks and review decision.
+func (c GitHubCollector) fetchPRUnresolvedThreads(ctx context.Context, env []string, prURL, viewer string, directive userdata.Directive, opts *CollectOpts) []ReviewThread {
+	owner, name, number, ok := parsePRURL(prURL)
+	if !ok {
+		return nil
+	}
+	args := []string{
+		"api", "graphql",
+		"-f", "owner=" + owner,
+		"-f", "name=" + name,
+		"-F", "number=" + strconv.Itoa(number),
+		"-f", "query=" + reviewThreadsQuery,
+	}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Env = env
+	out, err := runAndLogExec(cmd, opts, directive.ID)
+	if err != nil {
+		return nil
+	}
+	var resp ghReviewThreadsResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil
+	}
+	return filterUnresolvedThreads(resp.Data.Repository.PullRequest.ReviewThreads.Nodes, viewer)
+}
+
+// filterUnresolvedThreads reduces review-thread nodes to the threads that are
+// still open work, summarizing each by its opening comment and marking whether
+// the viewer spoke last. It takes the nodes rather than a whole response so both
+// the standalone threads query and the consolidated PR-detail query can share it.
+func filterUnresolvedThreads(nodes []ghReviewThread, viewer string) []ReviewThread {
+	var threads []ReviewThread
+	for _, node := range nodes {
+		// An outdated thread points at a line that no longer exists, which
+		// usually means the code was already changed in response to it. Only a
+		// still-open, still-relevant thread is follow-up work.
+		if node.IsResolved || node.IsOutdated {
+			continue
+		}
+		comments := node.Comments.Nodes
+		if len(comments) == 0 {
+			continue
+		}
+		// The queue shows what was originally asked, since that is the work;
+		// who spoke last only decides whose turn it is.
+		first, last := comments[0], comments[len(comments)-1]
+		t := ReviewThread{
+			ID:        node.ID,
+			Author:    first.Author.Login,
+			Body:      truncateThreadBody(first.Body),
+			URL:       first.URL,
+			File:      node.Path,
+			Mine:      viewer != "" && strings.EqualFold(last.Author.Login, viewer),
+			UpdatedAt: last.CreatedAt,
+		}
+		if node.Line != nil {
+			t.Line = *node.Line
+		}
+		threads = append(threads, t)
+	}
+	return threads
+}
+
+// countThreadsAwaitingMe counts unresolved threads whose last word was someone
+// else's, i.e. the ones that are actually my turn.
+func countThreadsAwaitingMe(threads []ReviewThread) int {
+	n := 0
+	for _, t := range threads {
+		if !t.Mine {
+			n++
+		}
+	}
+	return n
+}
+
+// threadBodyLimit keeps a single quoted comment from dominating a dashboard
+// payload that carries every open PR.
+const threadBodyLimit = 500
+
+func truncateThreadBody(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= threadBodyLimit {
+		return s
+	}
+	return strings.TrimSpace(s[:threadBodyLimit]) + "…"
+}
+
+// parsePRURL splits a PR URL into owner, repo, and number. It accepts any host
+// so the same parsing works for github.com and an enterprise instance.
+func parsePRURL(raw string) (owner, name string, number int, ok bool) {
+	i := strings.LastIndex(raw, "/pull/")
+	if i < 0 {
+		return "", "", 0, false
+	}
+	num, err := strconv.Atoi(strings.SplitN(strings.Trim(raw[i+len("/pull/"):], "/"), "/", 2)[0])
+	if err != nil || num <= 0 {
+		return "", "", 0, false
+	}
+	parts := strings.Split(strings.Trim(raw[:i], "/"), "/")
+	if len(parts) < 2 {
+		return "", "", 0, false
+	}
+	owner, name = parts[len(parts)-2], parts[len(parts)-1]
+	if owner == "" || name == "" {
+		return "", "", 0, false
+	}
+	return owner, name, num, true
 }
 
 // fetchPRHeadRef resolves only the PR head branch name. Used for

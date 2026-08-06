@@ -203,6 +203,44 @@ Because a PR opened on your behalf is adjacent context rather than something you
 wrote, these searches run at `involved` and `all` only. `scope: self` — which
 the `prs` mode pins — stays limited to PRs you authored.
 
+### How an open PR is classified
+
+Every open PR of yours is put into exactly one of six buckets, reported on the
+`pr_review_status` signal as the `bucket` field (so automations can match it via
+`match.fields`) and shown as a pill in the cockpit:
+
+| Bucket | Meaning |
+|--------|---------|
+| `draft` | It is a draft. Wins over every other state — a draft is nobody's to review or merge. |
+| `failing_validation` | The head commit's check rollup is failing. |
+| `pending_validation` | Checks are still running. |
+| `ready_to_merge` | Checks green (or absent) and approved. |
+| `awaiting_author` | Checks green, not approved, and a **reviewer** acted last: your move. |
+| `awaiting_review` | Checks green, not approved, and **you** acted last: their move. |
+
+Two details are worth knowing because they are easy to get wrong:
+
+- **A PR with no checks configured counts as green**, not as pending. There is
+  nothing to wait for, so it can reach `ready_to_merge`.
+- **Approval falls back to the raw review verdicts** when GitHub leaves
+  `reviewDecision` empty, which it does on any repo without a review policy.
+  Without the fallback nothing in such a repo would ever look mergeable.
+
+The `awaiting_author` / `awaiting_review` split comes from walking the PR's
+timeline **and** its reviews, merged by timestamp. Both are needed: GitHub omits
+from the timeline any review that only replies inside an existing review thread,
+so on a PR whose discussion has moved into its threads the timeline alone freezes
+and an author who has answered everything still looks like the one being waited
+on. Pushes always count as author-side; bot chatter and docent's own autofix
+comments are skipped so an autofixed PR does not look like it is waiting on you.
+The side is also reported on its own as `last_action` (`author` / `reviewer`),
+with `last_action_at` as the timestamp — which is a better sort key than GitHub's
+`updatedAt`, since that moves on label edits and other non-actions.
+
+The rules are shared with [`pr-status-monitor`](https://git.drwholdings.com/kpreston/pr-status-monitor),
+which publishes the team digest; docent has its own copy in `libs/prstatus` so
+the two can be read and tested independently.
+
 ### Common flags
 
 Paths follow the XDG base-directory layout by default:

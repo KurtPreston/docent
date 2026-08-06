@@ -1,11 +1,13 @@
 package collectors
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/prstatus"
 )
 
 func TestBuildGitHubSearchSpecsSelf(t *testing.T) {
@@ -238,24 +240,54 @@ func TestPrReviewItemFields(t *testing.T) {
 	row.Repository.NameWithOwner = "o/r"
 
 	authoredSpec := prReviewSpec{relation: "authored", mine: true}
-	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, authoredSpec, "passing", "APPROVED", true, "feature-branch", "conflicting")
+	threads := []ReviewThread{
+		{ID: "t1", Author: "bob", Body: "why?", Mine: false},
+		{ID: "t2", Author: "bob", Body: "and this?", Mine: true},
+	}
+	authoredDetail := prDetail{
+		Checks: "passing", ReviewDecision: "APPROVED", HeadBranch: "feature-branch",
+		Mergeable: "conflicting", Threads: threads,
+		Status: prstatus.Result{
+			Bucket: prstatus.ReadyToMerge,
+			Side:   prstatus.SideAuthor,
+			At:     time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC),
+		},
+	}
+	authored := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, authoredSpec, authoredDetail)
 	if authored.Kind != "pr_review_status" {
 		t.Fatalf("kind = %q", authored.Kind)
 	}
 	for k, want := range map[string]string{
 		"relation": "authored", "mine": "true", "is_draft": "true", "checks": "passing",
-		"review_decision": "APPROVED", "ready": "true", "repo": "o/r",
+		"review_decision": "APPROVED", "repo": "o/r",
 		"head_branch": "feature-branch", "mergeable": "conflicting",
 		"created_at": "2026-05-04T09:00:00Z",
+		// A draft is never ready, whatever its checks say. That invariant now
+		// lives here rather than at each call site.
+		"ready": "false",
+		// Both threads are unresolved, but only the one whose last comment is
+		// someone else's is my turn.
+		"unresolved": "2", "unresolved_mine": "1",
+		// The classification travels alongside its inputs so consumers do not
+		// re-derive it.
+		"bucket": "ready_to_merge", "last_action": "author",
+		"last_action_at": "2026-05-04T10:00:00Z",
 	} {
 		if authored.Fields[k] != want {
 			t.Errorf("authored field %q = %q, want %q", k, authored.Fields[k], want)
 		}
 	}
+	var gotThreads []ReviewThread
+	if err := json.Unmarshal([]byte(authored.Fields["unresolved_threads"]), &gotThreads); err != nil {
+		t.Fatalf("unresolved_threads is not valid JSON: %v", err)
+	}
+	if len(gotThreads) != 2 || gotThreads[0].ID != "t1" {
+		t.Errorf("threads round-tripped as %+v", gotThreads)
+	}
 
 	// review-requested rows omit the owned-only fields but carry head_branch.
 	rrSpec := prReviewSpec{relation: "review_requested", mine: false}
-	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, rrSpec, "", "", false, "their-branch", "")
+	rr := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, rrSpec, prDetail{HeadBranch: "their-branch"})
 	if rr.Fields["relation"] != "review_requested" {
 		t.Errorf("relation = %q", rr.Fields["relation"])
 	}
@@ -275,7 +307,8 @@ func TestPrReviewItemFields(t *testing.T) {
 	// A directive-declared query is owned, so it resolves the same status
 	// fields as an authored PR under its own relation label.
 	declared := prReviewSpec{relation: "backport", mine: true}
-	bp := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, declared, "failing", "", false, "backport/pr-1", "mergeable")
+	bp := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, declared,
+		prDetail{Checks: "failing", HeadBranch: "backport/pr-1", Mergeable: "mergeable"})
 	for k, want := range map[string]string{
 		"relation": "backport", "mine": "true", "checks": "failing",
 		"mergeable": "mergeable", "head_branch": "backport/pr-1",
@@ -283,6 +316,93 @@ func TestPrReviewItemFields(t *testing.T) {
 		if bp.Fields[k] != want {
 			t.Errorf("declared-query field %q = %q, want %q", k, bp.Fields[k], want)
 		}
+	}
+	// An unclassifiable PR omits the bucket rather than defaulting to one, so a
+	// consumer can tell "docent could not tell" from "awaiting review".
+	for _, k := range []string{"bucket", "last_action", "last_action_at"} {
+		if _, ok := bp.Fields[k]; ok {
+			t.Errorf("unclassified PR should omit %q, got %q", k, bp.Fields[k])
+		}
+	}
+}
+
+func TestParsePRURL(t *testing.T) {
+	cases := []struct {
+		raw         string
+		owner, name string
+		number      int
+		ok          bool
+	}{
+		// An enterprise host must parse the same as github.com.
+		{"https://git.drwholdings.com/Chip/salsa/pull/7664", "Chip", "salsa", 7664, true},
+		{"https://github.com/o/r/pull/7", "o", "r", 7, true},
+		{"https://github.com/o/r/pull/7/files", "o", "r", 7, true},
+		{"https://github.com/o/r/issues/7", "", "", 0, false},
+		{"https://github.com/o/r/pull/notanumber", "", "", 0, false},
+		{"", "", "", 0, false},
+	}
+	for _, tc := range cases {
+		owner, name, number, ok := parsePRURL(tc.raw)
+		if ok != tc.ok || owner != tc.owner || name != tc.name || number != tc.number {
+			t.Errorf("parsePRURL(%q) = (%q,%q,%d,%v), want (%q,%q,%d,%v)",
+				tc.raw, owner, name, number, ok, tc.owner, tc.name, tc.number, tc.ok)
+		}
+	}
+}
+
+func TestReviewThreadsResponseFiltersNoise(t *testing.T) {
+	// Shape captured from a real gh api graphql reply.
+	raw := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+    {"id":"open","isResolved":false,"isOutdated":false,"path":"a.ts","line":12,
+     "comments":{"nodes":[
+       {"author":{"login":"bob"},"body":"why this?","url":"u1","createdAt":"2026-01-01T00:00:00Z"}]}},
+    {"id":"answered","isResolved":false,"isOutdated":false,"path":"b.ts","line":3,
+     "comments":{"nodes":[
+       {"author":{"login":"bob"},"body":"q","url":"u2","createdAt":"2026-01-01T00:00:00Z"},
+       {"author":{"login":"alice"},"body":"answered","url":"u3","createdAt":"2026-01-02T00:00:00Z"}]}},
+    {"id":"resolved","isResolved":true,"isOutdated":false,"path":"c.ts",
+     "comments":{"nodes":[{"author":{"login":"bob"},"body":"x","url":"u4","createdAt":"2026-01-01T00:00:00Z"}]}},
+    {"id":"outdated","isResolved":false,"isOutdated":true,"path":"d.ts",
+     "comments":{"nodes":[{"author":{"login":"bob"},"body":"y","url":"u5","createdAt":"2026-01-01T00:00:00Z"}]}},
+    {"id":"empty","isResolved":false,"isOutdated":false,"path":"e.ts","comments":{"nodes":[]}}
+  ]}}}}}`
+
+	var resp ghReviewThreadsResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := filterUnresolvedThreads(resp.Data.Repository.PullRequest.ReviewThreads.Nodes, "alice")
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 unresolved threads (resolved/outdated/empty dropped), got %d: %+v", len(got), got)
+	}
+	if got[0].ID != "open" || got[0].Mine {
+		t.Errorf("a thread whose last word is a reviewer's is my turn: %+v", got[0])
+	}
+	if got[0].File != "a.ts" || got[0].Line != 12 {
+		t.Errorf("location lost: %+v", got[0])
+	}
+	if got[1].ID != "answered" || !got[1].Mine {
+		t.Errorf("a thread I replied to last is not my turn: %+v", got[1])
+	}
+	// Body and author come from the thread's opening comment, so the queue shows
+	// what was originally asked rather than the latest "ok thanks".
+	if got[1].Author != "bob" || got[1].Body != "q" {
+		t.Errorf("thread should be summarized by its first comment: %+v", got[1])
+	}
+	if countThreadsAwaitingMe(got) != 1 {
+		t.Errorf("countThreadsAwaitingMe = %d, want 1", countThreadsAwaitingMe(got))
+	}
+}
+
+func TestTruncateThreadBody(t *testing.T) {
+	if got := truncateThreadBody("  hi  "); got != "hi" {
+		t.Errorf("got %q", got)
+	}
+	long := strings.Repeat("x", threadBodyLimit+50)
+	got := truncateThreadBody(long)
+	if len([]rune(got)) != threadBodyLimit+1 || !strings.HasSuffix(got, "…") {
+		t.Errorf("long body truncated to %d runes: %q…", len([]rune(got)), got[:40])
 	}
 }
 
