@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"sort"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/prstatus"
 	"github.com/KurtPreston/docent/libs/sessionmanager"
 	"github.com/KurtPreston/docent/libs/workitem"
 )
@@ -46,10 +48,20 @@ type DashboardGroup struct {
 	// DeepLink is the provider-supplied clickable link that opens/focuses this
 	// work item's window (e.g. a cursor:// URI). Empty when the provider has no
 	// deep link (e.g. wsm) or the work item has no path.
-	DeepLink       string             `json:"deepLink,omitempty"`
-	LastActivity   string             `json:"lastActivity,omitempty"`
-	JiraStatus     string             `json:"jiraStatus,omitempty"`
-	JiraURL        string             `json:"jiraUrl,omitempty"`
+	DeepLink     string `json:"deepLink,omitempty"`
+	LastActivity string `json:"lastActivity,omitempty"`
+	JiraStatus   string `json:"jiraStatus,omitempty"`
+	JiraURL      string `json:"jiraUrl,omitempty"`
+	// JiraTier is the dashboard tier ("started" / "assigned") the user's own
+	// tier JQL put this ticket in, or "" for a ticket that merely showed up as
+	// activity or as a resolved reference. It is distinct from Status, which
+	// also folds in local branch evidence: a months-old branch makes Status
+	// "started" for a ticket JIRA considers done. Only the tier says JIRA
+	// itself thinks this is live and mine.
+	JiraTier string `json:"jiraTier,omitempty"`
+	// JiraDone reports that JIRA closed the ticket, whatever local evidence
+	// remains on disk.
+	JiraDone       bool               `json:"jiraDone,omitempty"`
 	Color          string             `json:"color,omitempty"`
 	FG             string             `json:"fg,omitempty"`
 	NeedsFollowup  bool               `json:"needsFollowup"`
@@ -103,6 +115,52 @@ type DashboardPR struct {
 	State    string `json:"state,omitempty"`
 	Draft    bool   `json:"draft"`
 	Ticket   string `json:"ticket,omitempty"`
+	// Review state, carried only by the pr_review_status signal. The cockpit
+	// needs these to say *why* a PR wants attention (failing checks vs waiting
+	// on my review vs approved and unmerged) rather than only that it exists.
+	Mine           bool   `json:"mine"`
+	Checks         string `json:"checks,omitempty"`
+	ReviewDecision string `json:"reviewDecision,omitempty"`
+	// Unresolved is the count of open review threads on the PR, 0 when the
+	// collector did not report threads.
+	Unresolved int `json:"unresolved,omitempty"`
+	// Threads are the open review threads themselves, so the cockpit inbox can
+	// show and act on a specific comment.
+	Threads []DashboardThread `json:"threads,omitempty"`
+	// Bucket is the six-bucket classification (prstatus.Bucket): ready_to_merge,
+	// failing_validation, awaiting_author, awaiting_review, pending_validation,
+	// or draft. Empty when the collector could not read the PR's timeline, which
+	// is deliberately distinguishable from any real bucket.
+	Bucket string `json:"bucket,omitempty"`
+	// LastAction is who moved the ball last, "author" or "reviewer". It is what
+	// separates "a reviewer is waiting on you" from "you are waiting on them" on
+	// a PR whose checks and review decision look identical either way.
+	LastAction   string `json:"lastAction,omitempty"`
+	LastActionAt string `json:"lastActionAt,omitempty"`
+}
+
+// BucketLabel renders the PR's bucket as prose for the UI, empty when the PR was
+// not classified.
+func (p DashboardPR) BucketLabel() string {
+	if p.Bucket == "" {
+		return ""
+	}
+	return prstatus.Bucket(p.Bucket).Label()
+}
+
+// DashboardThread is one unresolved review thread on a PR.
+type DashboardThread struct {
+	ID     string `json:"id,omitempty"`
+	Author string `json:"author,omitempty"`
+	Body   string `json:"body,omitempty"`
+	URL    string `json:"url,omitempty"`
+	File   string `json:"file,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	// Mine reports whether the last comment in the thread is my own, which
+	// distinguishes "they asked, I have not answered" from "I answered and am
+	// waiting on them".
+	Mine      bool   `json:"mine"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 type DashboardTicket struct {
@@ -1228,10 +1286,19 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 				g.JiraURL = ent.URL
 				if ent.State != nil {
 					g.JiraStatus = ent.State["status"]
+					if ent.State["status_category"] == "done" {
+						g.JiraDone = true
+					}
 					switch ent.State["status_tier"] {
 					case "started":
+						g.JiraTier = "started"
 						facts.JiraStarted = true
 					case "assigned":
+						// A started tier already implies the work is live, so
+						// never let a second entity downgrade it.
+						if g.JiraTier == "" {
+							g.JiraTier = "assigned"
+						}
 						facts.JiraAssigned = true
 					}
 				}
@@ -1246,7 +1313,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			default:
 				if strings.Contains(ent.Kind, "pr") {
 					draft := ent.State["is_draft"] == "true"
-					g.PRs = append(g.PRs, DashboardPR{
+					pr := DashboardPR{
 						PRNumber: prNumberFromURL(ent.URL),
 						Title:    ent.Title,
 						URL:      ent.URL,
@@ -1254,7 +1321,24 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 						State:    ent.State["state"],
 						Draft:    draft,
 						Ticket:   ent.Coordinates["ticket"],
-					})
+					}
+					// Rows predating the flag are treated as mine, matching
+					// ClassifyPR.
+					pr.Mine = ent.State["mine"] != "false"
+					pr.Checks = ent.State["checks"]
+					pr.ReviewDecision = ent.State["review_decision"]
+					pr.Unresolved, _ = strconv.Atoi(ent.State["unresolved"])
+					pr.Threads = decodeThreads(ent.State["unresolved_threads"])
+					// Only a bucket the collector actually classified is carried
+					// through; an unrecognized value is dropped rather than
+					// rendered raw, so a collector from a newer build cannot put
+					// an enum on screen.
+					if b := prstatus.Bucket(ent.State["bucket"]); b.Valid() {
+						pr.Bucket = string(b)
+						pr.LastAction = ent.State["last_action"]
+						pr.LastActionAt = ent.State["last_action_at"]
+					}
+					g.PRs = append(g.PRs, pr)
 					// Only the state-mode review-status signal carries the
 					// relation/checks/review_decision fields the status model
 					// needs; events-mode activity PRs are shown as rows but
@@ -1299,6 +1383,33 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 		SSHHost:      e.cfg.SSHHost,
 		Groups:       groups,
 	}
+}
+
+// decodeThreads unpacks the unresolved review threads the GitHub collector
+// carries as JSON in a flat string field. A malformed value yields no threads
+// rather than an error: the PR still deserves to surface for its other signals.
+func decodeThreads(raw string) []DashboardThread {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var threads []collectors.ReviewThread
+	if err := json.Unmarshal([]byte(raw), &threads); err != nil {
+		return nil
+	}
+	out := make([]DashboardThread, 0, len(threads))
+	for _, t := range threads {
+		out = append(out, DashboardThread{
+			ID:        t.ID,
+			Author:    t.Author,
+			Body:      t.Body,
+			URL:       t.URL,
+			File:      t.File,
+			Line:      t.Line,
+			Mine:      t.Mine,
+			UpdatedAt: t.UpdatedAt,
+		})
+	}
+	return out
 }
 
 // prNumberFromURL extracts the PR number from a .../pull/<n> URL, or 0.

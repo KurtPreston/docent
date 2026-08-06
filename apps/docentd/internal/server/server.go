@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	// configured token. With no token set, requireAuth is a pass-through.
 	mux.HandleFunc("/health", s.health)
 	mux.HandleFunc("/api/workitems", s.requireAuth(s.workItems))
+	mux.HandleFunc("/api/cockpit", s.requireAuth(s.cockpit))
 	mux.HandleFunc("/api/workitems/", s.requireAuth(s.workItemDetail))
 	mux.HandleFunc("/api/signals", s.requireAuth(s.signalsAPI))
 	mux.HandleFunc("/api/collectors", s.requireAuth(s.collectorsAPI))
@@ -92,6 +93,17 @@ func (s *Server) workItems(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.engine.RefreshOnRequest(ctx))
+}
+
+// cockpit serves the focused, actionable subset of the dashboard.
+func (s *Server) cockpit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.engine.Cockpit(ctx))
 }
 
 func (s *Server) signalsAPI(w http.ResponseWriter, r *http.Request) {
