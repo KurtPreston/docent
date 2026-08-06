@@ -44,6 +44,46 @@ func TestBuildWorkItems_ticketGrouping(t *testing.T) {
 	}
 }
 
+// A window open on a directory no collector attributed to a branch or ticket
+// still gets an OpenPath, since it is the only thing that could give the lane
+// somewhere to point an "open" action.
+func TestBuildWorkItems_sessionSuppliesOpenPath(t *testing.T) {
+	cfg := Config{AllowGeneric: true}
+	entities := []model.Entity{
+		{ID: "session:win", Kind: "session", Title: "docent", Coordinates: map[string]string{"path": "/home/me/Code/docent"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("got %d work items, want 1", len(items))
+	}
+	if items[0].OpenPath != "/home/me/Code/docent" {
+		t.Errorf("OpenPath = %q, want /home/me/Code/docent", items[0].OpenPath)
+	}
+}
+
+// A branch's checkout still outranks a session's path whichever order the
+// entities arrive in, so a work item with both opens the worktree the branch
+// names rather than wherever a window happens to be pointed.
+func TestEnrichWorkItem_branchOpenPathBeatsSession(t *testing.T) {
+	session := model.Entity{ID: "session:win", Kind: "session", Title: "salsa-9-x", Coordinates: map[string]string{"path": "/tmp/window"}}
+	branch := model.Entity{ID: "branch:1", Kind: "branch", Title: "salsa-9-x", Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-9-x", "path": "/code/salsa-9-x"}}
+	for _, tc := range []struct {
+		name     string
+		entities []model.Entity
+	}{
+		{"session first", []model.Entity{session, branch}},
+		{"branch first", []model.Entity{branch, session}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wi := model.WorkItem{Key: "wb:org/repo@salsa-9-x", Entities: tc.entities}
+			enrichBranchWorkItem(&wi, Config{AllowGeneric: true}, nil, nil)
+			if wi.OpenPath != "/code/salsa-9-x" {
+				t.Errorf("OpenPath = %q, want the branch checkout /code/salsa-9-x", wi.OpenPath)
+			}
+		})
+	}
+}
+
 func TestBuildWorkItems_reflogOnlyDropped(t *testing.T) {
 	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{

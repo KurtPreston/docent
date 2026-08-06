@@ -8,6 +8,8 @@ export type DashboardSession = {
   host?: string;
   targetHost?: string;
   path?: string;
+  /** Opens/reveals this window specifically, rather than the work item's checkout. */
+  deepLink?: string;
   ticket?: string;
   color?: string;
   fg?: string;

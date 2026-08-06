@@ -5,7 +5,8 @@ import { Layout } from "../components/Layout";
 import { RefreshButton, AutoToggle } from "../components/Controls";
 import { AGENT_STATUS_LABEL, AgentPanel } from "../components/AgentPanel";
 import { fetchAgents, fetchCockpit, fetchProjects } from "../lib/api";
-import { activate } from "../lib/sessions";
+import { activate, canLaunchSession, launchSession } from "../lib/sessions";
+import type { SessionLaunchTarget } from "../lib/sessions";
 import { timeAgo, errMsg } from "../lib/format";
 import { toast } from "../lib/toast";
 import type {
@@ -13,6 +14,7 @@ import type {
   Attention,
   Cockpit as CockpitData,
   CockpitLane,
+  DashboardSession,
   GroveProject,
   InboxItem,
   InboxKind,
@@ -285,6 +287,51 @@ function InboxRow({
   );
 }
 
+// WindowRow is one open editor window, clickable when the provider can reach
+// it. It launches the session's own deep link rather than the lane's, so a lane
+// with two windows open reveals the one you clicked.
+function WindowRow({
+  session,
+  provider,
+  laneKey,
+}: {
+  session: DashboardSession;
+  provider: string;
+  laneKey: string;
+}) {
+  const target: SessionLaunchTarget = {
+    provider,
+    workItemKey: laneKey,
+    deepLink: session.deepLink,
+    name: session.name,
+    targetHost: session.targetHost,
+  };
+  const body = (
+    <>
+      <span className={"live" + (session.live ? " on" : "")} />
+      <span className="name">{session.name}</span>
+      {session.host ? <span className="chip">{session.host}</span> : null}
+      <span className={"pill st-" + session.status}>{session.status}</span>
+      {session.lastActivity ? (
+        <span className="muted tiny">{timeAgo(session.lastActivity)}</span>
+      ) : null}
+    </>
+  );
+  if (!canLaunchSession(target)) {
+    return <div className="detail-row">{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      className="detail-row clickable"
+      title={session.path ? "Reveal this window — " + session.path : "Reveal this window"}
+      onClick={() => void launchSession(target)}
+    >
+      {body}
+    </button>
+  );
+}
+
 function LaneDetail({
   lane,
   provider,
@@ -330,13 +377,16 @@ function LaneDetail({
             plan it
           </button>
         ) : null}
+        {/* Named for what it will do, because the two outcomes are hard to tell
+            apart afterwards: a window on this checkout is revealed, and a lane
+            with none gets a new one. */}
         {provider && lane.deepLink ? (
           <button
             type="button"
             className="mini-btn primary"
             onClick={() => void activate(provider, lane).then(() => window.setTimeout(onReload, 400))}
           >
-            Open in Cursor
+            {lane.sessions.length > 0 ? "Go to window" : "Open in Cursor"}
           </button>
         ) : null}
       </div>
@@ -354,14 +404,10 @@ function LaneDetail({
       {lane.sessions.length > 0 ? (
         <section>
           <h3>Windows</h3>
+          {/* A row is the affordance for the window it names: a lane can have
+              several, and the button above can only reach one of them. */}
           {lane.sessions.map((s, i) => (
-            <div className="detail-row" key={s.name + i}>
-              <span className={"live" + (s.live ? " on" : "")} />
-              <span className="name">{s.name}</span>
-              {s.host ? <span className="chip">{s.host}</span> : null}
-              <span className={"pill st-" + s.status}>{s.status}</span>
-              {s.lastActivity ? <span className="muted tiny">{timeAgo(s.lastActivity)}</span> : null}
-            </div>
+            <WindowRow key={s.name + i} session={s} provider={provider} laneKey={lane.key} />
           ))}
         </section>
       ) : null}

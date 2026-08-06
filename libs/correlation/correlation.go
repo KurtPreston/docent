@@ -694,7 +694,13 @@ func enrichBranchWorkItem(wi *model.WorkItem, cfg Config, prTicket, jiraByKey ma
 			}
 		}
 		if wi.OpenPath == "" {
-			if p := ent.Coordinates["path"]; p != "" && (ent.Kind == "commit" || ent.Kind == "reflog" || ent.Kind == "branch") {
+			// A session's path is an open editor window's workspace folder, so
+			// it is a checkout as surely as a branch's is. It matters most for
+			// the work items that are *only* a session — a window on a
+			// directory no collector attributed to a branch or ticket — which
+			// otherwise had nowhere to point an "open" action, leaving the one
+			// thing on screen you can definitely act on unclickable.
+			if p := ent.Coordinates["path"]; p != "" && (ent.Kind == "commit" || ent.Kind == "reflog" || ent.Kind == "branch" || ent.Kind == "session") {
 				wi.OpenPath = p
 			}
 		}

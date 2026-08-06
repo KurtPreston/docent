@@ -421,6 +421,13 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .lane-detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); margin: 0 0 6px; }
 .detail-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
 .detail-row .name { font-weight: 600; }
+button.detail-row {
+  width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0;
+  color: inherit; font: inherit; font-size: 12.5px; text-align: left;
+}
+button.detail-row.clickable { cursor: pointer; padding-inline: 6px; margin-inline: -6px; border-radius: 0 0 7px 7px; }
+button.detail-row.clickable:hover { background: var(--bg-elev-2); }
+button.detail-row.clickable:hover .name { color: var(--accent); }
 .pr-link { color: var(--text); text-decoration: none; }
 .pr-link:hover { color: var(--accent); }
 .pr-link b { color: var(--accent); }

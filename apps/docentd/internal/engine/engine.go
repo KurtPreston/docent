@@ -94,12 +94,17 @@ const (
 )
 
 type DashboardSession struct {
-	Kind          string `json:"kind"`
-	Name          string `json:"name"`
-	IDE           string `json:"ide,omitempty"`
-	Host          string `json:"host,omitempty"`
-	TargetHost    string `json:"targetHost,omitempty"`
-	Path          string `json:"path,omitempty"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	IDE        string `json:"ide,omitempty"`
+	Host       string `json:"host,omitempty"`
+	TargetHost string `json:"targetHost,omitempty"`
+	Path       string `json:"path,omitempty"`
+	// DeepLink addresses this window specifically, rather than the work item's
+	// checkout. They differ when a work item has several windows on it, and the
+	// authority behind it is per-window, so a UI offering to reveal one window
+	// must use this rather than rebuild the link from Path.
+	DeepLink      string `json:"deepLink,omitempty"`
 	Ticket        string `json:"ticket,omitempty"`
 	Color         string `json:"color,omitempty"`
 	FG            string `json:"fg,omitempty"`
@@ -1321,6 +1326,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 					Host:          ent.Coordinates["host"],
 					TargetHost:    ent.Coordinates["targetHost"],
 					Path:          ent.Coordinates["path"],
+					DeepLink:      e.linkTo(ent.Coordinates["path"], ent.Coordinates["remoteAuthority"], ent.Coordinates["targetHost"]),
 					Ticket:        correlation.ParseTicketKey(ent.Title, corrCfg),
 					Color:         ent.State["color"],
 					FG:            ent.State["fg"],
