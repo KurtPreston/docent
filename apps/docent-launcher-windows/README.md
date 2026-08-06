@@ -1,12 +1,19 @@
 # docent-launcher-windows
 
+Two Windows-side surfaces for docent: a transient picker you summon and dismiss
+(`docent-launcher.ps1`), and a persistent cockpit window you jump to
+(`docent-cockpit.ps1`).
+
+## docent-launcher.ps1 — the picker
+
 A Spotlight-style, always-on-top picker for docent on Windows, bound to a global
 hotkey (default **Ctrl+Alt+Space**). Type to fuzzy-filter dashboard **work
 items** (plus nested sessions / JIRA tickets / GitHub PRs); **Enter** opens or
 launches a work item, focuses a session window, or opens a ticket/PR URL;
-**Esc** hides it. The **Open ↗** button pops the full dashboard out into your
-system browser — when `-Token` (or `DOCENT_TOKEN`) is set it is forwarded as a
-one-time `?token=` query param, which the dashboard caches in `sessionStorage`
+**Esc** hides it. The **Open ↗** button brings up the cockpit window (via
+`docent-cockpit.ps1 -Once`), falling back to your system browser if that script
+is not alongside it — when `-Token` (or `DOCENT_TOKEN`) is set it is forwarded as
+a one-time `?token=` query param, which the dashboard caches in `sessionStorage`
 and strips from the address bar.
 
 Built on WPF + Win32 `RegisterHotKey` (both ship with Windows) — no extra
@@ -50,3 +57,41 @@ Scheduled Task (see the repo `docent-powershell` README for the watchdog
 pattern). `SessionsUrl`/`WsmUrl`/`Token`/`Hotkey` may also be supplied via the
 `DOCENT_SESSIONS_URL` (or `DOCENT_URL`), `WSM_URL`, and `DOCENT_TOKEN`
 environment variables.
+
+## docent-cockpit.ps1 — the cockpit window
+
+The cockpit (docentd's `/`) is meant to be a window you never close, so it gets a
+window rather than a tab. Bound to **Ctrl+Alt+C** by default:
+
+```powershell
+# open the cockpit on its own virtual desktop and watch the hotkey
+pwsh -File docent-cockpit.ps1
+
+# remote docentd, different hotkey
+pwsh -File docent-cockpit.ps1 -Url http://desktop:39787 -Hotkey "Ctrl+Alt+D"
+
+# open-or-focus once and exit (what the picker's "Open ↗" calls)
+pwsh -File docent-cockpit.ps1 -Once
+```
+
+What it does, and why:
+
+- Launches the cockpit with Chromium's `--app=` flag, so there is no tab strip or
+  address bar and nothing else can hide in the same window. A dedicated
+  `--user-data-dir` under `%LOCALAPPDATA%\docent` keeps it out of your normal
+  browser profile, so quitting your browser never takes the cockpit with it.
+- **Focus-or-open**, never open-again: the hotkey finds the existing window by
+  title (the cockpit page sets `document.title` to `docent cockpit`, plus the
+  count of items needing you — so the taskbar entry is readable without focusing
+  it) instead of stacking duplicates.
+- Parks the window on a **named virtual desktop** (`-Desktop`, default
+  `cockpit`) and switches there on focus. It uses the same
+  [MScholtes VirtualDesktop](https://github.com/MScholtes/PSVirtualDesktop)
+  module wsm requires, and addresses the desktop **by name**, so wsm reuses this
+  desktop rather than creating a rival one. Unlike wsm, this module is optional
+  here: without it the script still works and simply leaves placement to Windows.
+
+Note that wsm's own `POST /open-url` is deliberately *not* used for this: it
+opens a plain `--new-window` browser window as a companion to a *Cursor
+workspace* desktop, and then hands focus back to that workspace's editor
+window — the opposite of a standalone app window that owns its desktop.

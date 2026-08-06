@@ -9,9 +9,10 @@ it from https://github.com/KurtPreston/wsm (default port 39788).
 The Windows counterpart to install-docent-macos.sh / install-docent-linux.sh,
 written natively in PowerShell so it runs in your shell without Git Bash / WSL.
 
-The launcher is a PowerShell program (no Go build):
+The Windows front-end is two PowerShell programs (no Go build):
   - docent-launcher-windows  apps/docent-launcher-windows/docent-launcher.ps1  (WPF hotkey picker)
-It runs hidden + auto-restarting via a Scheduled Task using the watchdog pattern
+  - docent-cockpit           apps/docent-launcher-windows/docent-cockpit.ps1   (persistent cockpit app window)
+Each runs hidden + auto-restarting via a Scheduled Task using the watchdog pattern
 (at-logon trigger + a 1-minute repeating watchdog + MultipleInstances=IgnoreNew,
 launched through a hidden, waiting .vbs so no console window flashes). The window
 manager (wsm) has its own installer in the wsm repo.
@@ -71,6 +72,16 @@ Skip the docent IDE extension (default is to ask when running interactively).
 .PARAMETER Hotkey
 Launcher hotkey (default: Ctrl+Alt+Space).
 
+.PARAMETER CockpitHotkey
+Cockpit-window hotkey (default: Ctrl+Alt+C).
+
+.PARAMETER CockpitDesktop
+Virtual desktop to park the cockpit window on (default: cockpit). Pass '' to
+leave placement to Windows.
+
+.PARAMETER NoCockpit
+Skip the docent-cockpit task (the persistent cockpit app window).
+
 .PARAMETER Port
 Dashboard port (default: 39787).
 
@@ -105,6 +116,9 @@ param(
     [switch]$Extension,
     [switch]$NoExtension,
     [string]$Hotkey = 'Ctrl+Alt+Space',
+    [string]$CockpitHotkey = 'Ctrl+Alt+C',
+    [string]$CockpitDesktop = 'cockpit',
+    [switch]$NoCockpit,
     [int]$Port = 39787,
     [int]$WsmPort = 39788,
     [string]$BinDir = (Join-Path $HOME '.local\bin'),
@@ -638,6 +652,7 @@ if ($NoTasks) {
 }
 else {
     $extra = ''
+    if (-not $NoCockpit) { $extra += ', docent-cockpit' }
     if ($Mode -eq 'local') { $extra += ', docentd' }
     if ($UseTunnel) { $extra += ', docent-tunnel' }
     Log "registering Scheduled Tasks (docent-launcher$extra) -- stopping any running instances first so fresh code loads"
@@ -651,6 +666,9 @@ else {
     if (-not $UseTunnel) {
         Unregister-DocentTaskIfPresent -TaskName 'docent-tunnel' -Match 'docent-tunnel'
     }
+    if ($NoCockpit) {
+        Unregister-DocentTaskIfPresent -TaskName 'docent-cockpit' -Match 'docent-cockpit'
+    }
 
     # docent-launcher-windows (always)
     $lnVbs = Join-Path $ConfigDir 'docent-launcher-hidden.vbs'
@@ -660,6 +678,23 @@ else {
     Write-HiddenVbs -Path $lnVbs -Exe $PwshExe -ArgLine $lnArgs `
         -LogFile (Join-Path $tmp 'docent-launcher.log')
     Register-DocentTask -Name 'docent-launcher' -Vbs $lnVbs -Match 'docent-launcher'
+
+    # docent-cockpit: the persistent cockpit app window. It shares the launcher's
+    # watchdog pattern for the same reason -- the value of the cockpit is that it
+    # is always there, and a hotkey process that quietly died is a cockpit you
+    # think you have but do not. The task owns the hotkey watcher; the browser
+    # window it opens outlives it, and a relaunch focuses that window rather than
+    # opening a second one.
+    if (-not $NoCockpit) {
+        $ckVbs = Join-Path $ConfigDir 'docent-cockpit-hidden.vbs'
+        $ckScript = Join-Path $Root 'apps\docent-launcher-windows\docent-cockpit.ps1'
+        $ckArgs = ('-NoLogo -NoProfile -File "{0}" -Url "{1}" -Hotkey "{2}" -Desktop "{3}"' -f `
+                $ckScript, $Sessions, $CockpitHotkey, $CockpitDesktop)
+        if ($Token) { $ckArgs += (' -Token "{0}"' -f $Token) }
+        Write-HiddenVbs -Path $ckVbs -Exe $PwshExe -ArgLine $ckArgs `
+            -LogFile (Join-Path $tmp 'docent-cockpit.log')
+        Register-DocentTask -Name 'docent-cockpit' -Vbs $ckVbs -Match 'docent-cockpit'
+    }
 
     # docent-tunnel (remote + tunnel): a local SSH forward to the dev box's docentd
     if ($UseTunnel) {
@@ -989,6 +1024,10 @@ Install-DocentExtension
 Write-Host ""
 Write-Host "Installed (docentd: $Mode):"
 Write-Host "  docent-launcher-windows apps/docent-launcher-windows/docent-launcher.ps1  (hotkey $Hotkey)"
+if (-not $NoCockpit) {
+    $deskNote = if ($CockpitDesktop) { "hotkey $CockpitHotkey, desktop '$CockpitDesktop'" } else { "hotkey $CockpitHotkey" }
+    Write-Host "  docent-cockpit          apps/docent-launcher-windows/docent-cockpit.ps1  ($deskNote)"
+}
 if ($Mode -eq 'local') {
     Write-Host "  docentd                 $DocentdBin   (127.0.0.1:$Port)"
     Write-Host "  dashboard               http://127.0.0.1:$Port/"
@@ -1006,12 +1045,13 @@ Write-Host "  IDE extension           $ExtensionStatus"
 
 if (-not $NoTasks) {
     $extra = ''
+    if (-not $NoCockpit) { $extra += ', docent-cockpit' }
     if ($Mode -eq 'local') { $extra += ', docentd' }
     if ($UseTunnel) { $extra += ', docent-tunnel' }
     Write-Host ""
     Write-Host "Scheduled Tasks (hidden, at-logon + 1-min watchdog):"
     Write-Host "  docent-launcher$extra"
-    Write-Host "  logs: $env:TEMP\docent-launcher.log$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })$(if ($UseTunnel) { ", $env:TEMP\docent-tunnel.log" })"
+    Write-Host "  logs: $env:TEMP\docent-launcher.log$(if (-not $NoCockpit) { ", $env:TEMP\docent-cockpit.log" })$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })$(if ($UseTunnel) { ", $env:TEMP\docent-tunnel.log" })"
     Write-Host ""
     Write-Host "Manage:"
     Write-Host "  Get-ScheduledTask docent-launcher | Get-ScheduledTaskInfo"

@@ -332,15 +332,32 @@ function New-StatusEntry {
     }
 }
 
-# Open the docentd dashboard (served at SessionsUrl) in the system browser. When
-# a token is configured we pass it as a one-time ?token= query param; the
-# dashboard's auth.js caches it in sessionStorage and strips it from the URL.
+# Open the docentd dashboard (served at SessionsUrl), preferring the persistent
+# cockpit app window over a new browser tab: docentd serves the cockpit at /, and
+# the point of the cockpit is to be one window you keep rather than a tab you
+# reopen. docent-cockpit.ps1 -Once is focus-or-open, so pressing this repeatedly
+# lands on the same window. Falling back to the system browser keeps the button
+# working when that script is not alongside this one (or on a non-Windows shell).
 function Open-DashboardInBrowser {
+    Hide-Launcher
+    $cockpit = Join-Path $PSScriptRoot 'docent-cockpit.ps1'
+    if (Test-Path $cockpit) {
+        $a = @('-NoProfile', '-File', $cockpit, '-Once', '-Url', $script:SessionsUrl)
+        if ($script:Token) { $a += @('-Token', $script:Token) }
+        try {
+            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $a -WindowStyle Hidden
+            return
+        }
+        catch {
+            Write-Warning "Could not open the cockpit window, falling back to the browser: $_"
+        }
+    }
+    # When a token is configured we pass it as a one-time ?token= query param;
+    # the dashboard's auth.js caches it in sessionStorage and strips it from the URL.
     $url = "$script:SessionsUrl/"
     if ($script:Token) {
         $url += "?token=$([uri]::EscapeDataString($script:Token))"
     }
-    Hide-Launcher
     try { Start-Process $url }
     catch { Write-Warning "Could not open dashboard '$script:SessionsUrl': $_" }
 }
