@@ -95,6 +95,28 @@ function branchForTicket(lane: CockpitLane): string {
   return [lane.ticket.toLowerCase(), ...words].join("-");
 }
 
+// laneHaystack is everything about a lane worth typing to find it. Session names
+// are included because a lane whose branch is unknown is named after its window.
+function laneHaystack(l: CockpitLane): string {
+  return [l.ticket, l.branch, l.title, l.repo, l.jiraStatus, l.key, ...l.sessions.map((s) => s.name)]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+// filterLanes narrows the rail by substring, with whitespace-separated tokens
+// ANDed: "salsa merge" means both, and a bare number still finds SALSA-12675
+// since each token matches anywhere. Substring rather than prefix because the
+// part of a ticket you remember is rarely the front of it.
+function filterLanes(lanes: CockpitLane[], query: string): CockpitLane[] {
+  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return lanes;
+  return lanes.filter((l) => {
+    const hay = laneHaystack(l);
+    return tokens.every((t) => hay.includes(t));
+  });
+}
+
 function Chip({ value, label }: { value: number; label: string }) {
   if (!value) return null;
   return (
@@ -406,13 +428,19 @@ function LaneDetail({
 // JIRA status names so "To Do" and "Backlog" separate themselves without docent
 // knowing either name. Collapsed by default: it answers "what's next", which is
 // a different question from "what needs me now".
+//
+// forceOpen expands the list while the rail is filtered: a ticket you search for
+// is usually one you have not started, so requiring a click to reveal the
+// matches would make the filter look like it found nothing.
 function QueueList({
   queue,
   selected,
+  forceOpen,
   onSelect,
 }: {
   queue: CockpitLane[];
   selected?: string;
+  forceOpen?: boolean;
   onSelect: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -430,10 +458,14 @@ function QueueList({
   if (queue.length === 0) return null;
   return (
     <div className="queue">
-      <button type="button" className="queue-toggle" onClick={() => setOpen((v) => !v)}>
-        {open ? "▾" : "▸"} Assigned to you ({queue.length})
-      </button>
-      {open
+      {forceOpen ? (
+        <div className="queue-toggle static">Assigned to you ({queue.length} matching)</div>
+      ) : (
+        <button type="button" className="queue-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? "▾" : "▸"} Assigned to you ({queue.length})
+        </button>
+      )}
+      {open || forceOpen
         ? groups.map(([status, lanes]) => (
             <div className="queue-group" key={status}>
               <div className="queue-status">
@@ -511,11 +543,13 @@ export function Cockpit() {
   const [projects, setProjects] = useState<GroveProject[]>([]);
   const [auto, setAuto] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
   // seeds are per-lane so switching lanes and coming back keeps a prompt you
   // were composing, and an inbox click never overwrites another lane's draft.
   const [seeds, setSeeds] = useState<Record<string, string>>({});
   const [errText, setErrText] = useState<string | null>(null);
   const lastOk = useRef(false);
+  const filterRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -572,14 +606,23 @@ export function Cockpit() {
   }, [load]);
 
   const lanes = data?.lanes ?? [];
+  const queue = data?.queue ?? [];
+  const query = filter.trim();
+  const shownLanes = useMemo(() => filterLanes(lanes, query), [lanes, query]);
+  const shownQueue = useMemo(() => filterLanes(queue, query), [queue, query]);
+
   // The backlog is selectable too, even though it is not in the rail: picking a
   // ticket to start is the whole point of having it here. Keep the user's
   // selection across polls, but never leave a stale lane selected once it stops
   // needing attention.
+  //
+  // While filtering, the selection follows the filter, falling through to the
+  // backlog: typing a ticket key should land on that ticket, not leave the
+  // previous lane in the pane beside a rail that no longer contains it.
   const current =
-    lanes.find((l) => l.key === selected) ??
-    (data?.queue ?? []).find((l) => l.key === selected) ??
-    lanes[0];
+    shownLanes.find((l) => l.key === selected) ??
+    shownQueue.find((l) => l.key === selected) ??
+    (query ? (shownLanes[0] ?? shownQueue[0]) : lanes[0]);
 
   // Newest session wins when a branch has been worked more than once: an old
   // finished conversation should not shadow the one running now.
@@ -596,11 +639,46 @@ export function Cockpit() {
 
   // seedLane sends an inbox row's prompt to its lane and selects it, which is
   // the whole one-click follow-up: the prompt lands in the box, and you either
-  // send it or edit it first.
+  // send it or edit it first. The filter is dropped because the inbox is not
+  // filtered, so its rows can point at a lane the rail is currently hiding.
   const seedLane = useCallback((laneKey: string, prompt: string) => {
+    setFilter("");
     setSelected(laneKey);
     setSeeds((s) => ({ ...s, [laneKey]: prompt }));
   }, []);
+
+  const selectLane = useCallback((laneKey: string) => {
+    setFilter("");
+    setSelected(laneKey);
+  }, []);
+
+  // "/" focuses the filter, the convention everywhere else it exists. Guarded on
+  // the event target, since most typing on this page happens in the agent's
+  // compose box and a shortcut that eats a slash mid-prompt is worse than none.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+      e.preventDefault();
+      filterRef.current?.focus();
+      filterRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // What an empty rail says. An unreachable daemon outranks the filter, since
+  // "nothing matches" would blame the query for a rail that is empty because
+  // there is no data at all; and a filter that matched only backlog tickets says
+  // nothing, because those rows below are the answer.
+  const railMessage =
+    errText ??
+    (query
+      ? shownQueue.length > 0
+        ? null
+        : `Nothing matches “${query}”.`
+      : "Nothing needs you right now.");
 
   const counts = data?.counts;
   const stats = data ? (
@@ -624,10 +702,24 @@ export function Cockpit() {
       {data ? <SourceWarning data={data} /> : null}
       <div className="cockpit-grid">
         <aside className="rail">
-          {lanes.length === 0 ? (
-            <div className="empty small">{errText ?? "Nothing needs you right now."}</div>
-          ) : (
-            lanes.map((l) => (
+          <div className="rail-filter">
+            <input
+              ref={filterRef}
+              type="search"
+              value={filter}
+              placeholder="Filter lanes and tickets  /"
+              aria-label="Filter lanes and tickets"
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setFilter("");
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </div>
+          {shownLanes.length > 0 ? (
+            shownLanes.map((l) => (
               <LaneRow
                 key={l.key}
                 lane={l}
@@ -636,11 +728,14 @@ export function Cockpit() {
                 onSelect={() => setSelected(l.key)}
               />
             ))
-          )}
+          ) : railMessage ? (
+            <div className="empty small">{railMessage}</div>
+          ) : null}
           <QueueList
-            queue={data?.queue ?? []}
+            queue={shownQueue}
             selected={current?.key}
-            onSelect={(key) => setSelected(key)}
+            forceOpen={query !== ""}
+            onSelect={setSelected}
           />
         </aside>
 
@@ -674,7 +769,7 @@ export function Cockpit() {
               <InboxRow
                 key={i}
                 item={item}
-                onOpenLane={() => setSelected(item.laneKey)}
+                onOpenLane={() => selectLane(item.laneKey)}
                 onSeed={
                   canSeed(lanes, item) ? () => seedLane(item.laneKey, promptFor(item)) : undefined
                 }
