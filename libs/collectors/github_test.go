@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -326,6 +327,53 @@ func TestPrReviewItemFields(t *testing.T) {
 	}
 }
 
+func TestPrReviewItemCandidate(t *testing.T) {
+	now := time.Now().UTC()
+	var row ghSearchActivityRow
+	row.Title = "their feature"
+	row.URL = "https://github.com/o/r/pull/9"
+	row.Repository.NameWithOwner = "o/r"
+	row.Author = ghSearchUser{Login: "bob"}
+	row.Assignees = []ghSearchUser{{Login: "carol"}, {Login: "dave"}}
+
+	spec := prReviewSpec{relation: relationReviewable, reviewable: true}
+	detail := prDetail{
+		Checks: "passing", ReviewDecision: "REVIEW_REQUIRED", Mergeable: "mergeable",
+		Threads: []ReviewThread{{ID: "t1", Author: "carol"}},
+		Status:  prstatus.Result{Bucket: prstatus.AwaitingReview, Side: prstatus.SideAuthor},
+	}
+	item := prReviewItem(userdata.Directive{ID: "gh", Collector: "github"}, "alice", "github.com", now, row, spec, detail)
+
+	// The guard that keeps a rule like "fix my failing builds" from reaching
+	// somebody else's PR. Losing it is the difference between a review queue
+	// and an agent pushing commits at a teammate.
+	if item.IsSelf {
+		t.Error("a candidate PR must not be marked as the user's own activity")
+	}
+	if item.Author != "bob" {
+		t.Errorf("author = %q, want the PR's own author", item.Author)
+	}
+	for k, want := range map[string]string{
+		"relation": relationReviewable, "mine": "false", "reviewable": "true",
+		"pr_author": "bob", "assignees": "carol,dave",
+		// Resolved like an owned PR: the bucket is the whole reason a candidate
+		// is worth listing, since it says whether anyone is still waiting.
+		"checks": "passing", "bucket": "awaiting_review", "unresolved": "1",
+	} {
+		if item.Fields[k] != want {
+			t.Errorf("candidate field %q = %q, want %q", k, item.Fields[k], want)
+		}
+	}
+	// Owned-only fields stay owned-only: "ready" and "my turn" are statements
+	// about the user, and the threads themselves are follow-up work they do not
+	// have.
+	for _, k := range []string{"ready", "unresolved_mine", "unresolved_threads"} {
+		if _, ok := item.Fields[k]; ok {
+			t.Errorf("candidate should omit %q, got %q", k, item.Fields[k])
+		}
+	}
+}
+
 func TestParsePRURL(t *testing.T) {
 	cases := []struct {
 		raw         string
@@ -422,35 +470,72 @@ func TestNormalizeMergeable(t *testing.T) {
 	}
 }
 
-func TestDedupePRReviewItemsKeepsHighestPrecedence(t *testing.T) {
-	now := time.Now().UTC()
-	// Emitted in buildPRReviewSpecs order: authored, then declared queries,
-	// then review-requested.
-	items := []StatusItem{
-		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "authored", "review_decision": "APPROVED"}, ObservedAt: now},
-		{URL: "https://github.com/o/r/pull/1", Fields: map[string]string{"relation": "review_requested"}, ObservedAt: now},
-		{URL: "https://github.com/o/r/pull/2", Fields: map[string]string{"relation": "backport"}, ObservedAt: now},
-		{URL: "https://github.com/o/r/pull/2", Fields: map[string]string{"relation": "review_requested"}, ObservedAt: now},
+func TestDedupePRReviewRowsKeepsHighestPrecedence(t *testing.T) {
+	row := func(url string) ghSearchActivityRow {
+		var r ghSearchActivityRow
+		r.URL = url
+		return r
 	}
-	out := dedupePRReviewItems(items)
-	if len(out) != 2 {
-		t.Fatalf("expected 2 deduped items, got %d", len(out))
+	// Collected in buildPRReviewSpecs order: authored, then declared queries,
+	// then review-requested, then the candidate pool.
+	rows := []prReviewRow{
+		{spec: prReviewSpec{relation: "authored", mine: true}, row: row("https://github.com/o/r/pull/1")},
+		{spec: prReviewSpec{relation: "review_requested"}, row: row("https://github.com/o/r/pull/1")},
+		{spec: prReviewSpec{relation: "backport", mine: true}, row: row("https://github.com/o/r/pull/2")},
+		{spec: prReviewSpec{relation: "review_requested"}, row: row("https://github.com/o/r/pull/2")},
+		// The user's own PR also lives in a followed repo. It must stay theirs,
+		// or it would move from their lanes into the review queue.
+		{spec: prReviewSpec{relation: relationReviewable, reviewable: true}, row: row("https://github.com/o/r/pull/1")},
+		{spec: prReviewSpec{relation: relationReviewable, reviewable: true}, row: row("https://github.com/o/r/pull/3")},
 	}
-	byURL := map[string]StatusItem{}
-	for _, it := range out {
-		byURL[it.URL] = it
+	out := dedupePRReviewRows(rows)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 deduped rows, got %d", len(out))
 	}
-	if got := byURL["https://github.com/o/r/pull/1"].Fields["relation"]; got != "authored" {
+	byURL := map[string]prReviewRow{}
+	for _, r := range out {
+		byURL[r.row.URL] = r
+	}
+	if got := byURL["https://github.com/o/r/pull/1"].spec.relation; got != "authored" {
 		t.Errorf("authored should win the dedupe, got %q", got)
 	}
-	if got := byURL["https://github.com/o/r/pull/2"].Fields["relation"]; got != "backport" {
+	if got := byURL["https://github.com/o/r/pull/2"].spec.relation; got != "backport" {
 		t.Errorf("declared query should beat review_requested, got %q", got)
+	}
+	if got := byURL["https://github.com/o/r/pull/3"].spec.relation; got != relationReviewable {
+		t.Errorf("a PR no other search found should stay a candidate, got %q", got)
+	}
+}
+
+func TestCapReviewCandidatesKeepsNewestAndLeavesOwnedRows(t *testing.T) {
+	at := func(day int) string { return fmt.Sprintf("2026-05-%02dT00:00:00Z", day) }
+	rows := []prReviewRow{{spec: prReviewSpec{relation: "authored", mine: true}}}
+	// Oldest first, so a cap that ignored recency would keep exactly the wrong
+	// ones.
+	for i := 0; i < maxReviewCandidates+5; i++ {
+		var r ghSearchActivityRow
+		r.URL = fmt.Sprintf("https://github.com/o/r/pull/%d", i)
+		r.UpdatedAt = at(i + 1)
+		rows = append(rows, prReviewRow{spec: prReviewSpec{relation: relationReviewable, reviewable: true}, row: r})
+	}
+	out := capReviewCandidates(rows)
+	if len(out) != maxReviewCandidates+1 {
+		t.Fatalf("kept %d rows, want %d candidates plus the owned row", len(out), maxReviewCandidates)
+	}
+	if !out[0].spec.mine {
+		t.Error("the owned row should survive the cap in place")
+	}
+	// The five oldest are the ones dropped.
+	for _, r := range out[1:] {
+		if r.row.UpdatedAt < at(6) {
+			t.Errorf("kept a candidate updated %s, older than the newest %d", r.row.UpdatedAt, maxReviewCandidates)
+		}
 	}
 }
 
 func TestBuildPRReviewSpecsSelf(t *testing.T) {
 	extra := []userdata.PRQuery{{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"}}
-	specs := buildPRReviewSpecs(ScopeSelf, "alice", extra)
+	specs := buildPRReviewSpecs(ScopeSelf, "alice", extra, []string{"o/r"})
 	if len(specs) != 1 {
 		t.Fatalf("self should yield only the authored search, got %d: %+v", len(specs), specs)
 	}
@@ -465,12 +550,12 @@ func TestBuildPRReviewSpecsSelf(t *testing.T) {
 func TestBuildPRReviewSpecsInvolvedIncludesDeclaredQueries(t *testing.T) {
 	extra := []userdata.PRQuery{{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"}}
 	for _, scope := range []Scope{ScopeInvolved, ScopeAll, ScopeUnset} {
-		specs := buildPRReviewSpecs(scope, "alice", extra)
-		if len(specs) != 3 {
-			t.Fatalf("scope %q should yield authored + backport + review-requested, got %d: %+v", scope, len(specs), specs)
+		specs := buildPRReviewSpecs(scope, "alice", extra, nil)
+		if len(specs) != 4 {
+			t.Fatalf("scope %q should yield authored + backport + review-requested + assignee, got %d: %+v", scope, len(specs), specs)
 		}
 		// Order defines dedupe precedence: authored beats declared queries,
-		// which beat review-requested.
+		// which beat review-requested, which beats the candidate pool.
 		if specs[0].relation != "authored" || specs[1].relation != "backport" || specs[2].relation != "review_requested" {
 			t.Errorf("scope %q spec order = %q/%q/%q", scope, specs[0].relation, specs[1].relation, specs[2].relation)
 		}
@@ -495,12 +580,51 @@ func TestBuildPRReviewSpecsInvolvedIncludesDeclaredQueries(t *testing.T) {
 }
 
 func TestBuildPRReviewSpecsNoDeclaredQueries(t *testing.T) {
-	specs := buildPRReviewSpecs(ScopeInvolved, "alice", nil)
-	if len(specs) != 2 {
-		t.Fatalf("expected authored + review-requested, got %d: %+v", len(specs), specs)
+	specs := buildPRReviewSpecs(ScopeInvolved, "alice", nil, nil)
+	if len(specs) != 3 {
+		t.Fatalf("expected authored + review-requested + assignee, got %d: %+v", len(specs), specs)
 	}
 	if specs[0].relation != "authored" || specs[1].relation != "review_requested" {
 		t.Errorf("spec order = %q/%q", specs[0].relation, specs[1].relation)
+	}
+}
+
+// The candidate pool is what fills the review queue: every open non-draft PR in
+// a followed repo, plus anything assigned to the user whether or not it is a
+// draft.
+func TestBuildPRReviewSpecsCandidatePool(t *testing.T) {
+	specs := buildPRReviewSpecs(ScopeInvolved, "alice", nil, []string{"o/r", "o/other"})
+	var candidates []prReviewSpec
+	for _, s := range specs {
+		if s.reviewable {
+			candidates = append(candidates, s)
+		}
+		if s.reviewable && s.mine {
+			t.Errorf("a candidate is not the user's own work: %+v", s)
+		}
+	}
+	if len(candidates) != 3 {
+		t.Fatalf("expected one search per followed repo plus the assignee search, got %+v", candidates)
+	}
+	// Last, so any earlier search keeps a PR they both matched.
+	if !specs[len(specs)-1].reviewable {
+		t.Errorf("candidate searches must sort last for dedupe: %+v", specs)
+	}
+	for i, want := range [][]string{{"--repo", "o/r", "--draft=false"}, {"--repo", "o/other", "--draft=false"}, {"--assignee", "alice"}} {
+		if strings.Join(candidates[i].args, " ") != strings.Join(want, " ") {
+			t.Errorf("candidate %d args = %v, want %v", i, candidates[i].args, want)
+		}
+	}
+}
+
+// followed_repos is shared with the gitea collector, which accepts a bare
+// owner. `gh search prs --repo` does not, and this list now runs on every state
+// collection, so one such entry must not be able to fail the whole thing.
+func TestFollowedPRReposSkipsBareOwners(t *testing.T) {
+	d := userdata.Directive{Config: map[string]string{"followed_repos": "o/r, someorg, o/other"}}
+	got := followedPRRepos(d)
+	if strings.Join(got, ",") != "o/r,o/other" {
+		t.Errorf("followedPRRepos = %v, want the owner/repo entries only", got)
 	}
 }
 

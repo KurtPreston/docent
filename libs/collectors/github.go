@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
@@ -25,16 +27,25 @@ type GitHubCollector struct {
 }
 
 type ghSearchActivityRow struct {
-	Title      string `json:"title"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
-	IsDraft    bool   `json:"isDraft"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
-	ClosedAt   string `json:"closedAt"`
+	Title      string         `json:"title"`
+	URL        string         `json:"url"`
+	State      string         `json:"state"`
+	IsDraft    bool           `json:"isDraft"`
+	CreatedAt  string         `json:"createdAt"`
+	UpdatedAt  string         `json:"updatedAt"`
+	ClosedAt   string         `json:"closedAt"`
+	Author     ghSearchUser   `json:"author"`
+	Assignees  []ghSearchUser `json:"assignees"`
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
+}
+
+// ghSearchUser is an account named by a search row. Only open-PR searches ask
+// for these fields; activity searches leave them zero.
+type ghSearchUser struct {
+	Login string `json:"login"`
+	IsBot bool   `json:"is_bot"`
 }
 
 // ghPRView is the subset of `gh pr view --json` we parse for the PR
@@ -522,7 +533,17 @@ type prReviewSpec struct {
 	relation string
 	args     []string
 	mine     bool
+	// reviewable marks the candidate pool: open PRs in repos the user follows
+	// that nobody has asked them to look at. They are neither the user's work
+	// nor a request of them, which is a third thing from mine — see
+	// buildPRReviewSpecs.
+	reviewable bool
 }
+
+// relationReviewable labels every row from the candidate pool. Unlike the other
+// relations it says nothing about where the PR came from, because the pool is
+// defined by what it is not: not mine, and not asked of me.
+const relationReviewable = "reviewable"
 
 // buildPRReviewSpecs plans the open-PR searches for the review-status view.
 //
@@ -534,9 +555,18 @@ type prReviewSpec struct {
 //   - one spec per directive-declared pr_queries entry: PRs a bot opens on the
 //     user's behalf. Owned like authored PRs, but likewise adjacent context
 //     rather than something the user wrote, so involved/all only.
+//   - the candidate pool: every open non-draft PR in a followed repo, plus any
+//     open PR assigned to the user. Nothing here has asked for the user, which
+//     is the point — it is the set they could pick a review from. Drafts are
+//     excluded from the repo searches (an unfinished PR is not review work) but
+//     not from the assignee search, since a draft handed to you personally is
+//     still yours to look at.
 //
-// Order defines dedupe precedence when a PR matches several searches.
-func buildPRReviewSpecs(scope Scope, user string, extra []userdata.PRQuery) []prReviewSpec {
+// Order defines dedupe precedence when a PR matches several searches, which is
+// what keeps the candidate pool from swallowing the user's own PRs: it is last,
+// so a PR that any earlier search already found stays whatever that search said
+// it was.
+func buildPRReviewSpecs(scope Scope, user string, extra []userdata.PRQuery, followedRepos []string) []prReviewSpec {
 	specs := []prReviewSpec{{relation: "authored", args: []string{"--author", user}, mine: true}}
 	if scope == ScopeSelf {
 		return specs
@@ -548,41 +578,63 @@ func buildPRReviewSpecs(scope Scope, user string, extra []userdata.PRQuery) []pr
 		}
 		specs = append(specs, prReviewSpec{relation: strings.TrimSpace(q.Relation), args: qualifiers, mine: true})
 	}
-	return append(specs, prReviewSpec{relation: "review_requested", args: []string{"--review-requested", user}, mine: false})
+	specs = append(specs, prReviewSpec{relation: "review_requested", args: []string{"--review-requested", user}, mine: false})
+	for _, repo := range followedRepos {
+		specs = append(specs, prReviewSpec{
+			relation:   relationReviewable,
+			args:       []string{"--repo", repo, "--draft=false"},
+			reviewable: true,
+		})
+	}
+	return append(specs, prReviewSpec{
+		relation:   relationReviewable,
+		args:       []string{"--assignee", user},
+		reviewable: true,
+	})
 }
 
-// collectPRReviewStatus lists the user's currently-open PRs across the
-// searches buildPRReviewSpecs plans, independent of the collection window
-// (PRs are open regardless of when they were last touched). The result drives
-// the dashboard's status/action_required classification.
+// collectPRReviewStatus lists the currently-open PRs across the searches
+// buildPRReviewSpecs plans, independent of the collection window (PRs are open
+// regardless of when they were last touched). The result drives the dashboard's
+// status/action_required classification.
 //
 // Each open PR becomes one StatusItem with Kind "pr_review_status" and
-// Fields: relation, mine (true|false), is_draft, checks
-// (passing|failing|pending|none|unknown), review_decision, mergeable
-// (mergeable|conflicting|unknown), and ready ("true" only when the PR is the
-// user's own, not a draft, and checks are passing/none). Only owned PRs
-// resolve checks/review_decision/mergeable; the rest resolve just the head
-// branch, which correlation needs to anchor the PR to its repo.
+// Fields: relation, mine (true|false), reviewable (true|false), is_draft,
+// pr_author, assignees, checks (passing|failing|pending|none|unknown),
+// review_decision, mergeable (mergeable|conflicting|unknown), and ready ("true"
+// only when the PR is the user's own, not a draft, and checks are passing/none).
+// See resolvePRDetail for which searches resolve how much.
 func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string, directive userdata.Directive, user, host string, opts *CollectOpts) ([]StatusItem, error) {
 	now := opts.windowEnd(c.Clock)
-	specs := buildPRReviewSpecs(opts.EffectiveScope(), user, directive.PRQueries)
+	specs := buildPRReviewSpecs(opts.EffectiveScope(), user, directive.PRQueries, followedPRRepos(directive))
 
-	rows := make([][]ghSearchActivityRow, len(specs))
-	enrich := 0
-	details := make([]string, 0, len(specs))
-	for i, spec := range specs {
-		found, err := c.listOpenPRs(ctx, env, directive, opts, spec.args...)
+	var found []prReviewRow
+	counts := map[string]int{}
+	order := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		rows, err := c.listOpenPRs(ctx, env, directive, opts, spec.args...)
 		if err != nil {
 			return nil, err
 		}
-		rows[i] = found
-		if spec.mine {
-			enrich += len(found)
+		for _, row := range rows {
+			found = append(found, prReviewRow{spec: spec, row: row})
 		}
-		details = append(details, fmt.Sprintf("%d %s", len(found), spec.relation))
+		if _, seen := counts[spec.relation]; !seen {
+			order = append(order, spec.relation)
+		}
+		counts[spec.relation] += len(rows)
 	}
+	// Deduped before resolution rather than after: a PR can match several
+	// searches (one of the user's own also lives in a followed repo), and
+	// resolving it once per match would spend a round trip to arrive at the
+	// same answer and then throw it away.
+	rows := capReviewCandidates(dedupePRReviewRows(found))
 
-	totalSteps := enrich + 1
+	details := make([]string, 0, len(order))
+	for _, relation := range order {
+		details = append(details, fmt.Sprintf("%d %s", counts[relation], relation))
+	}
+	totalSteps := len(rows) + 1
 	completed := 1
 	reportProgress(opts, DirectiveProgress{
 		DirectiveID: directive.ID,
@@ -593,28 +645,102 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 		Total:       totalSteps,
 	})
 
-	var items []StatusItem
-	for i, spec := range specs {
-		for _, row := range rows[i] {
-			if !spec.mine {
-				headBranch := c.fetchPRHeadRef(ctx, env, row.URL, directive, opts)
-				items = append(items, prReviewItem(directive, user, host, now, row, spec, prDetail{HeadBranch: headBranch}))
-				continue
+	// Resolved concurrently because each PR is an independent round trip and
+	// there can be dozens: serially this is the slowest thing docent does, and
+	// a scheduled collection has a fixed budget to finish inside.
+	var mu sync.Mutex
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for i := 0; i < prDetailWorkers && i < len(rows); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range work {
+				detail := c.resolvePRDetail(ctx, env, rows[idx].spec, rows[idx].row.URL, user, directive, opts)
+				// The progress callback belongs to the caller and is not
+				// promised to be safe to call from several goroutines, so it
+				// reports under the same lock that advances the counter.
+				mu.Lock()
+				rows[idx].detail = detail
+				completed++
+				reportProgress(opts, DirectiveProgress{
+					DirectiveID: directive.ID,
+					Description: directive.Name,
+					Status:      "running",
+					Detail:      "checking PR status",
+					Completed:   completed,
+					Total:       totalSteps,
+				})
+				mu.Unlock()
 			}
-			detail := c.fetchPRDetail(ctx, env, row.URL, user, directive, opts)
-			completed++
-			reportProgress(opts, DirectiveProgress{
-				DirectiveID: directive.ID,
-				Description: directive.Name,
-				Status:      "running",
-				Detail:      "checking PR status",
-				Completed:   completed,
-				Total:       totalSteps,
-			})
-			items = append(items, prReviewItem(directive, user, host, now, row, spec, detail))
+		}()
+	}
+	for i := range rows {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+
+	items := make([]StatusItem, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, prReviewItem(directive, user, host, now, r.row, r.spec, r.detail))
+	}
+	return items, nil
+}
+
+// prDetailWorkers bounds the concurrent per-PR lookups. The calls are
+// independent and dominated by latency, so a handful of workers turns a minute
+// of waiting into a few seconds; the cap keeps docent from answering a busy
+// week with a burst of dozens of `gh` processes.
+const prDetailWorkers = 6
+
+// maxReviewCandidates bounds the candidate pool. Each candidate costs a round
+// trip, and a repo the user follows can have hundreds of open PRs, which would
+// spend a whole collection on a list nobody scrolls to the bottom of. The most
+// recently updated survive: a PR untouched for months is not what a review
+// queue is for.
+const maxReviewCandidates = 50
+
+// prReviewRow is one search hit plus the spec that found it, carrying the
+// resolved detail once it has one.
+type prReviewRow struct {
+	spec   prReviewSpec
+	row    ghSearchActivityRow
+	detail prDetail
+}
+
+// followedPRRepos returns the owner/repo entries of config.followed_repos.
+//
+// Bare-owner entries are dropped rather than passed through: `gh search prs
+// --repo` requires owner/repo and errors on anything else, and this list now
+// runs on every state collection, so one malformed entry would otherwise take
+// down every open PR the daemon knows about.
+func followedPRRepos(directive userdata.Directive) []string {
+	var out []string
+	for _, entry := range parseFollowedList(directive.Config["followed_repos"]) {
+		if strings.Count(entry, "/") == 1 && !strings.HasPrefix(entry, "/") && !strings.HasSuffix(entry, "/") {
+			out = append(out, entry)
 		}
 	}
-	return dedupePRReviewItems(items), nil
+	return out
+}
+
+// resolvePRDetail resolves as much of a PR as the search that found it warrants.
+//
+// A PR the user owns needs the full picture because docent classifies and acts
+// on it, and a candidate needs it to answer the only question the review queue
+// asks: is this waiting on a reviewer, or has it already moved on? A PR that
+// merely requests the user's review gets only its head branch, which
+// correlation needs to anchor it to a repo. That is not a saving so much as a
+// deliberate omission: those rows are the user's own by the IsSelf reckoning in
+// prReviewItem, so giving them a checks field would make a teammate's failing
+// build indistinguishable, to a transition rule watching `checks`, from the
+// user's own.
+func (c GitHubCollector) resolvePRDetail(ctx context.Context, env []string, spec prReviewSpec, prURL, user string, directive userdata.Directive, opts *CollectOpts) prDetail {
+	if spec.mine || spec.reviewable {
+		return c.fetchPRDetail(ctx, env, prURL, user, directive, opts)
+	}
+	return prDetail{HeadBranch: c.fetchPRHeadRef(ctx, env, prURL, directive, opts)}
 }
 
 // listOpenPRs runs `gh search prs <relationArgs> --state open` and returns
@@ -622,7 +748,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 // {"--author", user} or {"--review-requested", user}.
 func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directive userdata.Directive, opts *CollectOpts, relationArgs ...string) ([]ghSearchActivityRow, error) {
 	args := append([]string{"search", "prs"}, relationArgs...)
-	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,createdAt,repository,updatedAt")
+	args = append(args, "--state", "open", "--limit", "100", "--json", "title,url,isDraft,createdAt,repository,updatedAt,author,assignees")
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
@@ -640,9 +766,8 @@ func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directiv
 }
 
 // prReviewItem builds one pr_review_status StatusItem for an open PR found by
-// the given search. detail is only fully resolved for PRs the user owns; rows
-// from unowned searches pass a detail carrying just the head branch, which
-// correlation needs to anchor the PR to its repo.
+// the given search. How much of detail is populated depends on the search; see
+// resolvePRDetail.
 func prReviewItem(directive userdata.Directive, user, host string, now time.Time, row ghSearchActivityRow, spec prReviewSpec, detail prDetail) StatusItem {
 	repo := strings.TrimSpace(row.Repository.NameWithOwner)
 	if repo == "" {
@@ -655,10 +780,21 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		"state":    "open",
 		"relation": spec.relation,
 		// Relations are open-ended (directives declare their own), so
-		// downstream classification keys off this flag rather than trying to
+		// downstream classification keys off these flags rather than trying to
 		// enumerate relation names.
-		"mine":     strconv.FormatBool(spec.mine),
-		"is_draft": strconv.FormatBool(row.IsDraft),
+		"mine":       strconv.FormatBool(spec.mine),
+		"reviewable": strconv.FormatBool(spec.reviewable),
+		"is_draft":   strconv.FormatBool(row.IsDraft),
+	}
+	// Who wrote it and who holds it. Free from the search, and the two things a
+	// review queue is read by: a candidate PR is chosen by whose it is long
+	// before its diff is opened.
+	if login := strings.TrimSpace(row.Author.Login); login != "" {
+		fields["pr_author"] = login
+		fields["pr_author_bot"] = strconv.FormatBool(row.Author.IsBot)
+	}
+	if assignees := assigneeLogins(row); assignees != "" {
+		fields["assignees"] = assignees
 	}
 	// created_at lets the report tell a PR opened in-window from a pre-existing
 	// one merely updated (open authored PRs surface here, not as authored_pr).
@@ -668,22 +804,14 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	if detail.HeadBranch != "" {
 		fields["head_branch"] = detail.HeadBranch
 	}
-	if spec.mine {
+	if spec.mine || spec.reviewable {
 		fields["checks"] = detail.Checks
 		fields["review_decision"] = detail.ReviewDecision
-		fields["ready"] = strconv.FormatBool(!row.IsDraft && (detail.Checks == "passing" || detail.Checks == "none"))
 		fields["mergeable"] = detail.Mergeable
 		// Unresolved review threads are the "someone commented and is waiting
 		// on me" signal, which review_decision alone misses: a reviewer can
 		// leave blocking questions without ever setting CHANGES_REQUESTED.
 		fields["unresolved"] = strconv.Itoa(len(detail.Threads))
-		fields["unresolved_mine"] = strconv.Itoa(countThreadsAwaitingMe(detail.Threads))
-		if len(detail.Threads) > 0 {
-			// Fields are flat strings, so the thread list travels as JSON.
-			if b, err := json.Marshal(detail.Threads); err == nil {
-				fields["unresolved_threads"] = string(b)
-			}
-		}
 		// The six-bucket classification and whose court the ball is in. Omitted
 		// rather than defaulted when the timeline could not be read, so a
 		// consumer can tell "not classified" from "awaiting review".
@@ -695,6 +823,20 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 			}
 		}
 	}
+	if spec.mine {
+		fields["ready"] = strconv.FormatBool(!row.IsDraft && (detail.Checks == "passing" || detail.Checks == "none"))
+		fields["unresolved_mine"] = strconv.Itoa(countThreadsAwaitingMe(detail.Threads))
+		// The threads themselves travel only for the user's own PRs, where a
+		// comment is something to answer. Carrying every thread on every
+		// candidate would put a followed repo's whole review history in the
+		// signal store to render a count.
+		if len(detail.Threads) > 0 {
+			// Fields are flat strings, so the thread list travels as JSON.
+			if b, err := json.Marshal(detail.Threads); err == nil {
+				fields["unresolved_threads"] = string(b)
+			}
+		}
+	}
 	// Prefer the PR's real last-updated time so an open PR reports when it was
 	// actually touched (opened / pushed / commented / reviewed) rather than the
 	// poll time. Fall back to poll time only when GitHub omits a parseable
@@ -702,6 +844,18 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	obs := now
 	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(row.UpdatedAt)); err == nil {
 		obs = t
+	}
+	// A candidate is somebody else's work, and saying otherwise would do real
+	// damage: IsSelf is what puts a row in the user's own activity reports, and
+	// it is the whole of the `self: true` guard that keeps an automation rule —
+	// one that pushes commits at a failing build, say — pointed at the user's
+	// PRs and not at a teammate's.
+	author, self := user, true
+	if spec.reviewable {
+		self = false
+		if login := strings.TrimSpace(row.Author.Login); login != "" {
+			author = login
+		}
 	}
 	return StatusItem{
 		DirectiveID: directive.ID,
@@ -714,30 +868,80 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		URL:        row.URL,
 		Severity:   "info",
 		ObservedAt: obs.UTC(),
-		Author:     user,
-		IsSelf:     true,
+		Author:     author,
+		IsSelf:     self,
 		Fields:     fields,
 	}
 }
 
-// dedupePRReviewItems collapses PRs that surface in more than one search
-// (e.g. both authored and review-requested) keyed by URL, keeping the first
-// occurrence. Callers must pass items in precedence order — collectPRReviewStatus
-// emits them in buildPRReviewSpecs order, which puts authored first so its
-// richer checks/review_decision fields win.
-func dedupePRReviewItems(items []StatusItem) []StatusItem {
-	seen := make(map[string]bool, len(items))
-	out := make([]StatusItem, 0, len(items))
-	for _, it := range items {
-		key := it.URL
+// assigneeLogins joins a PR's assignees for the flat field map, empty when
+// nobody holds it.
+func assigneeLogins(row ghSearchActivityRow) string {
+	logins := make([]string, 0, len(row.Assignees))
+	for _, a := range row.Assignees {
+		if login := strings.TrimSpace(a.Login); login != "" {
+			logins = append(logins, login)
+		}
+	}
+	return strings.Join(logins, ",")
+}
+
+// dedupePRReviewRows collapses PRs that surface in more than one search (both
+// authored and review-requested, or one of the user's own that also lives in a
+// followed repo) keyed by URL, keeping the first occurrence. Callers must pass
+// rows in precedence order — collectPRReviewStatus collects them in
+// buildPRReviewSpecs order, which puts authored first so its richer relation
+// wins and the candidate pool last so it only ever contributes PRs no other
+// search claimed.
+func dedupePRReviewRows(rows []prReviewRow) []prReviewRow {
+	seen := make(map[string]bool, len(rows))
+	out := make([]prReviewRow, 0, len(rows))
+	for _, r := range rows {
+		key := r.row.URL
 		if key == "" {
-			key = it.Kind + "|" + it.Title
+			key = r.spec.relation + "|" + r.row.Title
 		}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		out = append(out, it)
+		out = append(out, r)
+	}
+	return out
+}
+
+// capReviewCandidates trims the candidate pool to the most recently updated
+// maxReviewCandidates, leaving every other row untouched and in place. Only the
+// candidates are capped because they are the only rows whose count is set by
+// how busy other people are rather than by how much the user has in flight.
+func capReviewCandidates(rows []prReviewRow) []prReviewRow {
+	candidates := 0
+	for _, r := range rows {
+		if r.spec.reviewable {
+			candidates++
+		}
+	}
+	if candidates <= maxReviewCandidates {
+		return rows
+	}
+	ranked := make([]int, 0, candidates)
+	for i, r := range rows {
+		if r.spec.reviewable {
+			ranked = append(ranked, i)
+		}
+	}
+	sort.SliceStable(ranked, func(a, b int) bool {
+		return rows[ranked[a]].row.UpdatedAt > rows[ranked[b]].row.UpdatedAt
+	})
+	dropped := make(map[int]bool, candidates-maxReviewCandidates)
+	for _, i := range ranked[maxReviewCandidates:] {
+		dropped[i] = true
+	}
+	out := make([]prReviewRow, 0, len(rows)-len(dropped))
+	for i, r := range rows {
+		if !dropped[i] {
+			out = append(out, r)
+		}
 	}
 	return out
 }

@@ -298,7 +298,7 @@ func validateModeConfig(path string, m *ModeConfig) []string {
 
 // reservedPRRelations are the relations the GitHub collector emits for its
 // built-in searches; a declared query may not reuse one.
-var reservedPRRelations = map[string]bool{"authored": true, "review_requested": true}
+var reservedPRRelations = map[string]bool{"authored": true, "review_requested": true, "reviewable": true}
 
 var prRelationPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
