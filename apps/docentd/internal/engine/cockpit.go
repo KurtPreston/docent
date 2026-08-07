@@ -117,7 +117,10 @@ type CockpitLane struct {
 	Branch   string `json:"branch,omitempty"`
 	OpenPath string `json:"openPath,omitempty"`
 	DeepLink string `json:"deepLink,omitempty"`
-	JiraURL  string `json:"jiraUrl,omitempty"`
+	// OpenAction says what the open button would do here: reveal a directory,
+	// create a worktree first, or nothing at all. See DashboardGroup.
+	OpenAction string `json:"openAction,omitempty"`
+	JiraURL    string `json:"jiraUrl,omitempty"`
 	// JiraStatus is the project's own status name ("In Development", "To Do"),
 	// which the UI groups the queue by so each project's workflow names appear
 	// as-is rather than being mapped onto docent's vocabulary.
@@ -259,6 +262,7 @@ func laneFor(g DashboardGroup) (CockpitLane, []InboxItem) {
 		Repo:          g.Repo,
 		Branch:        g.Branch,
 		OpenPath:      g.OpenPath,
+		OpenAction:    g.OpenAction,
 		DeepLink:      g.DeepLink,
 		JiraURL:       g.JiraURL,
 		JiraStatus:    g.JiraStatus,

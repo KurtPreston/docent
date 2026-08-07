@@ -283,7 +283,7 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 
 ### Nested repos (`config.scan_depth`)
 
-By default `local-git` looks exactly one level in: the immediate children of `code_home`, or the `paths` entries themselves. That misses layouts where a project directory is a container rather than a checkout — most commonly a **grove** project, where `~/Code/salsa` holds a bare `.base` clone plus one worktree directory per branch, so the working trees live at `~/Code/salsa/<branch>`.
+By default `local-git` looks exactly one level in: the immediate children of `code_home`, or the `paths` entries themselves. That misses layouts where a project directory is a container rather than a checkout — most commonly a **worktree project**, where `~/Code/salsa` holds a bare clone plus one worktree directory per branch, so the working trees live at `~/Code/salsa/<branch>`.
 
 Set **`config.scan_depth`** to `"2"` to check one level further in whenever a candidate directory is not itself a git working tree:
 
@@ -298,6 +298,6 @@ directives:
       scan_depth: "2"   # 1 (default) through 3
 ```
 
-A directory that **is** a working tree ends the descent, so this never walks into a repo's own source tree or picks up vendored clones, and dot-directories (including grove's `.base`) are skipped. The same depth applies to `paths`, so you can list `~/Code/salsa` directly and get its worktrees.
+A directory that **is** a working tree ends the descent, so this never walks into a repo's own source tree or picks up vendored clones, and dot-directories (including the bare clone, conventionally `.base`) are skipped. The same depth applies to `paths`, so you can list `~/Code/salsa` directly and get its worktrees.
 
-Scanning deeper multiplies the number of directories visited — a grove project can hold a dozen worktrees. Commit history is only walked once per repository even so (sibling worktrees share one object store), but each worktree still gets its own reflog read, which is why the option is opt-in.
+Scanning deeper multiplies the number of directories visited — a worktree project can hold a dozen worktrees. Commit history is only walked once per repository even so (sibling worktrees share one object store), but each worktree still gets its own reflog read, which is why the option is opt-in.

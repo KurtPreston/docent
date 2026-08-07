@@ -93,6 +93,16 @@ func (s *Snapshot) IsolatedDir(repo, branch string) string {
 	return filepath.Join(stateRoot(s.stateRoot), projectsDir, SanitizePath(repo), SanitizePath(branch))
 }
 
+// HasIsolated reports whether docent has actually made its worktree for a
+// branch, as opposed to merely being able to.
+func (s *Snapshot) HasIsolated(repo, branch string) bool {
+	return isDir(s.IsolatedDir(repo, branch))
+}
+
+// StateRoot is the override this snapshot was built with, to be handed to calls
+// that need to agree with it about where docent's tree is.
+func (s *Snapshot) StateRoot() string { return s.stateRoot }
+
 // Targets enumerates where an agent could run for a repository and branch.
 //
 // The list is never empty: docent's own worktree is always available, because it

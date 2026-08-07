@@ -118,28 +118,45 @@ the provisioned workdir:
 
 ### Where an agent runs
 
-`workdir: worktree` (the default) resolves the branch's worktree through
-[grove](https://github.com/KurtPreston/grove): `grove path <branch>`, run in the
-grove project for the repo, creating the worktree if it does not exist yet. The
-agent therefore lands in your normal `~/Code/<project>/<branch>` checkout, with
-grove's copied `.env` files and its deterministic branch color, and promoting a
-session to an editor is just opening a directory that is already right.
+`workdir: worktree` (the default) gives the agent a checkout of docent's own,
+under `~/.local/state/docent/projects/<repo>`: a bare clone made the first time
+the repository is seen, then one worktree per branch off it. An automation fires
+unattended, and this is the only placement where it cannot disturb something you
+have open — the picker in the cockpit offers the others, but a rule never takes
+them.
 
-docent used to keep its own bare clone and worktree tree under the state dir.
-That produced a second universe: a checkout you had never opened, missing every
-piece of per-worktree setup. Nothing there is used any more, and
-`~/.local/state/docent/repos` and `.../worktrees` can be deleted.
+The clone learns its URL from the `origin` of your own copy, found by walking up
+from the work item's local path when it has one and otherwise by matching the
+repository against the projects at (or one level below) the `code_home` /
+`paths` roots of your enabled `local-git` directives. It references that copy's
+objects, so it costs seconds rather than a full network fetch, and then
+dissociates from them, so deleting your copy later cannot break docent. A
+repository with no local copy anywhere has no URL to learn, and docent says so
+rather than guessing one.
 
-Two consequences of the worktree being yours:
+Because the checkout is docent's, it is kept in step with yours rather than
+drifting from it:
 
-- **Nothing is cleaned up after a run.** Deleting a real worktree because an
-  agent finished with it would take uncommitted work with it. Use `grove prune`,
-  which knows what has been merged.
-- **The repository must already be a grove project.** docent will not clone it
-  for you; run `grove clone` once. The project is found by walking up from the
-  work item's local path when it has one, and otherwise by matching the repo's
-  `origin` against the grove projects at (or one level below) the `code_home` /
-  `paths` roots of your enabled `local-git` directives.
+- Before every turn, your git directory and `origin` are fetched. Cleanly behind
+  and clean, docent fast-forwards; forked, it refuses the turn with a conflict
+  you can override, because merging or rebasing your work unattended is not
+  something a daemon should decide.
+- After every turn, including a cancelled one, the tree is committed with
+  `--no-verify`. A session therefore leaves a chain of `docent: turn N` commits
+  to squash before a PR — the alternative is work sitting uncommitted in a
+  directory you have never opened, where no `git` command of yours will find it.
+- The open button in the dashboard brings the result to you: it creates a
+  worktree in *your* project and fetches docent's tip alongside as
+  `refs/remotes/docent/<branch>`. Your branch is only ever created at your own
+  tip; docent never merges into it, and tells you how far ahead it is instead.
+
+Two things this design does not do:
+
+- **Nothing is cleaned up.** `~/.local/state/docent/projects` grows without
+  bound, one clone plus one worktree per branch per repository. It is all
+  docent's, so it is safe to delete when a repository is done with.
+- **No pushing.** A hosted session does not push its branch anywhere. Say so in
+  the prompt if a rule needs it.
 
 `base_ref` (templated) picks the ref a brand-new branch is created from. It is
 ignored when the branch already exists locally or on the remote, which is the
@@ -147,11 +164,38 @@ usual case for a PR-triggered action; it matters when an automation opens fresh
 work, e.g. `base_ref: release/4.1` for a backport.
 
 `workdir: open_path` runs the agent directly in the work item's existing local
-path instead, without involving grove.
+path instead. That directory is yours, so none of the above applies to it: no
+fetching, no turn-end commit, no divergence check.
 
 Concurrent agent actions targeting the same repo+branch are serialized: two
-agents sharing a git index corrupt each other, and now that the worktree is
-yours, the damage would be to real work.
+agents sharing a git index corrupt each other.
+
+### Per-worktree setup
+
+Every directory docent creates — its own and the ones the open button adds to
+your project — gets one run of the `worktreeHook` script, from `docentd.yaml` or
+`DOCENT_WORKTREE_HOOK`, defaulting to `~/.config/docent/worktree.sh` and skipped
+when that file does not exist. This is the only place per-repository setup
+lives, because what makes a fresh checkout usable is a property of the
+repository and not something docent can infer.
+
+It runs in the new directory with:
+
+| Variable | |
+| --- | --- |
+| `DOCENT_WORKTREE_DIR` | the directory just created |
+| `DOCENT_BRANCH` | the branch checked out in it |
+| `DOCENT_REPO` | host-relative repository, e.g. `Chip/salsa` |
+| `DOCENT_PROJECT_DIR` | the root it was created under |
+| `DOCENT_BASE_REF` | the ref a brand-new branch was based on |
+| `DOCENT_REFERENCE_DIR` | an existing checkout of the same repository to copy ignored files from |
+| `DOCENT_WORKTREE_OWNED` | `1` in docent's tree, `0` in yours |
+
+`DOCENT_REFERENCE_DIR` is what makes an isolated checkout habitable: docent's
+clone is a clone, so `.env` files and anything else git does not track are
+simply absent from it. A non-zero exit is reported and not fatal — a checkout
+with failed setup is still a checkout, and stranding it is worse. The hook gets
+15 minutes and its own process group. See [examples/worktree.sh](../examples/worktree.sh).
 
 ### Report delivery
 

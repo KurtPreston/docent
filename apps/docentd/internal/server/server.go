@@ -188,6 +188,11 @@ func (s *Server) workItemLaunch(w http.ResponseWriter, r *http.Request, key stri
 	writeJSON(w, status, result)
 }
 
+// openWorkItemTimeout bounds a click on the open button. Long enough for a
+// worktree checkout of a large repository plus whatever the setup hook does;
+// nothing here fetches a repository, so it does not need provisioning's budget.
+const openWorkItemTimeout = 3 * time.Minute
+
 // workItemOpen prepares a work item to be opened in the editor: for the cursor
 // provider (with color-writing enabled) it syncs the work item's color into its
 // .vscode/settings.json, then returns the provider deep link for the client to
@@ -202,7 +207,11 @@ func (s *Server) workItemOpen(w http.ResponseWriter, r *http.Request, key string
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "work item key required"})
 		return
 	}
-	result, ok := s.engine.OpenWorkItem(key)
+	// Detached from the request, because this may create a worktree: a client
+	// that gives up mid-click must not abort a checkout already being written.
+	ctx, cancel := context.WithTimeout(context.Background(), openWorkItemTimeout)
+	defer cancel()
+	result, ok := s.engine.OpenWorkItem(ctx, key)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "work item not found"})
 		return

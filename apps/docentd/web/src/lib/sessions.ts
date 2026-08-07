@@ -51,7 +51,17 @@ export async function openWSMPath(path: string, name: string, host?: string): Pr
   }
 }
 
-type OpenResult = { ok?: boolean; deepLink?: string; colorSynced?: boolean; error?: string };
+type OpenResult = {
+  ok?: boolean;
+  deepLink?: string;
+  dir?: string;
+  colorSynced?: boolean;
+  divergence?: string;
+  error?: string;
+};
+
+/** The subset of a group openViaDeepLink needs. */
+export type OpenTarget = Pick<DashboardGroup, "key" | "deepLink" | "openAction">;
 
 // openViaDeepLink is the cursor-provider path: POST /open lets docentd sync the
 // work item's color into its repo .vscode/settings.json (co-located with the
@@ -59,8 +69,11 @@ type OpenResult = { ok?: boolean; deepLink?: string; colorSynced?: boolean; erro
 // the local Cursor GUI opens/focuses the window with the title-bar color already
 // in sync. Navigation proceeds as long as a link is available, even if the color
 // sync reported trouble.
-export async function openViaDeepLink(group: Pick<DashboardGroup, "key" | "deepLink">): Promise<void> {
+export async function openViaDeepLink(group: OpenTarget): Promise<void> {
   let link = group.deepLink ?? "";
+  // Creating a worktree writes out a whole checkout and then runs the setup
+  // hook, which can take minutes. Without this the button looks broken.
+  if (group.openAction === "create") toast("creating the worktree…");
   try {
     const r = await docentFetch("/api/workitems/" + encodeURIComponent(group.key) + "/open", {
       method: "POST",
@@ -68,6 +81,9 @@ export async function openViaDeepLink(group: Pick<DashboardGroup, "key" | "deepL
     const d = (await r.json().catch(() => ({}))) as OpenResult;
     if (d.deepLink) link = d.deepLink;
     if (!r.ok && d.error) toast("open: " + d.error, true);
+    // docent never merges into your tree, so being ahead is something you are
+    // told about rather than something that has already happened to you.
+    else if (d.divergence) toast(d.divergence);
   } catch (e) {
     toast("open error: " + errMsg(e), true);
   }
@@ -83,7 +99,7 @@ export async function openViaDeepLink(group: Pick<DashboardGroup, "key" | "deepL
 // session is not needed). For wsm it focuses the exact window.
 export async function activate(
   provider: string | undefined,
-  group: Pick<DashboardGroup, "key" | "deepLink">,
+  group: OpenTarget,
   session?: { name: string; host?: string },
 ): Promise<void> {
   if (provider === "cursor") {

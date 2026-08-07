@@ -17,7 +17,7 @@ route, all served by `docentd` itself:
 
 | Route | Page | What it's for |
 |-------|------|----------------|
-| `/` | **Cockpit** | The default surface, and the one meant to be left open: a rail of actionable lanes (one per branch or ticket, colored to match grove's title bars), the selected lane's detail with its [hosted agent](#agent-sessions), and a follow-up inbox whose rows each seed an agent prompt. See [Cockpit](#cockpit) below. |
+| `/` | **Cockpit** | The default surface, and the one meant to be left open: a rail of actionable lanes (one per branch or ticket, colored to match the editor title bar for the same branch), the selected lane's detail with its [hosted agent](#agent-sessions), and a follow-up inbox whose rows each seed an agent prompt. See [Cockpit](#cockpit) below. |
 | `/dashboard` | **Dashboard** | The full, unfiltered table: work items grouped by ticket/branch, with JIRA/PR/session columns (each gated on whether that collector/session manager is configured), status pills, and an **open** action per row. Auto-refreshes every 5s. |
 | `/signals` | **Signals** | Every collection unit (directive × collector × mode) with its last run/error, and the raw signals it produced — useful for debugging what a collector actually saw. |
 | `/collectors` | **Collectors** | Operational view of collection units: poll interval, last run, next due, item counts, errors. A **collect** button force-runs one unit immediately. |
@@ -77,7 +77,7 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 | `GET` | `/api/cockpit` | The actionable subset of the same data — lanes, the follow-up inbox, the assigned-but-unstarted queue, and per-source load state — for the Cockpit page. |
 | `GET` | `/api/workitems/{key}` | One work item's full detail (sessions, PRs, JIRA, entities, signals). |
 | `POST` | `/api/workitems/{key}/launch` | Runs the [`onClickScript`](#docentdyaml-reference) hook with `DOCENT_*` env vars describing the work item. |
-| `POST` | `/api/workitems/{key}/open` | Cursor session manager only: syncs the work item's color into `.vscode/settings.json`, then returns a `cursor://` deep link for the client to navigate. |
+| `POST` | `/api/workitems/{key}/open` | Resolves where to open the work item — an agent session's directory, an existing worktree, or a worktree created in your project for the occasion — syncs its color into `.vscode/settings.json`, and returns a `cursor://` deep link for the client to navigate. May report `divergence` when docent's copy of the branch is ahead of the one opened. |
 | `GET` | `/api/signals` | Raw signals per collection unit, for the Signals page. |
 | `GET` | `/api/collectors` | Collection-unit health/metadata, for the Collectors page. |
 | `POST` | `/api/units/{directive}/{mode}/collect` | Force-collects one `state` or `events` unit right now, ignoring its poll interval. |
@@ -95,15 +95,16 @@ token when one is configured (see [Binding + auth](#binding--auth) above).
 | `POST` | `/api/automations/{id}/run` | Manually fires a rule's actions now, bypassing its trigger, cooldown, and enabled flag; an optional JSON body supplies synthetic event context. |
 | `POST` | `/api/sessions/events` | Session ingest: IDE extensions and Cursor hooks POST session lifecycle/activity events (`open`/`close`/`agent_request_sent`/`agent_response_received`/`heartbeat`) keyed by `ide`+`ideHost`+`targetHost`+`path`. See [Cursor hooks → docentd](../README.md#cursor-hooks--docentd). |
 | `GET` | `/api/sessions` | The ingest view of live/known sessions from the registry (composite-keyed), with heartbeat-derived liveness. |
-| `POST` | `/api/agents` | Starts an [agent session](#agent-sessions): provisions the branch's grove worktree and runs the opening turn in the background. Returns `202 { session }`, or `409 { conflict: "foreign-agent" }` when an editor's own agent is working there — retry with `force: true` to proceed anyway. |
+| `POST` | `/api/agents` | Starts an [agent session](#agent-sessions): provisions the branch's worktree at the chosen `target` and runs the opening turn in the background. Returns `202 { session }`, or `409` with `conflict: "foreign-agent"` when an editor's own agent is working there and `conflict: "diverged"` when docent's copy of the branch has forked from yours — retry with `force: true` to proceed anyway. |
 | `GET` | `/api/agents` | Every persisted session, most recently updated first. |
 | `GET` | `/api/agents/{id}` | One session's record. |
-| `DELETE` | `/api/agents/{id}` | Stops any running turn and deletes the session and its transcript. The worktree is left alone — it is grove's, not docent's. |
+| `DELETE` | `/api/agents/{id}` | Stops any running turn and deletes the session and its transcript. The worktree is left alone; nothing under docent's state directory is ever cleaned up automatically. |
 | `POST` | `/api/agents/{id}/turn` | Runs another turn, resuming the conversation. `409` when one is already running in that worktree, or when an editor's agent is; `force: true` overrides the latter. |
 | `POST` | `/api/agents/{id}/stop` | Cancels the running turn. The session stays resumable. |
 | `POST` | `/api/agents/{id}/promote` | Stops the agent and writes `HANDOFF.md` into the worktree; returns the deep link and prompt text for the client to open an editor with. See [Promoting to Cursor](#promoting-to-cursor). |
 | `GET` | `/api/agents/{id}/events` | Server-Sent Events transcript. Replays the whole session, then streams; stays open across turns. |
-| `GET` | `/api/projects` | The grove projects an agent can be started in, for the Cockpit's repository picker. |
+| `GET` | `/api/projects` | The repositories an agent can be started in, for the Cockpit's repository picker. |
+| `GET` | `/api/worktree-targets` | `?repo=&branch=`: the placements an agent could run in, each with a `kind` (`existing`, `create`, `isolated`, `in_place`), the directory it would use, a label, and a `disabled` reason when it cannot be picked. |
 | `GET` | `/*` | Serves the built SPA; any extensionless, unmatched path falls back to `index.html` so client-side routes work. |
 
 ## Cockpit
@@ -117,7 +118,8 @@ session, a PR of yours with unresolved comments or failing checks or an
 approval, a PR awaiting your review, or an in-progress ticket. Everything
 assigned but unstarted goes to a collapsed queue instead of a lane, because a
 backlog rendered at the same weight as live work hides the live work. The rail's
-colors come from `model.ColorForName`, the same hash grove uses, so a lane
+colors come from `model.ColorForName`, which derives them from the branch
+name, so a lane
 matches the title bar of the window it opens.
 
 Three columns: the lane rail, the selected lane's detail (windows, PRs, the
@@ -140,10 +142,22 @@ resume a conversation by id), normalizes their two streaming JSON dialects into
 one event vocabulary, and persists both the session record and the full
 transcript under `$XDG_STATE_HOME/docent/agent-sessions/`.
 
-- **Worktrees come from grove**, never from docent: `grove path <branch>` places
-  the agent in your normal `~/Code/<project>/<branch>` checkout with grove's
-  `.env` copying and color, so a session and the editor are looking at the same
-  directory. Deleting a session leaves the worktree alone.
+- **You choose where the agent runs**, from the placements docent finds for the
+  repository and branch: reuse a worktree that already has the branch, add one
+  to your project, switch an ordinary clone in place, or take docent's own
+  isolated worktree under `$XDG_STATE_HOME/docent/projects/`. The isolated one
+  is the default and the only one an automation ever gets, since it is the one
+  that cannot disturb something you have open. Deleting a session leaves the
+  directory alone.
+- **docent's own worktree is kept in step with yours.** Before every turn it
+  fetches your git directory and `origin`, fast-forwarding when cleanly behind
+  and refusing with `409 conflict: "diverged"` when the two have forked. After
+  every turn it commits, so the work is fetchable rather than invisible. The
+  open button then creates a worktree in *your* project and puts docent's tip
+  beside it as `refs/remotes/docent/<branch>` — never merged into your branch.
+- **Every new directory gets one run of `worktreeHook`.** That is where the
+  `.env` files and dependency installs a fresh checkout needs live; see
+  [Automations](Automations.md#per-worktree-setup).
 - **One agent per worktree**, enforced. Two agents share a git index and corrupt
   each other, so a second turn in the same directory is refused with `409`
   rather than queued.
@@ -350,6 +364,7 @@ for a starting point.
 | `refreshSec` | `60` | Dashboard poll interval hint. |
 | `wsmUrl` | `http://127.0.0.1:39788` | Local wsm daemon URL injected into the dashboard. |
 | `onClickScript` | `~/.config/docent/onclick.sh` | Hook run by `POST /api/workitems/{key}/launch`; see below. `DOCENT_ONCLICK` env var overrides. |
+| `worktreeHook` | `~/.config/docent/worktree.sh` | Run once in every working directory docent creates; skipped when the file does not exist. See [Per-worktree setup](Automations.md#per-worktree-setup). `DOCENT_WORKTREE_HOOK` env var overrides. |
 | `sshHost` | unset | SSH alias for remote-open, passed to the hook as `DOCENT_HOST`. |
 | `ticketProjects` | auto-detected | Restricts ticket-key matching (branch names, PR/commit titles, JIRA issue keys) to these project keys, e.g. `[SALSA, JASPER]`. Without a jira directive, generic `WORD-digits` scanning is disabled (so Dependabot branches like `fontawesome-free-7` don't invent phantom tickets); set `ticketProjects` (or `ticketPattern`) to opt into matching. With jira enabled, matching starts generic and the engine auto-widens/narrows via `followed_projects` and observed issue keys. |
 | `ticketPattern` | unset | Fully overrides ticket matching with a custom regex (first capture group is the key) instead of `ticketProjects`. |

@@ -62,6 +62,10 @@ export type DashboardTicket = {
   status?: string;
 };
 
+/** What the open button would do: reveal a directory that exists, create a
+ * worktree first (slow enough to say so), or nothing at all. */
+export type OpenAction = "open" | "create" | "none";
+
 export type DashboardGroup = {
   key: string;
   ticket?: string;
@@ -70,6 +74,7 @@ export type DashboardGroup = {
   branch?: string;
   openPath?: string;
   deepLink?: string;
+  openAction?: OpenAction;
   lastActivity?: string;
   jiraStatus?: string;
   jiraUrl?: string;
@@ -112,6 +117,7 @@ export type CockpitLane = {
   branch?: string;
   openPath?: string;
   deepLink?: string;
+  openAction?: OpenAction;
   jiraUrl?: string;
   jiraStatus?: string;
   color?: string;

@@ -382,18 +382,13 @@ function LaneDetail({
             plan it
           </button>
         ) : null}
-        {/* Named for what it will do, because the two outcomes are hard to tell
-            apart afterwards: a live window on this checkout is revealed, and a
-            lane with none gets a new one. Liveness decides it, not the presence
-            of a session: a record left behind by a window that died without
-            reporting its close promised to "go to" a window that is not there. */}
-        {provider && lane.deepLink ? (
+        {provider && (lane.openAction ?? "none") !== "none" ? (
           <button
             type="button"
             className="mini-btn primary"
             onClick={() => void activate(provider, lane).then(() => window.setTimeout(onReload, 400))}
           >
-            {lane.sessions.some((s) => s.live) ? "Go to window" : "Open in Cursor"}
+            {openButtonLabel(lane)}
           </button>
         ) : null}
       </div>
@@ -579,6 +574,19 @@ function canSeed(
   item: InboxItem,
 ): item is InboxItem & { kind: SeedableKind } {
   return isSeedable(item) && lanes.some((l) => l.key === item.laneKey);
+}
+
+// openButtonLabel names what the click will do, because the three outcomes are
+// hard to tell apart afterwards: a live window on this checkout is revealed, a
+// lane with a checkout but no window gets one, and a branch with no checkout at
+// all gets a worktree made for it first.
+//
+// Between the first two it is liveness that decides, not the presence of a
+// session: a record left behind by a window that died without reporting its
+// close would otherwise promise to "go to" a window that is not there.
+function openButtonLabel(lane: CockpitLane): string {
+  if (lane.openAction === "create") return "Create worktree";
+  return lane.sessions.some((s) => s.live) ? "Go to window" : "Open in Cursor";
 }
 
 // agentKey identifies the worktree a session is working in, which is what a

@@ -11,6 +11,7 @@ import (
 
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
+	"github.com/KurtPreston/docent/libs/agentsession"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
@@ -786,7 +787,7 @@ func TestOpenWorkItemSyncsColor(t *testing.T) {
 	e.lastDashboard = e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
 	e.mu.Unlock()
 
-	res, ok := e.OpenWorkItem("wb:org/repo@feature-x")
+	res, ok := e.OpenWorkItem(context.Background(), "wb:org/repo@feature-x")
 	if !ok || !res.OK {
 		t.Fatalf("OpenWorkItem = %+v ok=%v", res, ok)
 	}
@@ -812,7 +813,7 @@ func TestOpenWorkItemWriteColorDisabled(t *testing.T) {
 	e.lastDashboard = e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
 	e.mu.Unlock()
 
-	res, ok := e.OpenWorkItem("SALSA-1")
+	res, ok := e.OpenWorkItem(context.Background(), "SALSA-1")
 	if !ok || !res.OK {
 		t.Fatalf("OpenWorkItem = %+v ok=%v", res, ok)
 	}
@@ -956,4 +957,65 @@ func hasCollector(dirs []userdata.Directive, collector string) bool {
 		}
 	}
 	return false
+}
+
+// The open button is gated on what the backend says is possible, so a branch
+// with a checkout is "open" and one with nothing on disk is "none". A path is no
+// longer the test on its own.
+func TestOpenActionFollowsWhatIsOnDisk(t *testing.T) {
+	no := false
+	e := newCursorTestEngine(t, "devbox", &no)
+	dir := t.TempDir()
+	// A live session keeps each item on the dashboard; without one it is filtered
+	// out before openAction matters.
+	live := []model.Entity{{Kind: "session", Title: "s", State: map[string]string{"live": "true"}, Coordinates: map[string]string{}}}
+	with := model.WorkItem{Key: "SALSA-1", Title: "t", Repo: "org/repo", Branch: "feature-x", OpenPath: dir, Entities: live}
+	without := model.WorkItem{Key: "SALSA-2", Title: "t", Repo: "org/nowhere", Branch: "feature-y", Entities: live}
+
+	dash := e.buildDashboard([]model.WorkItem{with, without}, e.corrCfg)
+	byKey := map[string]string{}
+	for _, g := range dash.Groups {
+		byKey[g.Key] = g.OpenAction
+	}
+	if byKey["SALSA-1"] != OpenActionOpen {
+		t.Errorf("openAction with a checkout = %q, want %q", byKey["SALSA-1"], OpenActionOpen)
+	}
+	if byKey["SALSA-2"] != OpenActionNone {
+		t.Errorf("openAction with nothing on disk = %q, want %q", byKey["SALSA-2"], OpenActionNone)
+	}
+}
+
+// A lane whose agent ran somewhere specific opens there. Somebody already chose
+// the placement; re-deriving it from the shape of the repository could only
+// disagree with them.
+func TestOpenWorkItemPrefersTheSessionsOwnDirectory(t *testing.T) {
+	no := false
+	e := newCursorTestEngine(t, "devbox", &no)
+	store, err := agentsession.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentDir := t.TempDir()
+	if err := store.Save(agentsession.Session{
+		ID: "s1", Provider: agentsession.ProviderClaude,
+		Repo: "org/repo", Branch: "feature-x", Dir: agentDir, Owned: true,
+		Status: agentsession.StatusIdle,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.agents = &agentsession.Manager{Store: store}
+
+	wi := model.WorkItem{Key: "SALSA-1", Title: "t", Repo: "org/repo", Branch: "feature-x", OpenPath: t.TempDir()}
+	e.mu.Lock()
+	e.lastWorkItems = []model.WorkItem{wi}
+	e.lastDashboard = e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	e.mu.Unlock()
+
+	res, ok := e.OpenWorkItem(context.Background(), "SALSA-1")
+	if !ok || !res.OK {
+		t.Fatalf("OpenWorkItem = %+v ok=%v", res, ok)
+	}
+	if res.Dir != agentDir {
+		t.Errorf("Dir = %q, want the session's own directory %q", res.Dir, agentDir)
+	}
 }

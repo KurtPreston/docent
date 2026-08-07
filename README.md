@@ -231,5 +231,8 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - `~/.config/docent/` — `config.yaml` (reporter/automations), `docentd.yaml` (daemon), `goals.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
 - `~/.local/state/docent/logs/<run>/` — reporter run logs (`$XDG_STATE_HOME/docent`)
 - `~/.local/state/docent/agent-sessions/` — hosted agent sessions and their transcripts
+- `~/.local/state/docent/projects/<repo>/` — docent's own copy of a repository: a bare
+  clone in `.base` plus one worktree per branch it has worked on. Never cleaned up;
+  safe to delete for a repository you are done with
 - `~/docent/` — saved markdown from the reporter (override via `output_dir` in config.yaml or `--out-dir`)
 - `--userdata DIR` keeps the legacy all-in-one layout (config + .env + logs + output under one dir)

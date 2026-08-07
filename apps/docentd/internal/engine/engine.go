@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -50,7 +51,12 @@ type DashboardGroup struct {
 	// DeepLink is the provider-supplied clickable link that opens/focuses this
 	// work item's window (e.g. a cursor:// URI). Empty when the provider has no
 	// deep link (e.g. wsm) or the work item has no path.
-	DeepLink     string `json:"deepLink,omitempty"`
+	DeepLink string `json:"deepLink,omitempty"`
+	// OpenAction says what the open button would do here, so the client can
+	// label and gate it without inferring anything from a path. "open" reveals
+	// a directory that exists, "create" makes a worktree first (and takes long
+	// enough to warrant saying so), "none" means there is nowhere to go.
+	OpenAction   string `json:"openAction,omitempty"`
 	LastActivity string `json:"lastActivity,omitempty"`
 	JiraStatus   string `json:"jiraStatus,omitempty"`
 	JiraURL      string `json:"jiraUrl,omitempty"`
@@ -1258,6 +1264,10 @@ func (e *Engine) entitiesFrom(signals []model.Signal, corrCfg correlation.Config
 func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.Config) Dashboard {
 	groups := make([]DashboardGroup, 0, len(workItems))
 	liveCount := 0
+	// One view of what is on disk for the whole rebuild. Every group asks the
+	// same questions of the same projects, and a snapshot per group would mean a
+	// `git worktree list` per lane on screen.
+	snap := e.WorktreeSnapshot()
 	for _, wi := range workItems {
 		g := DashboardGroup{
 			Key:          wi.Key,
@@ -1266,6 +1276,7 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			Branch:       wi.Branch,
 			OpenPath:     wi.OpenPath,
 			DeepLink:     e.deepLinkFor(wi.OpenPath),
+			OpenAction:   openActionFor(snap, wi.Repo, wi.Branch, wi.OpenPath),
 			LastActivity: wi.LastActivity,
 			Color:        wi.Color,
 			FG:           wi.FG,
@@ -1733,35 +1744,105 @@ func (e *Engine) WorkItem(key string) (WorkItemDetail, bool) {
 	return detail, true
 }
 
-// OpenResult is the payload for POST /api/workitems/{key}/open.
-type OpenResult struct {
-	OK          bool   `json:"ok"`
-	Provider    string `json:"provider,omitempty"`
-	DeepLink    string `json:"deepLink,omitempty"`
-	ColorSynced bool   `json:"colorSynced"`
-	Message     string `json:"message,omitempty"`
-	Error       string `json:"error,omitempty"`
+// Open actions, as reported to the client on a group or a lane.
+const (
+	// OpenActionNone means there is nowhere to open: no checkout, no worktree
+	// project to add one to, and nothing of docent's.
+	OpenActionNone = "none"
+	// OpenActionOpen means a directory exists and the click reveals it.
+	OpenActionOpen = "open"
+	// OpenActionCreate means the click makes a worktree first, which takes long
+	// enough that the client should say so rather than appear to hang.
+	OpenActionCreate = "create"
+)
+
+// openActionFor decides what the open button offers for a work item, from what
+// is on disk.
+//
+// The developer's own project comes first in every case. Opening is how a person
+// goes to look at something, and the place they will look is the one they
+// already know -- docent's tree is where an agent worked, not where anyone reads
+// a diff. It is offered only when there is nothing else, which is the state a
+// repository is in before it has been cloned locally at all.
+func openActionFor(snap *worktree.Snapshot, repo, branch, openPath string) string {
+	action, _ := openPlacement(snap, repo, branch, openPath)
+	return action
 }
 
-// OpenWorkItem prepares a work item to be opened in the editor. For the cursor
-// provider with color-writing enabled (the default), it syncs the work item's
-// current color into its repo's .vscode/settings.json so the title-bar color is
-// in sync before the client navigates the deep link. The write runs on the
-// docentd box (which holds the repo files); actually opening/focusing the window
-// is the client's job via the returned deep link. ok=false when key is unknown.
-func (e *Engine) OpenWorkItem(key string) (OpenResult, bool) {
+// openPlacement returns the action and, for an action that needs no work, the
+// directory it would reveal.
+func openPlacement(snap *worktree.Snapshot, repo, branch, openPath string) (action, dir string) {
+	for _, t := range snap.Targets(context.Background(), repo, branch) {
+		switch {
+		case t.Kind == worktree.TargetExisting && t.Disabled == "":
+			return OpenActionOpen, t.Dir
+		case t.Kind == worktree.TargetCreate && t.Disabled == "":
+			return OpenActionCreate, ""
+		}
+	}
+	// No branch, or a repository with no local copy: the path local-git saw the
+	// work happen in is still somewhere to go.
+	if openPath != "" {
+		return OpenActionOpen, openPath
+	}
+	if snap.HasIsolated(repo, branch) {
+		return OpenActionOpen, snap.IsolatedDir(repo, branch)
+	}
+	return OpenActionNone, ""
+}
+
+// OpenResult is the payload for POST /api/workitems/{key}/open.
+type OpenResult struct {
+	OK       bool   `json:"ok"`
+	Provider string `json:"provider,omitempty"`
+	DeepLink string `json:"deepLink,omitempty"`
+	// Dir is the directory the link addresses, which for a freshly created
+	// worktree the client has never seen before.
+	Dir         string `json:"dir,omitempty"`
+	ColorSynced bool   `json:"colorSynced"`
+	// Divergence says how far docent's copy of the branch is ahead of the one
+	// just opened. Reported rather than resolved: docent does not merge into the
+	// developer's tree, so the alternative to saying this is saying nothing and
+	// letting them find out later.
+	Divergence string `json:"divergence,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// OpenWorkItem prepares a work item to be opened in the editor, creating the
+// worktree first when there is not one yet.
+//
+// For the cursor provider with color-writing enabled (the default), it syncs the
+// work item's current color into the directory's .vscode/settings.json so the
+// title-bar color is right before the client navigates the deep link. The work
+// runs on the docentd box, which holds the files; actually opening the window is
+// the client's job via the returned deep link. ok=false when key is unknown.
+func (e *Engine) OpenWorkItem(ctx context.Context, key string) (OpenResult, bool) {
 	detail, ok := e.WorkItem(key)
 	if !ok {
 		return OpenResult{}, false
 	}
 	res := OpenResult{OK: true, Provider: e.providerKey(), DeepLink: detail.DeepLink}
-	if e.providerKey() == "cursor" && e.cfg.OpenTrigger.Cursor.WriteColorEnabled() && detail.OpenPath != "" {
+	dir, err := e.openDir(ctx, detail, &res)
+	if err != nil {
+		res.OK = false
+		res.Error = err.Error()
+		return res, true
+	}
+	if dir == "" {
+		dir = detail.OpenPath
+	}
+	if dir != "" {
+		res.Dir = dir
+		res.DeepLink = e.deepLinkFor(dir)
+	}
+	if e.providerKey() == "cursor" && e.cfg.OpenTrigger.Cursor.WriteColorEnabled() && dir != "" {
 		color, fg := detail.Color, detail.FG
 		if color == "" {
 			color = model.ColorForName(detail.Key)
 			fg = model.ForegroundForHex(color)
 		}
-		if err := model.SyncVSCodeColor(detail.OpenPath, color, fg); err != nil {
+		if err := model.SyncVSCodeColor(dir, color, fg); err != nil {
 			res.OK = false
 			res.Error = err.Error()
 			return res, true
@@ -1770,6 +1851,65 @@ func (e *Engine) OpenWorkItem(key string) (OpenResult, bool) {
 		res.Message = "synced color"
 	}
 	return res, true
+}
+
+// openDir resolves the directory to reveal, creating a worktree when that is
+// what the placement calls for.
+func (e *Engine) openDir(ctx context.Context, detail WorkItemDetail, res *OpenResult) (string, error) {
+	// A lane with a session has already answered this question: somebody picked
+	// where the agent runs, and that is where its work is. Answering it a second
+	// time from the shape of the repository could only disagree.
+	if dir := e.sessionDirFor(detail.Repo, detail.Branch); dir != "" {
+		return dir, nil
+	}
+	snap := e.WorktreeSnapshot()
+	action, dir := openPlacement(snap, detail.Repo, detail.Branch, detail.OpenPath)
+	switch action {
+	case OpenActionOpen:
+		return dir, nil
+	case OpenActionCreate:
+		out, err := worktree.OpenInProject(ctx, worktree.OpenRequest{
+			Repo:      detail.Repo,
+			Branch:    detail.Branch,
+			OpenPath:  detail.OpenPath,
+			Roots:     collectors.LocalGitRoots(e.cfg.Directives),
+			Hook:      e.cfg.WorktreeHook,
+			StateRoot: snap.StateRoot(),
+		})
+		if err != nil {
+			return "", err
+		}
+		if out.SetupErr != nil {
+			log.Printf("docentd: worktree setup in %s: %v", out.Dir, out.SetupErr)
+		}
+		if out.Ahead > 0 {
+			res.Divergence = fmt.Sprintf(
+				"docent is %d commit(s) ahead on %s; fetched as docent/%s rather than merged",
+				out.Ahead, detail.Branch, detail.Branch)
+		}
+		return out.Dir, nil
+	default:
+		return "", nil
+	}
+}
+
+// sessionDirFor returns the working directory of an agent session on this
+// repository and branch, which is the pair a session is keyed on everywhere
+// else in the cockpit.
+func (e *Engine) sessionDirFor(repo, branch string) string {
+	if e.agents == nil || strings.TrimSpace(branch) == "" {
+		return ""
+	}
+	sessions, err := e.agents.Sessions()
+	if err != nil {
+		return ""
+	}
+	for _, s := range sessions {
+		if s.Branch == branch && s.Repo == repo && s.Dir != "" {
+			return s.Dir
+		}
+	}
+	return ""
 }
 
 // CollectUnitNow forces an immediate collection of the (directive, mode) unit,

@@ -284,17 +284,18 @@ function sessionHeaderFor(provider: string): string {
 // its provider deep link. It lives in the Cursor column (rather than the Path
 // column) so opening the editor is an explicit action next to the sessions.
 function CursorOpenButton({ provider, g }: { provider: string; g: DashboardGroup }) {
+  const creating = g.openAction === "create";
   return (
     <button
       className="cursor-open-btn"
       type="button"
-      title="Open in Cursor"
+      title={creating ? "Create the worktree and open it in Cursor" : "Open in Cursor"}
       onClick={(e) => {
         e.stopPropagation();
         void activate(provider, g);
       }}
     >
-      Open
+      {creating ? "Create" : "Open"}
       <svg className="svc-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z" />
       </svg>
@@ -425,7 +426,10 @@ export function Dashboard() {
       key: "sessions",
       header: sessionHeaderFor(provider),
       render: (g) => {
-        const hasOpenButton = provider === "cursor" && !!g.deepLink;
+        // The backend says whether there is anywhere to go, because it is the
+        // only side that can see the repository. A path is no longer the test:
+        // a branch with no checkout yet still has a worktree to create.
+        const hasOpenButton = provider === "cursor" && (g.openAction ?? "none") !== "none";
         const sessions = g.sessions ?? [];
         return (
           <div className="cell-stack">
