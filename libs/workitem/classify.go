@@ -16,14 +16,19 @@ const (
 	StatusStarted  = "started"
 	StatusAwaiting = "awaiting-response"
 	StatusAssigned = "assigned"
+	// StatusReviewable is somebody else's open PR that nobody has asked the
+	// user to look at. It ranks below even assigned work because it is the only
+	// tier that is not the user's in any sense: it is a list to pick from.
+	StatusReviewable = "reviewable"
 
-	RankDone     = 0
-	RankActive   = 1
-	RankApproved = 2
-	RankStarted  = 3
-	RankAwaiting = 4
-	RankAssigned = 5
-	RankHidden   = 99
+	RankDone       = 0
+	RankActive     = 1
+	RankApproved   = 2
+	RankStarted    = 3
+	RankAwaiting   = 4
+	RankAssigned   = 5
+	RankReviewable = 6
+	RankHidden     = 99
 )
 
 // Facts accumulates the entity-derived signals a work-item needs to be
@@ -38,20 +43,27 @@ type Facts struct {
 	AuthoredAwaiting     bool // authored, non-draft, not approved
 	AuthoredMyTurn       bool // authored, non-draft, changes-requested or failing checks
 	ReviewRequested      bool // someone else's PR awaiting my review
+	ReviewCandidate      bool // someone else's PR nobody has asked me to review
 	JiraStarted          bool
 	JiraAssigned         bool
 	BranchEvidence       bool // a local branch/commit/reflog/session ties work to the ticket
 }
 
-// ClassifyPR folds one PR entity's state into the group facts. Only PRs the
-// user owns carry checks/review_decision; an unowned one means my review is
-// still pending on someone else's PR.
+// ClassifyPR folds one PR entity's state into the group facts. An unowned PR
+// means either that my review is pending on it or that it is merely one I could
+// review, which are different enough to rank apart: the first is a request and
+// the second is an option.
 //
-// Ownership is read from the collector's `mine` flag rather than the relation
-// name, because directives can declare their own relations (a CI bot's
-// backports are owned but are neither "authored" nor "review_requested").
+// Ownership is read from the collector's `mine` and `reviewable` flags rather
+// than the relation name, because directives can declare their own relations (a
+// CI bot's backports are owned but are neither "authored" nor
+// "review_requested").
 func ClassifyPR(facts *Facts, ent model.Entity) {
 	if facts == nil || ent.State == nil {
+		return
+	}
+	if ent.State["reviewable"] == "true" {
+		facts.ReviewCandidate = true
 		return
 	}
 	if ent.State["mine"] == "false" {
@@ -100,6 +112,10 @@ func Classify(f Facts) (status string, rank int, actionRequired bool) {
 		return StatusAwaiting, RankAwaiting, f.ReviewRequested || f.AuthoredMyTurn
 	case f.JiraAssigned:
 		return StatusAssigned, RankAssigned, false
+	// Never action-required: nobody has asked for this, and a surface that
+	// flags every open PR on the team is the surface people stop reading.
+	case f.ReviewCandidate:
+		return StatusReviewable, RankReviewable, false
 	default:
 		return "", RankHidden, false
 	}

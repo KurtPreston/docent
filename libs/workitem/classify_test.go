@@ -27,6 +27,10 @@ func TestClassify(t *testing.T) {
 		{"authored my turn", Facts{AuthoredAwaiting: true, AuthoredMyTurn: true}, StatusAwaiting, RankAwaiting, true},
 		{"review requested needs action", Facts{ReviewRequested: true}, StatusAwaiting, RankAwaiting, true},
 		{"assigned no action", Facts{JiraAssigned: true}, StatusAssigned, RankAssigned, false},
+		{"review candidate no action", Facts{ReviewCandidate: true}, StatusReviewable, RankReviewable, false},
+		// Anything of the user's own outranks a PR they merely could review,
+		// including a ticket they have not started.
+		{"assigned beats review candidate", Facts{JiraAssigned: true, ReviewCandidate: true}, StatusAssigned, RankAssigned, false},
 		{"nothing hidden", Facts{}, "", RankHidden, false},
 	}
 	for _, tc := range cases {
@@ -62,6 +66,13 @@ func TestClassifyPR(t *testing.T) {
 	ClassifyPR(&f, mk(map[string]string{"relation": "review_requested", "mine": "false"}))
 	if !f.ReviewRequested || f.AuthoredAwaiting {
 		t.Errorf("review_requested facts wrong: %+v", f)
+	}
+	// A candidate is unowned like a review request, but nobody asked for it, so
+	// it must not land in the tier that flags work as needing action.
+	f = Facts{}
+	ClassifyPR(&f, mk(map[string]string{"relation": "reviewable", "mine": "false", "reviewable": "true", "checks": "failing"}))
+	if !f.ReviewCandidate || f.ReviewRequested || f.AuthoredMyTurn {
+		t.Errorf("candidate facts wrong: %+v", f)
 	}
 	// A directive-declared relation is classified by the mine flag, not by
 	// its name, so a bot's backport gets the same treatment as an authored PR.

@@ -131,7 +131,14 @@ type DashboardPR struct {
 	// Review state, carried only by the pr_review_status signal. The cockpit
 	// needs these to say *why* a PR wants attention (failing checks vs waiting
 	// on my review vs approved and unmerged) rather than only that it exists.
-	Mine           bool   `json:"mine"`
+	Mine bool `json:"mine"`
+	// Reviewable marks a PR from the candidate pool: someone else's, open, and
+	// unasked for. Distinct from !Mine, which on its own still means a PR that
+	// named the user as a reviewer.
+	Reviewable bool `json:"reviewable,omitempty"`
+	// Author is the login that opened the PR, which is how a review queue is
+	// read. Empty on rows from a collector that predates it.
+	Author         string `json:"author,omitempty"`
 	Checks         string `json:"checks,omitempty"`
 	ReviewDecision string `json:"reviewDecision,omitempty"`
 	// Unresolved is the count of open review threads on the PR, 0 when the
@@ -1407,6 +1414,8 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 					// Rows predating the flag are treated as mine, matching
 					// ClassifyPR.
 					pr.Mine = ent.State["mine"] != "false"
+					pr.Reviewable = ent.State["reviewable"] == "true"
+					pr.Author = ent.State["pr_author"]
 					pr.Checks = ent.State["checks"]
 					pr.ReviewDecision = ent.State["review_decision"]
 					pr.Unresolved, _ = strconv.Atoi(ent.State["unresolved"])

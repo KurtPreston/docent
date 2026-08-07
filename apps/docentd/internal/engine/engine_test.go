@@ -16,6 +16,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/workitem"
 )
 
 func newTestEngine(t *testing.T) *Engine {
@@ -541,6 +542,45 @@ func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
 	}
 	if g.Status != statusAwaiting || !g.ActionRequired {
 		t.Errorf("review-requested branch unit = status:%q action:%v", g.Status, g.ActionRequired)
+	}
+}
+
+// A PR from the candidate pool is somebody else's open work that nobody has
+// asked about, so it ranks below everything and never claims to need action —
+// otherwise following a busy repo would flag the whole team's work as the
+// user's to do.
+func TestBuildDashboardReviewCandidate(t *testing.T) {
+	e := newTestEngine(t)
+	wi := model.WorkItem{
+		Key:   "SALSA-42",
+		Title: "[SALSA-42] their feature",
+		Entities: []model.Entity{
+			{
+				Kind:        "pr_review_status",
+				Title:       "[SALSA-42] their feature",
+				URL:         "https://github.com/org/repo/pull/9",
+				Coordinates: map[string]string{"repo": "org/repo", "ticket": "SALSA-42"},
+				State: map[string]string{
+					"relation": "reviewable", "mine": "false", "reviewable": "true",
+					"is_draft": "false", "pr_author": "bob", "checks": "failing",
+					"bucket": "awaiting_review",
+				},
+			},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	if dash.GroupCount != 1 {
+		t.Fatalf("expected 1 group, got %d", dash.GroupCount)
+	}
+	g := dash.Groups[0]
+	if g.Status != workitem.StatusReviewable || g.StatusRank != workitem.RankReviewable || g.ActionRequired {
+		t.Errorf("candidate group = status:%q rank:%d action:%v", g.Status, g.StatusRank, g.ActionRequired)
+	}
+	if len(g.PRs) != 1 {
+		t.Fatalf("expected the PR to survive onto the group, got %+v", g.PRs)
+	}
+	if pr := g.PRs[0]; !pr.Reviewable || pr.Mine || pr.Author != "bob" {
+		t.Errorf("candidate PR = %+v", pr)
 	}
 }
 
