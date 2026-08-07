@@ -187,7 +187,7 @@ func TestLocalGitScanDepth(t *testing.T) {
 //
 //	plain/.git                an ordinary clone, found at any depth
 //	plain/vendor/.git         a nested repo the walk must not descend to
-//	project/.base/HEAD        a grove project root: bare clone, no .git of its own
+//	project/.base/HEAD        a worktree project root: bare clone, no .git of its own
 //	project/.hidden/.git      a dot-directory the walk must skip
 //	project/wt-a/.git         the project's worktrees, one level further in
 //	project/wt-b/.git
@@ -248,7 +248,7 @@ func TestLocalGitRepoDirsCodeHomeDepth(t *testing.T) {
 			want: []string{"plain"},
 		},
 		{
-			name:  "depth 2 reaches the grove project's worktrees",
+			name:  "depth 2 reaches the worktree project's worktrees",
 			depth: "2",
 			want:  []string{"plain", "project/wt-a", "project/wt-b"},
 		},
@@ -275,7 +275,7 @@ func TestLocalGitRepoDirsPathsDepth(t *testing.T) {
 	root := mkLocalGitScanTree(t)
 	project := filepath.Join(root, "project")
 
-	// A grove project root is not a working tree, so at the default depth the
+	// A worktree project root is not a working tree, so at the default depth the
 	// entry contributes nothing and resolution falls through to code_home.
 	d := userdata.Directive{ID: "lg", Collector: "local-git", Paths: []string{project}, CodeHome: root}
 	dirs, err := localGitRepoDirs(d, nil, identityExpand)

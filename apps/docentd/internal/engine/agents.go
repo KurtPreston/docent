@@ -22,10 +22,13 @@ import (
 const agentSessionsDir = "agent-sessions"
 
 // newAgentManager wires the session manager from daemon config: a store under
-// the state dir, a runner per provider, and worktrees provisioned through grove.
+// the state dir, a runner per provider, and a worktree of docent's own per
+// branch.
 //
 // sessions is the IDE session registry, consulted so docent does not start an
-// agent in a worktree an editor's own agent is already editing.
+// agent in a worktree an editor's own agent is already editing. That guard is
+// about the developer's directories; it can never fire for docent's own tree,
+// where nobody else works.
 func newAgentManager(cfg config.DaemonConfig, sessions *registry.Store) (*agentsession.Manager, error) {
 	store, err := agentsession.NewStore(filepath.Join(docentconfig.StateDir(), agentSessionsDir))
 	if err != nil {
@@ -44,17 +47,18 @@ func newAgentManager(cfg config.DaemonConfig, sessions *registry.Store) (*agents
 		},
 		Provision: func(ctx context.Context, req agentsession.ProvisionRequest) (agentsession.ProvisionResult, error) {
 			wd, err := automation.ProvisionWorkdir(ctx, automation.WorkdirRequest{
-				Mode:       automation.WorkdirWorktree,
-				Repo:       req.Repo,
-				Branch:     req.Branch,
-				From:       req.BaseRef,
-				OpenPath:   req.OpenPath,
-				GroveRoots: roots,
+				Mode:     automation.WorkdirWorktree,
+				Repo:     req.Repo,
+				Branch:   req.Branch,
+				From:     req.BaseRef,
+				OpenPath: req.OpenPath,
+				Roots:    roots,
+				Hook:     cfg.WorktreeHook,
 			})
 			if err != nil {
 				return agentsession.ProvisionResult{}, err
 			}
-			return agentsession.ProvisionResult{Dir: wd.Path, Project: wd.ProjectDir}, nil
+			return agentsession.ProvisionResult{Dir: wd.Path, Project: wd.ProjectDir, Owned: wd.Owned}, nil
 		},
 	}, nil
 }
@@ -151,7 +155,7 @@ func (r sessionAgentRunner) Run(ctx context.Context, action automation.Action, e
 	}
 
 	// open_path mode runs in the developer's existing checkout; anything else
-	// resolves a grove worktree, which is what Dir being empty asks for.
+	// gets docent's own worktree, which is what Dir being empty asks for.
 	dir := ""
 	if strings.TrimSpace(action.Workdir) == automation.WorkdirOpenPath {
 		dir = actx.OpenPath

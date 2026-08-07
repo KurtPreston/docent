@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ColorForName returns a deterministic hex color for a name (grove ForBranch port).
+// ColorForName returns a deterministic hex color for a name.
 func ColorForName(name string) string {
 	sum := posixCksum([]byte(name))
 	hue := float64(sum % 360)

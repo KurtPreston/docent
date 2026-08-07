@@ -43,12 +43,17 @@ type Session struct {
 	Title string `json:"title,omitempty"`
 	Repo  string `json:"repo,omitempty"`
 	// Branch names the lane; Dir is the worktree the agent edits and Project is
-	// the grove project that owns it.
+	// the root that owns it.
 	Branch  string `json:"branch,omitempty"`
 	Dir     string `json:"dir,omitempty"`
 	Project string `json:"project,omitempty"`
-	// Color is the branch's grove color, so a lane in the cockpit matches the
-	// editor's title bar for the same branch.
+	// Owned reports that Dir is docent's own directory rather than one the
+	// developer may have open in an editor. Every turn-boundary guard keys off
+	// it: committing dirty state, syncing with the developer's copy, and healing
+	// a broken checkout are all right in docent's tree and destructive in theirs.
+	Owned bool `json:"owned,omitempty"`
+	// Color is the branch's color, so a lane in the cockpit matches the editor's
+	// title bar for the same branch.
 	Color  string `json:"color,omitempty"`
 	Status Status `json:"status"`
 	// Error is the last failure, kept after the fact so a failed lane can say
@@ -327,7 +332,7 @@ func (s *Store) Events(id string) ([]Event, error) {
 }
 
 // Delete removes a session and its transcript. The worktree is untouched: it is
-// the developer's, and grove owns its lifecycle.
+// docent's own, and outlives the session that used it.
 func (s *Store) Delete(id string) error {
 	if err := validID(id); err != nil {
 		return err

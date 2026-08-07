@@ -691,7 +691,7 @@ func TestStartRequiresAKnownProvider(t *testing.T) {
 	}
 }
 
-// Provisioning is where a missing grove project surfaces, and the reason has to
+// Provisioning is where a repository docent cannot resolve surfaces, and the reason has to
 // reach the caller rather than becoming a session that cannot run.
 func TestProvisioningFailureIsReported(t *testing.T) {
 	r := &fakeRunner{provider: ProviderClaude}
@@ -699,11 +699,11 @@ func TestProvisioningFailureIsReported(t *testing.T) {
 		Store:   newStore(t),
 		Runners: map[Provider]Runner{ProviderClaude: r},
 		Provision: func(context.Context, ProvisionRequest) (ProvisionResult, error) {
-			return ProvisionResult{}, errors.New("no grove project for \"Chip/salsa\"")
+			return ProvisionResult{}, errors.New("no local copy of \"Chip/salsa\"")
 		},
 	}
 	_, err := m.Start(context.Background(), StartRequest{Repo: "Chip/salsa", Branch: "b"})
-	if err == nil || !strings.Contains(err.Error(), "no grove project") {
+	if err == nil || !strings.Contains(err.Error(), "no local copy") {
 		t.Fatalf("err = %v", err)
 	}
 	if list, _ := m.Store.List(); len(list) != 0 {

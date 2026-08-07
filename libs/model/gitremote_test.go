@@ -3,7 +3,7 @@ package model
 import "testing"
 
 // The same repository is spelled several ways across one machine -- SSH in a
-// grove project's .base, HTTPS in a docent config, sometimes with a port -- and
+// a bare project clone, HTTPS in a docent config, sometimes with a port -- and
 // every spelling has to reduce to the one key the collectors join on. A miss
 // here shows up as a repository appearing twice in the cockpit.
 func TestRepoKeyFromRemote(t *testing.T) {

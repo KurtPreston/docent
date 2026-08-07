@@ -1,6 +1,6 @@
 //go:build !windows
 
-package grove
+package worktree
 
 import (
 	"os/exec"
@@ -8,9 +8,9 @@ import (
 )
 
 // configureProcGroup makes cmd the leader of its own process group so a timed-out
-// grove invocation takes its git children with it. Without this a `grove path`
-// killed while fetching leaves the git process holding the repository lock, and
-// every later invocation fails on index.lock until someone notices.
+// hook takes its children with it. Without this a setup script killed mid-install
+// leaves the package manager or git process holding a lock, and every later
+// attempt fails on it until someone notices.
 func configureProcGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

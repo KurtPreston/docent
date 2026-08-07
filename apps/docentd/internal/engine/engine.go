@@ -17,7 +17,7 @@ import (
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
-	"github.com/KurtPreston/docent/libs/grove"
+	"github.com/KurtPreston/docent/libs/worktree"
 	"github.com/KurtPreston/docent/libs/model"
 	"github.com/KurtPreston/docent/libs/prstatus"
 	"github.com/KurtPreston/docent/libs/sessionmanager"
@@ -343,12 +343,12 @@ func (e *Engine) Agents() (*agentsession.Manager, error) {
 	return e.agents, e.agentsErr
 }
 
-// GroveProjects lists the repositories an agent can be started in, so the
-// cockpit can offer starting work on a ticket that has no branch yet. Scanned on
-// demand rather than cached: cloning a new project is exactly the moment you
-// want it to appear, and the scan is two levels of ReadDir.
-func (e *Engine) GroveProjects() []grove.Project {
-	return grove.DiscoverProjects(collectors.LocalGitRoots(e.cfg.Directives))
+// Projects lists the repositories an agent can be started in, so the cockpit can
+// offer starting work on a ticket that has no branch yet. Scanned on demand
+// rather than cached: cloning a new repository is exactly the moment you want it
+// to appear, and the scan is two levels of ReadDir with no subprocesses.
+func (e *Engine) Projects() []worktree.Project {
+	return worktree.DiscoverProjects(collectors.LocalGitRoots(e.cfg.Directives))
 }
 
 // jiraBaseURL returns the first configured jira directive's base_url (trailing

@@ -153,7 +153,7 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 
 		// Worktrees of one repository share a single object store and ref set,
 		// so `git log --all` returns an identical commit set in every one of
-		// them (grove-style layouts keep 15+ worktrees side by side). Scan the
+		// them (a worktree project keeps 15+ side by side). Scan the
 		// history just once per shared store — keyed by the common git dir —
 		// rather than re-emitting (and re-walking) the same commits per
 		// worktree. Reflogs are handled per directory below, since HEAD's
@@ -625,7 +625,7 @@ func localGitRepositoryKey(ctx context.Context, abs string, opts *CollectOpts, d
 // parseGitRemoteToRepositoryKey returns the path portion of a remote URL as
 // host-relative repo identity (e.g. "org/repo"), or "" if the URL does not look
 // like a standard forge URL. It delegates to model so local-git, the forge
-// collectors, and grove project discovery all derive the same key from the same
+// collectors, and project discovery all derive the same key from the same
 // remote.
 func parseGitRemoteToRepositoryKey(raw string) string {
 	return model.RepoKeyFromRemote(raw)
@@ -636,7 +636,7 @@ func parseGitRemoteToRepositoryKey(raw string) string {
 //
 // This is the answer to "where does this developer keep code", which docent
 // needs beyond collection: provisioning an agent worktree means finding the
-// grove project for a repository, and these roots are where to look. It reads
+// local copy of a repository, and these roots are where to look. It reads
 // the configured values rather than the scan results, so a root that currently
 // holds nothing is still reported -- the caller is looking for projects, not for
 // the repositories local-git happened to find.
@@ -667,7 +667,7 @@ func LocalGitRoots(directives []userdata.Directive) []string {
 const localGitDefaultScanDepth = 1
 
 // localGitMaxScanDepth caps config.scan_depth. Two levels covers the layout
-// that motivated the option — a grove project root holding a bare `.base`
+// that motivated the option — a project root holding a bare repository
 // clone plus one worktree directory per branch — and the cap keeps a typo from
 // turning collection into a walk of the whole home directory.
 const localGitMaxScanDepth = 3
@@ -701,13 +701,13 @@ func localGitDepthSuffix(depth int) string {
 
 // localGitMissingRepoRemediation extends a "found nothing" remediation with the
 // scan_depth hint, but only while the scan is still at its default reach: a
-// grove project root looks empty to a one-level scan even though every worktree
+// project root looks empty to a one-level scan even though every worktree
 // under it is a repo, and that is the most likely reason to be reading this.
 func localGitMissingRepoRemediation(depth int, base string) string {
 	if depth > localGitDefaultScanDepth {
 		return base
 	}
-	return base + `; if the repos sit one level deeper (e.g. grove worktrees), set config.scan_depth: "2"`
+	return base + `; if the repos sit one level deeper (e.g. a project of worktrees), set config.scan_depth: "2"`
 }
 
 // appendLocalGitRepos collects the git working trees at or below dir, appending
@@ -715,7 +715,7 @@ func localGitMissingRepoRemediation(depth int, base string) string {
 //
 // A directory that is itself a working tree ends the descent: everything under
 // it is its own source tree, not separate repositories. Only a directory that
-// is NOT a repo gets opened up, which is exactly the shape of a grove project
+// is NOT a repo gets opened up, which is exactly the shape of a worktree project
 // root — a bare `.base` clone beside one worktree directory per branch, with no
 // `.git` of its own. Dot-directories are skipped while recursing, which is what
 // keeps `.base` out of the results.

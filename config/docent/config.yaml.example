@@ -38,7 +38,7 @@ directives:
     code_home: /Users/me/Code
     # Only the immediate children of code_home are checked by default. Set
     # scan_depth: "2" when the working trees sit one level deeper — e.g. a
-    # grove project whose worktrees are its subdirectories.
+    # project directory whose worktrees are its subdirectories.
     # config:
     #   scan_depth: "2"
 

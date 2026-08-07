@@ -28,10 +28,12 @@ type AgentRunner struct {
 	ClaudeCommand string
 	// Commenter is used when post.jira_comment is set.
 	Commenter IssueCommenter
-	// GroveRoots are the directories searched for the grove project that owns a
-	// repository, when the event carries no local path to infer one from. These
+	// Roots are the directories searched for the developer's own copy of a
+	// repository, when the event carries no local path pointing at one. These
 	// are the roots local-git already scans.
-	GroveRoots []string
+	Roots []string
+	// WorktreeHook is the per-worktree setup script run on a fresh checkout.
+	WorktreeHook string
 }
 
 func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
@@ -58,8 +60,8 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	// Serialize with any other agent action targeting the same working
 	// directory (e.g. a different rule matching the same PR) so they don't run
 	// concurrently in it. Two agents sharing a git index corrupt each other, and
-	// now that the worktree is the developer's own, the damage would be to real
-	// work rather than a scratch directory. Wait on a budget detached from the
+	// in open_path mode the damage would be to the developer's real work rather
+	// than a scratch directory. Wait on a budget detached from the
 	// incoming ctx so time spent blocked here isn't deducted from the run.
 	lockKey := worktreeLockKey(mode, actx.Repo, actx.Branch, actx.OpenPath)
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), worktreeAcquireTimeout)
@@ -77,15 +79,17 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	runCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
 
-	// The worktree is grove's and outlives the run: it is the developer's own
-	// checkout of the branch, so there is nothing to tear down afterwards.
+	// The worktree outlives the run. In docent's own tree that is what lets a
+	// session resume into it later; in open_path mode it is the developer's own
+	// checkout and was never docent's to tear down.
 	wd, err := ProvisionWorkdir(runCtx, WorkdirRequest{
-		Mode:       mode,
-		Repo:       actx.Repo,
-		Branch:     actx.Branch,
-		From:       baseRef,
-		OpenPath:   actx.OpenPath,
-		GroveRoots: r.GroveRoots,
+		Mode:     mode,
+		Repo:     actx.Repo,
+		Branch:   actx.Branch,
+		From:     baseRef,
+		OpenPath: actx.OpenPath,
+		Roots:    r.Roots,
+		Hook:     r.WorktreeHook,
 	})
 	if err != nil {
 		return err

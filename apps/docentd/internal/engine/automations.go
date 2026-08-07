@@ -162,9 +162,11 @@ func (e *Engine) wireAutomationConnectors() {
 		DefaultProvider: e.cfg.AI.Provider,
 		CursorCommand:   e.cfg.AI.Cursor.Command,
 		ClaudeCommand:   e.cfg.AI.Claude.Command,
-		// Agent worktrees come from grove, so the runner needs to know where the
-		// developer's grove projects live. The local-git roots are exactly that.
-		GroveRoots: collectors.LocalGitRoots(e.cfg.Directives),
+		// The runner needs to know where the developer's own copies of a
+		// repository live, to learn a clone URL and to reference its objects.
+		// The local-git roots are exactly that.
+		Roots:        collectors.LocalGitRoots(e.cfg.Directives),
+		WorktreeHook: e.cfg.WorktreeHook,
 		Commenter: automation.IssueCommenterFunc(func(ctx context.Context, issueKey, body string) error {
 			dir, ok := firstDirective(e.cfg.Directives, "jira")
 			if !ok {

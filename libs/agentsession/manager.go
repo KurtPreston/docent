@@ -23,8 +23,9 @@ type Manager struct {
 	// actually used; a missing one is an error at start rather than a panic.
 	Runners map[Provider]Runner
 	// Provision resolves the worktree a session runs in. It is a function rather
-	// than a grove dependency so the manager stays testable and so the policy
-	// for finding a project stays with the caller that knows the config.
+	// than a dependency on the provisioning package so the manager stays
+	// testable, and so the policy for where an agent runs stays with the caller
+	// that knows the config.
 	Provision func(ctx context.Context, req ProvisionRequest) (ProvisionResult, error)
 	// ForeignAgent reports an agent docent does not control -- an IDE window's
 	// own -- that appears to be working in dir, as a phrase to put in the error,
@@ -63,8 +64,11 @@ type ProvisionRequest struct {
 type ProvisionResult struct {
 	// Dir is the worktree the agent edits.
 	Dir string
-	// Project is the grove project that owns Dir, for display and for handoff.
+	// Project is the root that owns Dir, for display and for handoff.
 	Project string
+	// Owned reports that Dir is docent's own directory. Stated by whoever
+	// provisioned it rather than inferred here from the shape of a path.
+	Owned bool
 }
 
 type liveTurn struct {
@@ -94,7 +98,7 @@ type StartRequest struct {
 	OpenPath string
 	// Prompt, when set, is run as the opening turn.
 	Prompt string
-	// Color is the lane color, normally the branch's grove color.
+	// Color is the lane color, normally derived from the branch name.
 	Color string
 	// Force starts even when ForeignAgent says someone else is working in the
 	// worktree. It does not override docent's own in-flight turns.
@@ -148,7 +152,10 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 		return Session{}, err
 	}
 
-	dir, project := strings.TrimSpace(req.Dir), ""
+	// A caller-supplied directory is never docent's: it is an existing checkout
+	// somebody named, so ownership has to be claimed by a provisioner rather
+	// than assumed.
+	dir, project, owned := strings.TrimSpace(req.Dir), "", false
 	if dir == "" {
 		if m.Provision == nil {
 			return Session{}, errors.New("agentsession: no dir given and no provisioner configured")
@@ -159,7 +166,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 		if err != nil {
 			return Session{}, err
 		}
-		dir, project = res.Dir, res.Project
+		dir, project, owned = res.Dir, res.Project, res.Owned
 	}
 	if dir == "" {
 		return Session{}, errors.New("agentsession: provisioning produced no directory")
@@ -187,7 +194,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 	now := m.now()
 	sess := Session{
 		ID: id, Provider: provider, Model: req.Model, Title: req.Title,
-		Repo: req.Repo, Branch: req.Branch, Dir: dir, Project: project,
+		Repo: req.Repo, Branch: req.Branch, Dir: dir, Project: project, Owned: owned,
 		Color: req.Color, Status: StatusIdle, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := m.Store.Save(sess); err != nil {

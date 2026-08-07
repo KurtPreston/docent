@@ -15,7 +15,7 @@ import type {
   Cockpit as CockpitData,
   CockpitLane,
   DashboardSession,
-  GroveProject,
+  RepoProject,
   InboxItem,
   InboxKind,
 } from "../lib/types";
@@ -31,9 +31,9 @@ import type {
 
 const POLL_MS = 5000;
 
-// Lane colors come from the backend (model.ColorForName, the same hash grove
-// uses for branch title bars), so a lane in the rail is the same color as the
-// window it opens.
+// Lane colors come from the backend (model.ColorForName), which derives a
+// branch's color from its name, so a lane in the rail is the same color as the
+// editor window it opens.
 const ATTENTION_LABEL: Record<Attention, string> = {
   "agent-waiting": "agent done",
   "pr-my-turn": "your turn",
@@ -351,7 +351,7 @@ function LaneDetail({
   provider: string;
   inbox: InboxItem[];
   agent?: AgentSession;
-  projects: GroveProject[];
+  projects: RepoProject[];
   seed?: string;
   onSeed: (prompt: string) => void;
   onReload: () => void;
@@ -593,7 +593,7 @@ export function Cockpit() {
   const navigate = useNavigate();
   const [data, setData] = useState<CockpitData | null>(null);
   const [agents, setAgents] = useState<AgentSession[]>([]);
-  const [projects, setProjects] = useState<GroveProject[]>([]);
+  const [projects, setProjects] = useState<RepoProject[]>([]);
   const [auto, setAuto] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");

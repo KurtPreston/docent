@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/KurtPreston/docent/libs/grove"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 // WorkdirMode selects how an agent action provisions its working directory.
 const (
-	WorkdirWorktree = "worktree"  // a grove worktree in the developer's own project
+	WorkdirWorktree = "worktree"  // docent's own isolated worktree for the branch
 	WorkdirOpenPath = "open_path" // an existing checkout, used as-is
 )
 
@@ -20,46 +20,63 @@ type WorkdirRequest struct {
 	Mode   string // worktree | open_path
 	Repo   string // owner/repo
 	Branch string
-	// From is the ref a brand-new branch is based on. Empty means grove's
+	// From is the ref a brand-new branch is based on. Empty means the remote's
 	// default branch, which is right for fresh work and wrong for a backport.
 	From string
 	// OpenPath is a developer checkout. In open_path mode it is the directory to
-	// use; in worktree mode it is the best hint for which grove project to work
-	// in, since it is a worktree of the project already.
+	// use; in worktree mode it is the best evidence of which local copy this work
+	// item belongs to.
 	OpenPath string
-	// GroveRoots are directories to search for grove projects when OpenPath does
-	// not resolve one. These are the same roots local-git scans.
-	GroveRoots []string
-	// Grove overrides the CLI, for tests.
-	Grove grove.CLI
+	// Roots are directories to search for the developer's own copy of Repo --
+	// the same roots local-git scans.
+	Roots []string
+	// RemoteURL overrides where docent clones from, for a repository with no
+	// local copy to read an origin off.
+	RemoteURL string
+	// Hook is the per-worktree setup script run on a freshly created directory.
+	Hook string
+	// StateRoot overrides docent's state directory, for tests.
+	StateRoot string
 }
 
 // WorkdirResult is a provisioned working directory.
 type WorkdirResult struct {
 	// Path is the directory the agent runs in.
 	Path string
-	// ProjectDir is the grove project root that owns Path, empty in open_path
-	// mode. Callers that want grove's own view of the worktree start here.
+	// ProjectDir is the root that owns Path, empty in open_path mode.
 	ProjectDir string
+	// Owned reports that Path is docent's own directory: safe to commit into and
+	// to sync, as opposed to one the developer may have open in an editor.
+	Owned bool
+	// SetupErr is the setup hook's failure, if it had one. Not fatal.
+	SetupErr error
 }
 
 // ProvisionWorkdir resolves the working directory for an agent job.
 //
-// Worktree mode delegates to grove rather than provisioning anything itself.
-// docent used to keep its own bare clone and worktree tree under $STATE, which
-// meant the agent edited a checkout the developer had never opened, without the
-// per-worktree setup (copied .env files, the branch color the editor's title bar
-// uses) that makes a worktree usable. Now an agent lands in
-// ~/Code/<project>/<branch> -- the same directory a human would get -- so
-// promoting a session to an editor is opening a directory that is already right.
+// Worktree mode gives the agent a checkout of its own, under docent's state
+// directory, cloned from the same remote the developer uses. This is the third
+// answer docent has had to the question, and the reasoning behind each is worth
+// keeping:
 //
-// The tradeoff is that the repository must already be a grove project. That is
-// deliberate: cloning it silently is what produced the second universe, and
-// `grove clone` is a one-time act better left to the developer.
+// The first kept a second clone with no per-worktree setup, so the agent worked
+// in a directory the developer had never opened and could not use -- a parallel
+// universe. The second put the agent in the developer's own worktree, which
+// solved that and created two new problems: git allows one worktree per branch,
+// so an agent and a human could not hold the same branch at once, and an agent
+// rewriting files under an open editor is destructive in a way no amount of
+// care fixes.
 //
-// Nothing is cleaned up afterwards. These are the developer's real worktrees, and
-// deleting one because an agent finished with it would take uncommitted work with
-// it. Reclaiming space is `grove prune`, which understands what is merged.
+// This is not a return to the first. What made it a parallel universe is
+// addressed rather than tolerated: the developer's commits reach docent through
+// a local remote before every turn, docent's reach them when they ask to open
+// one, every turn ends in a commit so nothing is invisible, and a fork between
+// the two is refused rather than merged. Setup is a configured hook's job, which
+// is also the only honest place for it -- what makes a checkout usable is a
+// property of the repository, not something docent can infer.
+//
+// Nothing is cleaned up afterwards. docent owns everything under its state
+// directory, so unlike the second design a reclaim is at least possible later.
 func ProvisionWorkdir(ctx context.Context, req WorkdirRequest) (WorkdirResult, error) {
 	mode := strings.TrimSpace(req.Mode)
 	if mode == "" {
@@ -75,6 +92,8 @@ func ProvisionWorkdir(ctx context.Context, req WorkdirRequest) (WorkdirResult, e
 		if err != nil || !info.IsDir() {
 			return WorkdirResult{}, fmt.Errorf("open_path %q is not a directory: %w", path, err)
 		}
+		// The developer's directory. Everything keyed on Owned -- the turn-end
+		// commit, the divergence guard -- stays out of it.
 		return WorkdirResult{Path: path}, nil
 	case WorkdirWorktree:
 		return provisionWorktree(ctx, req)
@@ -84,43 +103,23 @@ func ProvisionWorkdir(ctx context.Context, req WorkdirRequest) (WorkdirResult, e
 }
 
 func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, error) {
-	branch := strings.TrimSpace(req.Branch)
-	if branch == "" {
-		return WorkdirResult{}, fmt.Errorf("workdir worktree requires Branch")
-	}
-	project, err := ResolveGroveProject(req.OpenPath, req.GroveRoots, req.Repo)
+	res, err := worktree.Resolve(ctx, worktree.Request{
+		Repo:      req.Repo,
+		Branch:    req.Branch,
+		BaseRef:   req.From,
+		OpenPath:  req.OpenPath,
+		Roots:     req.Roots,
+		RemoteURL: req.RemoteURL,
+		Hook:      req.Hook,
+		StateRoot: req.StateRoot,
+	})
 	if err != nil {
 		return WorkdirResult{}, err
 	}
-	path, err := req.Grove.Path(ctx, project, branch, req.From)
-	if err != nil {
-		return WorkdirResult{}, err
-	}
-	return WorkdirResult{Path: path, ProjectDir: project}, nil
-}
-
-// ResolveGroveProject finds the grove project an agent should work in.
-//
-// openPath wins when it resolves, because it is evidence about this specific
-// work item rather than an inference from a repo name: it is the worktree the
-// developer's own activity happened in. Only when there is none -- the common
-// case for a PR event with no local commits -- does it fall back to matching the
-// repository against the configured roots.
-func ResolveGroveProject(openPath string, roots []string, repo string) (string, error) {
-	if dir, ok := grove.FindProject(openPath); ok {
-		return dir, nil
-	}
-	if dir, ok := grove.ProjectForRepo(roots, repo); ok {
-		return dir, nil
-	}
-	switch {
-	case strings.TrimSpace(repo) == "":
-		return "", fmt.Errorf("workdir worktree: no grove project found (no open path, and no repo to look one up by)")
-	case len(roots) == 0:
-		return "", fmt.Errorf("workdir worktree: no grove project for %q, and no roots to search "+
-			"(set code_home or paths on a local-git directive)", repo)
-	default:
-		return "", fmt.Errorf("workdir worktree: no grove project for %q under %s "+
-			"(clone it with `grove clone`)", repo, strings.Join(roots, ", "))
-	}
+	return WorkdirResult{
+		Path:       res.Dir,
+		ProjectDir: res.Project,
+		Owned:      res.Owned,
+		SetupErr:   res.SetupErr,
+	}, nil
 }

@@ -241,8 +241,8 @@ export type AgentEvent = {
   at: string;
 };
 
-/** A grove project from GET /api/projects: somewhere an agent can be started. */
-export type GroveProject = {
+/** A repository from GET /api/projects: somewhere an agent can be started. */
+export type RepoProject = {
   repo: string;
   dir: string;
   name: string;

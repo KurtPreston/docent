@@ -32,14 +32,20 @@ type DaemonConfig struct {
 	// read from (or would be written to if it doesn't exist yet). Set by
 	// Load; used by the Settings page's config API so it edits the exact
 	// same docentd.yaml the running daemon loaded.
-	DaemonConfigPath string               `yaml:"-"`
-	BindHost         string               `yaml:"bindHost"`              // listen interface; default 0.0.0.0 when token set, else 127.0.0.1
-	UserdataDir      string               `yaml:"userdataDir,omitempty"` // deprecated alias for configDir
-	ExtraConfig      string               `yaml:"extraConfig,omitempty"` // optional extra config file merged in
-	WSMURL           string               `yaml:"wsmUrl"`                // local wsm URL injected into dashboard
-	OnClickScript    string               `yaml:"onClickScript"`         // hook run when a work-item is launched from the dashboard
-	SSHHost          string               `yaml:"sshHost"`               // optional ssh alias for remote editor open (DOCENT_HOST)
-	Directives       []userdata.Directive `yaml:"directives,omitempty"`
+	DaemonConfigPath string `yaml:"-"`
+	BindHost         string `yaml:"bindHost"`              // listen interface; default 0.0.0.0 when token set, else 127.0.0.1
+	UserdataDir      string `yaml:"userdataDir,omitempty"` // deprecated alias for configDir
+	ExtraConfig      string `yaml:"extraConfig,omitempty"` // optional extra config file merged in
+	WSMURL           string `yaml:"wsmUrl"`                // local wsm URL injected into dashboard
+	OnClickScript    string `yaml:"onClickScript"`         // hook run when a work-item is launched from the dashboard
+	// WorktreeHook is run once in every working directory docent creates, and is
+	// the only place per-repository setup lives: the ignored files a checkout
+	// needs, the dependency install, whatever else makes a fresh tree usable.
+	// docent cannot know any of that, and the alternative to a hook was handing
+	// creation to a tool that did, which put placement outside git.
+	WorktreeHook string               `yaml:"worktreeHook"`
+	SSHHost      string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
+	Directives   []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI and
 	// OpenTrigger are optional.
@@ -81,7 +87,11 @@ func Load(path string) (DaemonConfig, error) {
 	if v := os.Getenv("DOCENT_ONCLICK"); v != "" {
 		cfg.OnClickScript = v
 	}
+	if v := os.Getenv("DOCENT_WORKTREE_HOOK"); v != "" {
+		cfg.WorktreeHook = v
+	}
 	cfg.OnClickScript = resolveOnClickScript(cfg)
+	cfg.WorktreeHook = resolveWorktreeHook(cfg)
 	return cfg, nil
 }
 
@@ -92,6 +102,17 @@ func resolveOnClickScript(cfg DaemonConfig) string {
 		return cfg.OnClickScript
 	}
 	return filepath.Join(docentconfig.DefaultDir(), "onclick.sh")
+}
+
+// resolveWorktreeHook returns the per-worktree setup hook path, defaulting to
+// ~/.config/docent/worktree.sh. The default is a path rather than nothing so the
+// hook can be adopted by writing the file, with no config change; a path that
+// does not exist simply means no setup.
+func resolveWorktreeHook(cfg DaemonConfig) string {
+	if cfg.WorktreeHook != "" {
+		return cfg.WorktreeHook
+	}
+	return filepath.Join(docentconfig.DefaultDir(), "worktree.sh")
 }
 
 // ResolveBindHost picks the listen interface. Precedence: an explicit -host

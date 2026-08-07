@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -150,14 +151,23 @@ func SamePath(a, b string) bool {
 
 // gitOutput runs git in dir and returns its stdout, folding stderr into the
 // error because git explains itself there and nowhere else.
+//
+// The child gets its own process group: a fetch killed on a timeout must not
+// leave a git process behind holding the repository lock, which would fail every
+// later command for a reason that no longer exists. stdin is closed so a
+// credential prompt fails immediately instead of waiting for a terminal that is
+// not there.
 func gitOutput(ctx context.Context, dir string, timeout time.Duration, args ...string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Stdin = nil
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	configureProcGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Run(); err != nil {
 		if cctx.Err() == context.DeadlineExceeded {
@@ -168,6 +178,12 @@ func gitOutput(ctx context.Context, dir string, timeout time.Duration, args ...s
 			strings.Join(args, " "), dir, err, detail(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+// gitRun is gitOutput for a command whose output is not wanted.
+func gitRun(ctx context.Context, dir string, timeout time.Duration, args ...string) error {
+	_, err := gitOutput(ctx, dir, timeout, args...)
+	return err
 }
 
 func detail(s string) string {

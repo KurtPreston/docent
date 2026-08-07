@@ -368,7 +368,7 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .inbox { border-left: 1px solid var(--border); padding: 10px; }
 .empty.small { padding: 20px 10px; font-size: 12.5px; }
 
-/* A lane's left border carries its grove color, matching the title bar of the
+/* A lane's left border carries its branch color, matching the title bar of the
    window it opens. */
 .lane {
   display: flex; flex-direction: column; gap: 4px; width: 100%;

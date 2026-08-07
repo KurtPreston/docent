@@ -20,7 +20,7 @@ import type {
   AgentSession,
   AgentEvent,
   AgentStartRequest,
-  GroveProject,
+  RepoProject,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -133,15 +133,15 @@ async function streamJSON<T>(
 export const streamReport = (id: string, h: StreamReportHandlers): Promise<void> =>
   streamJSON<ReportEvent>("/api/report/" + encodeURIComponent(id) + "/stream", h.onEvent, h.signal);
 
-// Agent sessions. Starting one provisions a grove worktree, which fetches from
-// the remote, so startAgent can take a while; the turn itself runs in the
-// background and is watched through streamAgent.
+// Agent sessions. Starting one provisions a worktree, which the first time a
+// repository is seen means cloning it, so startAgent can take a while; the turn
+// itself runs in the background and is watched through streamAgent.
 
 export const fetchAgents = (): Promise<AgentSession[]> =>
   getJSON<{ sessions: AgentSession[] }>("/api/agents").then((r) => r.sessions ?? []);
 
-export const fetchProjects = (): Promise<GroveProject[]> =>
-  getJSON<{ projects: GroveProject[] }>("/api/projects").then((r) => r.projects ?? []);
+export const fetchProjects = (): Promise<RepoProject[]> =>
+  getJSON<{ projects: RepoProject[] }>("/api/projects").then((r) => r.projects ?? []);
 
 /** A refusal the user can overrule, e.g. an editor's own agent already working
  * in the worktree. `conflict` is what the UI keys off: matching on message text

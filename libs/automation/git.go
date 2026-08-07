@@ -9,7 +9,7 @@ import (
 
 // runGit runs a git command in dir, folding its output into the error so a
 // failure explains itself. Used by the post-steps (commit, push) that follow an
-// agent turn; provisioning the worktree itself is grove's job.
+// agent turn; provisioning the worktree itself is libs/worktree's job.
 func runGit(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

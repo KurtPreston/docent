@@ -122,7 +122,7 @@ type CockpitLane struct {
 	// which the UI groups the queue by so each project's workflow names appear
 	// as-is rather than being mapped onto docent's vocabulary.
 	JiraStatus string `json:"jiraStatus,omitempty"`
-	// Color is the grove-compatible branch color, so a lane in the cockpit
+	// Color is the branch's color, so a lane in the cockpit
 	// matches the title bar of the window it opens.
 	Color         string `json:"color,omitempty"`
 	FG            string `json:"fg,omitempty"`

@@ -88,10 +88,10 @@ func TestLocalGitValidateRunsGitProbe(t *testing.T) {
 	}
 }
 
-// A grove project root — a bare `.base` clone plus one worktree directory per
+// A worktree project root — a bare clone plus one worktree directory per
 // branch, and no `.git` of its own — reads as "not a git working tree" at the
 // default depth, and as a perfectly good scan root at scan_depth 2.
-func TestLocalGitValidateGroveProjectNeedsScanDepth(t *testing.T) {
+func TestLocalGitValidateWorktreeProjectNeedsScanDepth(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git binary unavailable")
 	}

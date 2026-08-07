@@ -18,7 +18,7 @@ import (
 const vscodeGitTimeout = 30 * time.Second
 
 // vscodeColorCustomizations returns the workbench.colorCustomizations keys
-// docent owns. They mirror grove's editor theming so a repo opened by either
+// docent owns. They mirror the usual per-worktree editor theming so a repo opened by either
 // tool looks the same. These keys are overwritten authoritatively on each sync
 // (a work item's color can change), while any other keys in the file are left
 // untouched.
@@ -85,7 +85,7 @@ func SyncVSCodeColor(dir, hex, fg string) error {
 // addLocalGitExclude adds pattern to the repo's info/exclude so docent's
 // generated settings.json doesn't show up as dirty in `git status`. It is a
 // best-effort no-op outside a git repo, when the file is already tracked, or
-// when the pattern is already excluded (mirrors grove's project.AddLocalExclude
+// when the pattern is already excluded (the same rule any such helper needs
 // without the cross-module dependency).
 func addLocalGitExclude(dir, pattern string) {
 	if gitQuiet(dir, "ls-files", "--error-unmatch", strings.TrimPrefix(pattern, "/")) {

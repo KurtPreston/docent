@@ -94,7 +94,7 @@ func TestStartIsRefusedWhileAnEditorAgentHoldsTheWorktree(t *testing.T) {
 	}
 }
 
-// With no local-git roots configured there are no grove projects, but the
+// With no local-git roots configured there are no projects, but the
 // endpoint must still answer with a list rather than null: the picker binds to
 // it directly.
 func TestProjectsAlwaysReturnsAList(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/agentsession"
-	"github.com/KurtPreston/docent/libs/grove"
+	"github.com/KurtPreston/docent/libs/worktree"
 	"github.com/KurtPreston/docent/libs/model"
 )
 
@@ -37,7 +37,8 @@ type agentTurnRequest struct {
 }
 
 // provisionTimeout bounds the part of a start request the caller waits on:
-// resolving the grove worktree, which fetches from the remote. The turn itself
+// resolving the worktree, which the first time a repository is seen means
+// cloning it. The turn itself
 // runs in the background and is not covered by this.
 const provisionTimeout = 5 * time.Minute
 
@@ -96,7 +97,7 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 		OpenPath: strings.TrimSpace(req.OpenPath),
 		Prompt:   req.Prompt,
 		Force:    req.Force,
-		// The lane's color is the branch's grove color, so a cockpit lane and
+		// The lane's color is derived from the branch name, so a cockpit lane and
 		// the editor title bar for the same branch agree.
 		Color: model.ColorForName(branch),
 	})
@@ -107,7 +108,7 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "session": agentView(sess)})
 }
 
-// projectsAPI lists the grove projects an agent can be started in. The cockpit
+// projectsAPI lists the repositories an agent can be started in. The cockpit
 // needs it to offer "start work on this ticket", where there is a repository to
 // choose but no branch yet.
 func (s *Server) projectsAPI(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +125,7 @@ func (s *Server) projectsAPI(w http.ResponseWriter, r *http.Request) {
 	// One per repository, and the one provisioning would actually pick: a second
 	// clone of the same repo (a ~/Code/salsa2) is not a different choice, just a
 	// duplicate option that does the same thing.
-	for _, p := range grove.UniqueByRepo(s.engine.GroveProjects()) {
+	for _, p := range worktree.UniqueByRepo(s.engine.Projects()) {
 		out = append(out, projectView{Repo: p.Repo, Dir: p.Dir, Name: filepath.Base(p.Dir)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})

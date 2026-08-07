@@ -11,7 +11,7 @@ import {
 import { openWSMPath } from "../lib/sessions";
 import { errMsg, timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
-import type { AgentEvent, AgentSession, AgentStartRequest, GroveProject } from "../lib/types";
+import type { AgentEvent, AgentSession, AgentStartRequest, RepoProject } from "../lib/types";
 
 // The agent panel is the cockpit's centerpiece: a lane's agent runs here, in the
 // browser, instead of in a Cursor window you have to go find. It shows the live
@@ -137,11 +137,11 @@ function Transcript({ blocks, busy }: { blocks: Block[]; busy: boolean }) {
 export type AgentPanelProps = {
   /** The session for this lane, when one exists. */
   session?: AgentSession;
-  /** Where a new session runs; the branch is resolved to a grove worktree. */
+  /** Where a new session runs; the branch is resolved to a worktree. */
   start: Omit<AgentStartRequest, "prompt">;
   /** Repositories to choose from when the lane has no branch yet (a ticket
    * nobody has started). Omitted once the target is already known. */
-  projects?: GroveProject[];
+  projects?: RepoProject[];
   /** Branch to propose for that case, e.g. derived from the ticket key. */
   suggestBranch?: string;
   /** Prefilled first prompt, e.g. seeded from an inbox item. */
@@ -414,7 +414,7 @@ export function AgentPanel({
               ? running
                 ? "One turn at a time — wait for this one to finish."
                 : "Reply to the agent…"
-              : "Describe the work. A grove worktree is created for the branch."
+              : "Describe the work. A worktree is created for the branch."
           }
           disabled={busy || running}
         />

@@ -401,7 +401,7 @@ func TestBuildWorkItems_backportResolvesTicketViaPRNumber(t *testing.T) {
 }
 
 // TestBuildWorkItems_leakedCommitsDontPolluteTickets reproduces the
-// SALSA-12684 scenario: `git log --all --source` over a shared grove
+// SALSA-12684 scenario: `git log --all --source` over a shared worktree-project
 // worktree can misattribute unrelated commits (each naming a different,
 // genuinely real ticket) to this branch. Because the branch name itself
 // names its own ticket, that alone must win — the leaked commits' distinct,

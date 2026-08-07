@@ -10,8 +10,8 @@ import (
 // forge URL.
 //
 // This is the key everything in docent joins on: the GitHub and Gitea
-// collectors report it directly, local-git derives it from origin, and grove
-// project discovery matches on it. All three must agree on the shape or the same
+// collectors report it directly, local-git derives it from origin, and project
+// discovery matches on it. All three must agree on the shape or the same
 // repository appears as two, so the parsing lives here rather than in each.
 //
 // Both remote spellings are accepted, since one machine routinely has both: SCP
