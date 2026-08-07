@@ -61,6 +61,9 @@ func (c Claude) Turn(ctx context.Context, req TurnRequest, emit func(Event)) (Tu
 	if err := validate(req); err != nil {
 		return TurnResult{}, err
 	}
+	// req.Mode is ignored: Claude's plan permission mode has no headless approval
+	// round-trip, so a turn that needs a decision would stall for the same reason
+	// acceptEdits is the only workable PermissionMode here.
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTurnTimeout

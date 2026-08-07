@@ -64,6 +64,29 @@ const (
 	ProviderCursor Provider = "cursor"
 )
 
+// Mode is cursor-agent's execution mode. Claude ignores it.
+type Mode string
+
+const (
+	// ModeAgent is the default agent mode. cursor-agent has no --mode agent flag,
+	// so this is expressed by omitting --mode entirely.
+	ModeAgent Mode = ""
+	ModePlan  Mode = "plan"
+	ModeAsk   Mode = "ask"
+)
+
+// ParseMode validates a mode string for API and config input. cursor-agent
+// silently ignores unknown flags, so bad values must be caught here.
+func ParseMode(s string) (Mode, error) {
+	m := Mode(strings.ToLower(strings.TrimSpace(s)))
+	switch m {
+	case ModeAgent, ModePlan, ModeAsk:
+		return m, nil
+	default:
+		return "", fmt.Errorf("agentsession: unknown mode %q (want plan or ask)", s)
+	}
+}
+
 // EventKind is the normalized vocabulary both CLIs are translated into.
 type EventKind string
 
@@ -147,6 +170,8 @@ type TurnRequest struct {
 	AllowedTools []string
 	// Model overrides the CLI default.
 	Model string
+	// Mode selects cursor-agent's execution mode. Claude ignores it.
+	Mode Mode
 	// Timeout bounds the turn. Zero means DefaultTurnTimeout.
 	Timeout time.Duration
 }

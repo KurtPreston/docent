@@ -105,6 +105,9 @@ func cursorArgs(req TurnRequest) []string {
 	if m := strings.TrimSpace(req.Model); m != "" {
 		args = append(args, "--model", m)
 	}
+	if req.Mode != ModeAgent {
+		args = append(args, "--mode", string(req.Mode))
+	}
 	return args
 }
 

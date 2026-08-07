@@ -455,6 +455,50 @@ func TestCursorAlwaysResumes(t *testing.T) {
 	}
 }
 
+func TestCursorArgsPassesMode(t *testing.T) {
+	args := cursorArgs(TurnRequest{SessionID: "chat-1", Mode: ModePlan})
+	if !sliceHasPair(args, "--mode", "plan") {
+		t.Fatalf("args = %v, want --mode plan", args)
+	}
+	args = cursorArgs(TurnRequest{SessionID: "chat-1", Mode: ModeAgent})
+	if indexOf(args, "--mode") >= 0 {
+		t.Fatalf("agent mode should omit --mode: %v", args)
+	}
+}
+
+func TestParseMode(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Mode
+		ok   bool
+	}{
+		{"", ModeAgent, true},
+		{"plan", ModePlan, true},
+		{"ASK", ModeAsk, true},
+		{"wat", "", false},
+	} {
+		got, err := ParseMode(tc.in)
+		if tc.ok && err != nil {
+			t.Errorf("ParseMode(%q) = %v", tc.in, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("ParseMode(%q) wanted error", tc.in)
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("ParseMode(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func sliceHasPair(hay []string, key, val string) bool {
+	for i := 0; i+1 < len(hay); i++ {
+		if hay[i] == key && hay[i+1] == val {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCursorNewSessionParsesTheID(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-cursor")

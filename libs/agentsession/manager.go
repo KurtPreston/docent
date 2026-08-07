@@ -106,6 +106,7 @@ type liveTurn struct {
 type StartRequest struct {
 	Provider Provider
 	Model    string
+	Mode     Mode
 	Title    string
 	Repo     string
 	Branch   string
@@ -224,7 +225,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 
 	now := m.now()
 	sess := Session{
-		ID: id, Provider: provider, Model: req.Model, Title: req.Title,
+		ID: id, Provider: provider, Model: req.Model, Mode: req.Mode, Title: req.Title,
 		Repo: req.Repo, Branch: req.Branch, Dir: dir, Project: project, Owned: owned,
 		Color: req.Color, Status: StatusIdle, CreatedAt: now, UpdatedAt: now,
 	}
@@ -256,6 +257,24 @@ func (m *Manager) Turn(id, prompt string) error {
 // inferred, and there is nothing to weigh.
 func (m *Manager) TurnForce(id, prompt string) error {
 	return m.turn(id, prompt, true)
+}
+
+// SetMode updates a session's cursor-agent execution mode. Refused while a turn
+// is running, because the flag is per-invocation and the current process is
+// already in flight.
+func (m *Manager) SetMode(id string, mode Mode) (Session, error) {
+	if _, err := m.Store.Get(id); err != nil {
+		return Session{}, err
+	}
+	m.mu.Lock()
+	if _, running := m.live[id]; running {
+		m.mu.Unlock()
+		return Session{}, fmt.Errorf("%w (session %s)", ErrBusy, id)
+	}
+	m.mu.Unlock()
+	return m.Store.Update(id, func(s *Session) {
+		s.Mode = mode
+	})
 }
 
 func (m *Manager) turn(id, prompt string, force bool) error {
@@ -341,6 +360,7 @@ func (m *Manager) runTurn(ctx context.Context, lt *liveTurn, runner Runner, sess
 		First:        sess.Turns == 0,
 		AllowedTools: m.AllowedTools,
 		Model:        sess.Model,
+		Mode:         sess.Mode,
 		Timeout:      m.TurnTimeout,
 	}, func(ev Event) {
 		if ev.SessionID == "" {

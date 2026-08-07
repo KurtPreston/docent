@@ -197,3 +197,49 @@ func TestOverridableRefusalsCarryAConflictMarker(t *testing.T) {
 		})
 	}
 }
+
+func TestStartRejectsUnknownMode(t *testing.T) {
+	h := newTestServer(t, "")
+	rr := doJSON(t, h, http.MethodPost, "/api/agents", "", `{"branch":"fix","mode":"wat","prompt":"hi"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("start = %d, want 400\n%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestPatchSessionMode(t *testing.T) {
+	h := newTestServer(t, "")
+	dir := t.TempDir()
+	rr := doJSON(t, h, http.MethodPost, "/api/agents", "", fmt.Sprintf(`{"dir":%q,"provider":"cursor"}`, dir))
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("start = %d\n%s", rr.Code, rr.Body.String())
+	}
+	var start struct {
+		Session agentSessionView `json:"session"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &start); err != nil {
+		t.Fatal(err)
+	}
+	id := start.Session.ID
+	if id == "" {
+		t.Fatal("start returned no session id")
+	}
+
+	rr = doJSON(t, h, http.MethodPatch, "/api/agents/"+id, "", `{"mode":"plan"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch = %d\n%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Session agentSessionView `json:"session"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Session.Mode != "plan" {
+		t.Errorf("mode = %q, want plan", got.Session.Mode)
+	}
+
+	rr = doJSON(t, h, http.MethodPatch, "/api/agents/"+id, "", `{"mode":"nope"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("bad mode patch = %d, want 400\n%s", rr.Code, rr.Body.String())
+	}
+}

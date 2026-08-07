@@ -921,3 +921,57 @@ func TestAfterTurnFailureIsRecordedNotFatal(t *testing.T) {
 		t.Error("the commit failure is nowhere in the transcript")
 	}
 }
+
+func TestModePersistsAcrossTurns(t *testing.T) {
+	r := &fakeRunner{provider: ProviderCursor}
+	m := newManager(t, r)
+	if _, err := m.Start(context.Background(), StartRequest{
+		Provider: ProviderCursor, Mode: ModePlan, Prompt: "go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusIdle)
+	if reqs := r.requests(); len(reqs) != 1 || reqs[0].Mode != ModePlan {
+		t.Fatalf("opening turn mode = %+v", reqs)
+	}
+	sess, err := m.Get("sess-1")
+	if err != nil || sess.Mode != ModePlan {
+		t.Fatalf("session mode = %+v (err %v)", sess, err)
+	}
+	if err := m.Turn("sess-1", "again"); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusIdle)
+	if reqs := r.requests(); len(reqs) != 2 || reqs[1].Mode != ModePlan {
+		t.Fatalf("follow-up mode = %+v", reqs)
+	}
+}
+
+func TestSetModeRefusedMidTurn(t *testing.T) {
+	release := make(chan struct{})
+	r := &fakeRunner{provider: ProviderCursor}
+	r.turn = func(ctx context.Context, _ TurnRequest, _ func(Event)) (TurnResult, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return TurnResult{Text: "ok"}, nil
+	}
+	m := newManager(t, r)
+	if _, err := m.Start(context.Background(), StartRequest{Provider: ProviderCursor, Prompt: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusRunning)
+	if _, err := m.SetMode("sess-1", ModeAsk); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy", err)
+	}
+	close(release)
+	waitStatus(t, m, "sess-1", StatusIdle)
+	sess, err := m.SetMode("sess-1", ModeAsk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Mode != ModeAsk {
+		t.Errorf("mode = %q, want ask", sess.Mode)
+	}
+}

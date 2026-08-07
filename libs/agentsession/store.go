@@ -39,6 +39,7 @@ type Session struct {
 	ID       string   `json:"id"`
 	Provider Provider `json:"provider"`
 	Model    string   `json:"model,omitempty"`
+	Mode     Mode     `json:"mode,omitempty"`
 	// Title is a human label for the lane, usually the ticket or PR it came from.
 	Title string `json:"title,omitempty"`
 	Repo  string `json:"repo,omitempty"`

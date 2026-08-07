@@ -19,6 +19,7 @@ import (
 type agentStartRequest struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	Mode     string `json:"mode"`
 	Title    string `json:"title"`
 	Repo     string `json:"repo"`
 	Branch   string `json:"branch"`
@@ -35,6 +36,10 @@ type agentStartRequest struct {
 type agentTurnRequest struct {
 	Prompt string `json:"prompt"`
 	Force  bool   `json:"force"`
+}
+
+type agentPatchRequest struct {
+	Mode string `json:"mode"`
 }
 
 // provisionTimeout bounds the part of a start request the caller waits on:
@@ -81,6 +86,11 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 	if provider == "" {
 		provider = agentsession.ProviderClaude
 	}
+	mode, err := agentsession.ParseMode(req.Mode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
 
 	// Detached from the request: a client that gives up mid-fetch should not
 	// abort a worktree checkout that is already underway.
@@ -90,6 +100,7 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.agents.Start(ctx, agentsession.StartRequest{
 		Provider: provider,
 		Model:    strings.TrimSpace(req.Model),
+		Mode:     mode,
 		Title:    strings.TrimSpace(req.Title),
 		Repo:     strings.TrimSpace(req.Repo),
 		Branch:   branch,
@@ -108,6 +119,25 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "session": agentView(sess)})
+}
+
+func (s *Server) agentPatch(w http.ResponseWriter, r *http.Request, id string) {
+	var req agentPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
+		return
+	}
+	mode, err := agentsession.ParseMode(req.Mode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	sess, err := s.agents.SetMode(id, mode)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session": agentView(sess)})
 }
 
 // projectsAPI lists the repositories an agent can be started in. The cockpit
@@ -201,6 +231,8 @@ func (s *Server) agentsSub(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session": agentView(sess)})
+		case http.MethodPatch:
+			s.agentPatch(w, r, id)
 		case http.MethodDelete:
 			if err := s.agents.Delete(id); err != nil {
 				writeJSON(w, agentErrorStatus(err), map[string]any{"ok": false, "error": err.Error()})
@@ -405,6 +437,7 @@ type agentSessionView struct {
 	ID         string                   `json:"id"`
 	Provider   string                   `json:"provider"`
 	Model      string                   `json:"model,omitempty"`
+	Mode       string                   `json:"mode,omitempty"`
 	Title      string                   `json:"title,omitempty"`
 	Repo       string                   `json:"repo,omitempty"`
 	Branch     string                   `json:"branch,omitempty"`
@@ -421,7 +454,7 @@ type agentSessionView struct {
 
 func agentView(s agentsession.Session) agentSessionView {
 	return agentSessionView{
-		ID: s.ID, Provider: string(s.Provider), Model: s.Model, Title: s.Title,
+		ID: s.ID, Provider: string(s.Provider), Model: s.Model, Mode: string(s.Mode), Title: s.Title,
 		Repo: s.Repo, Branch: s.Branch, Dir: s.Dir, Project: s.Project,
 		Color: s.Color, Status: string(s.Status), Error: s.Error, Turns: s.Turns,
 		LastResult: s.LastResult,
