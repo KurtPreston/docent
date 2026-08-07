@@ -14,6 +14,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 // gitSem bounds concurrent git subprocesses across all collector goroutines, so
@@ -143,12 +144,12 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 		if repoTicket == "" {
 			repoTicket = correlation.ScanTicketKey(filepath.Base(abs), corrCfg)
 		}
-		// When this repo has sibling worktrees sharing its refs (grove-style
-		// layouts), a commit surfaced by `git log --all` may belong to a
-		// branch checked out elsewhere. Map branch -> owning worktree so each
-		// row is tagged with the directory that actually holds its branch,
-		// not whichever worktree we happen to be scanning.
-		worktrees := localGitWorktreeBranches(ctx, abs, opts, directive.ID)
+		// When this repo has sibling worktrees sharing its refs, a commit
+		// surfaced by `git log --all` may belong to a branch checked out
+		// elsewhere. The layout maps branch -> owning worktree so each row is
+		// tagged with the directory that actually holds its branch, not
+		// whichever worktree we happen to be scanning.
+		layout := localGitWorktreeLayout(ctx, abs, opts, directive.ID)
 
 		// Worktrees of one repository share a single object store and ref set,
 		// so `git log --all` returns an identical commit set in every one of
@@ -203,17 +204,18 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				// `git log --all` surfaces commits from every branch, including
 				// ones checked out in a sibling worktree or on no worktree at
 				// all (a merged/backport branch, a squash-merge reachable only
-				// from a release ref). In a grove-style repo the scanned dir is
-				// just the alphabetically-first sibling, so tagging those
-				// commits with it points the dashboard's "Open" at an unrelated
-				// worktree and makes every worktreeless branch look like it
-				// lives there. Only trust the scanned dir when there is a single
-				// worktree (an ordinary clone, whose one working tree is the
-				// home for all its branches); otherwise require a real worktree
-				// match and leave the path empty when the branch has none.
-				commitDir := worktrees[ci.branch]
-				if commitDir == "" && len(worktrees) <= 1 {
-					commitDir = abs
+				// from a release ref). In a project whose children are worktrees
+				// the scanned dir is just the alphabetically-first sibling, so
+				// tagging those commits with it points the dashboard's "Open" at
+				// an unrelated worktree and makes every worktreeless branch look
+				// like it lives there. Fall back to the repository's own primary
+				// working tree instead — an ordinary clone's one checkout is the
+				// home for all its branches — which is nothing at all when the
+				// repository is bare, and in either case does not depend on which
+				// sibling the scan started from.
+				commitDir := layout.ByBranch[ci.branch]
+				if commitDir == "" {
+					commitDir = layout.Home()
 				}
 				item := buildLocalGitCommitItem(directive.ID, repoLabel, commitDir, ci, dirs)
 				if t := localGitTicket(ci.subject, repoTicket, corrCfg); t != "" {
@@ -282,10 +284,21 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				"gd":         gd,
 				"gs":         gs,
 			}
+			// A reflog row's own action happened in the scanned directory, but
+			// the branch it names may live somewhere else entirely: `checkout:
+			// moving from release/next to salsa-12761-x` is recorded in the
+			// worktree you left, and correlation takes the FIRST path among a
+			// work item's commit and reflog entities. So a row left tagged with
+			// the scanned directory re-supplies the wrong path and undoes the
+			// commit-side attribution above.
 			if b := localGitReflogBranch(gd, gs); b != "" {
 				fields["branch"] = b
-				if wt := worktrees[b]; wt != "" {
+				if wt := layout.ByBranch[b]; wt != "" {
 					fields["path"] = wt
+				} else if home := layout.Home(); home != "" {
+					fields["path"] = home
+				} else {
+					delete(fields, "path")
 				}
 			}
 			// Reflog subjects like "checkout: moving from main to salsa-123"
@@ -461,17 +474,11 @@ func commitDisplayLabel(commitDir, branch, repoLabel string) string {
 }
 
 // normalizeGitRef maps a git log --source ref to a local branch name, or ""
-// when the ref is not a local branch (remote, tag, detached, etc.).
+// when the ref is not a local branch (remote, tag, detached, etc.). Commit
+// sources and worktree listings have to agree on what a branch is called, or a
+// commit's branch never matches the worktree holding it.
 func normalizeGitRef(ref string) string {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return ""
-	}
-	const heads = "refs/heads/"
-	if strings.HasPrefix(ref, heads) {
-		return strings.TrimPrefix(ref, heads)
-	}
-	return ""
+	return worktree.BranchName(ref)
 }
 
 // localGitReflogBranch derives a branch name from reflog gd/gs fields.
@@ -521,41 +528,28 @@ func parseReflogTime(gd string) (time.Time, bool) {
 	return t, true
 }
 
-// localGitWorktreeBranches maps each local branch name to the absolute path of
-// the worktree that currently has it checked out, via `git worktree list
-// --porcelain`. Grove-style setups keep many worktrees of one repository side
-// by side under code_home, all sharing a single object store and refs, so `git
-// log --all` run in ANY worktree lists commits from EVERY branch — tagged,
-// misleadingly, with the scanned worktree's own path. Resolving a commit's
-// branch back to the worktree that actually holds it keeps a work item's
-// open-path pointed at the right directory instead of whichever sibling
-// worktree happened to be scanned first (alphabetically). Bare and detached
-// worktrees carry no branch line and are skipped; an ordinary single-worktree
-// repo yields exactly one entry. Returns nil on error so callers fall back to
-// the scanned path unchanged.
-func localGitWorktreeBranches(ctx context.Context, abs string, opts *CollectOpts, directiveID string) map[string]string {
+// localGitWorktreeLayout asks git where each of a repository's branches is
+// checked out, and which directory is its own primary working tree.
+//
+// A project whose children are worktrees keeps many working trees of one
+// repository side by side under code_home, all sharing a single object store and
+// refs, so `git log --all` run in ANY worktree lists commits from EVERY branch —
+// tagged, misleadingly, with the scanned worktree's own path. Resolving a
+// commit's branch back to the worktree that actually holds it keeps a work
+// item's open-path pointed at the right directory instead of whichever sibling
+// happened to be scanned first (alphabetically).
+//
+// The command runs through the collector's own git wrapper — logging, the
+// concurrency cap, GIT_NO_LAZY_FETCH — and only the parsing is shared, so there
+// is one understanding of git's output without two understandings of how to run
+// git. On error the layout degrades to "an ordinary clone rooted here", which is
+// the pre-existing behaviour of trusting the scanned path.
+func localGitWorktreeLayout(ctx context.Context, abs string, opts *CollectOpts, directiveID string) worktree.Layout {
 	out, err := gitOutput(ctx, abs, opts, directiveID, "worktree", "list", "--porcelain")
 	if err != nil {
-		return nil
+		return worktree.Layout{MainDir: abs}
 	}
-	branches := map[string]string{}
-	var current string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "worktree "):
-			current = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		case strings.HasPrefix(line, "branch "):
-			ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
-			if name := normalizeGitRef(ref); name != "" && current != "" {
-				branches[name] = current
-			}
-		}
-	}
-	if len(branches) == 0 {
-		return nil
-	}
-	return branches
+	return worktree.Parse(out)
 }
 
 // localGitCommonDir returns the absolute path of a repository's shared git

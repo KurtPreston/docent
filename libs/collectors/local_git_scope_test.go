@@ -202,70 +202,49 @@ func TestLocalGitCollectResolvesWorktreePath(t *testing.T) {
 }
 
 // TestLocalGitCollectDropsPathForWorktreelessBranch covers the other half of
-// grove-style path attribution: a branch that has commits but is NOT checked
-// out in any worktree (e.g. its worktree was removed after merge, or it only
-// exists as a backport/squash ref). `git log --all` still surfaces its commits
-// when scanning a sibling worktree, and the collector used to tag them with
-// that arbitrary sibling's path — making unrelated tickets/branches all appear
-// to live in whichever worktree sorted first. Such a commit has no working
+// path attribution in a project whose children are worktrees: a branch that has
+// commits but is NOT checked out anywhere (its worktree was removed after merge,
+// or it only exists as a backport/squash ref). `git log --all` still surfaces its
+// commits when scanning a sibling worktree, and the collector used to tag them
+// with that arbitrary sibling's path — making unrelated tickets and branches all
+// appear to live in whichever worktree sorted first. Such a commit has no working
 // directory to open, so the collector must leave its path empty rather than
-// borrow a sibling's. (An ordinary single-worktree clone still tags its
-// branches with that one working tree; that is exercised elsewhere.)
+// borrow a sibling's.
+//
+// The fixture is bare-backed on purpose. What makes a worktreeless branch
+// homeless is the repository having no working tree of its own, not the number of
+// worktrees beside it: an ordinary clone with linked worktrees added does still
+// have a home, and TestLocalGitCollectKeepsMainTreeForWorktreelessBranch pins
+// that opposite answer for that shape.
 func TestLocalGitCollectDropsPathForWorktreelessBranch(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
-	codeHome := t.TempDir()
+	// The project root doubles as code_home; its dot-prefixed bare directory is
+	// skipped by the repo scan, so only the worktrees are collected from.
+	project := t.TempDir()
+	seed := filepath.Join(t.TempDir(), "seed")
+	if err := os.MkdirAll(seed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, seed, "init", "--initial-branch=main", "-q", ".")
+	gitIn(t, seed, "commit", "--allow-empty", "-q", "-m", "seed on main")
+	bare := filepath.Join(project, ".base")
+	gitIn(t, project, "clone", "--bare", "-q", seed, bare)
+	gitIn(t, bare, "worktree", "add", "-q", filepath.Join(project, "main"), "main")
 	// "aaa" sorts before "main", so it is the worktree the shared commit scan
 	// runs from — exactly the arbitrary sibling a worktreeless branch's commit
 	// must NOT be attributed to.
-	mainDir := codeHome + "/main"
-	siblingDir := codeHome + "/aaa"
-	if err := os.MkdirAll(mainDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	git := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_DATE=2026-05-13T12:00:00+00:00",
-			"GIT_COMMITTER_DATE=2026-05-13T12:00:00+00:00",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-	git(mainDir, "init", "--initial-branch=main", ".")
-	git(mainDir, "config", "user.name", "Kurt")
-	git(mainDir, "config", "user.email", "kurt@example")
-	git(mainDir, "commit", "--allow-empty", "-m", "initial on main")
-	// A persistent sibling worktree keeps this a multi-worktree (grove) repo.
-	git(mainDir, "worktree", "add", "-b", "aaa", siblingDir)
-	// Create a branch with a unique commit in a throwaway worktree, then remove
-	// that worktree — leaving the branch (and its commit) with no worktree and
-	// no checkout reflog in the surviving worktrees, just like a merged branch.
-	lonelyDir := filepath.Join(t.TempDir(), "lonely")
-	git(mainDir, "worktree", "add", "-b", "lonely", lonelyDir)
-	git(lonelyDir, "config", "user.name", "Kurt")
-	git(lonelyDir, "config", "user.email", "kurt@example")
-	git(lonelyDir, "commit", "--allow-empty", "-m", "work on lonely")
-	git(mainDir, "worktree", "remove", "--force", lonelyDir)
+	gitIn(t, bare, "worktree", "add", "-q", "-b", "aaa", filepath.Join(project, "aaa"))
+	// A branch with a unique commit in a throwaway worktree, then removed —
+	// leaving the branch and its commit with no worktree and no checkout reflog
+	// in the survivors, just like a merged branch.
+	lonely := filepath.Join(t.TempDir(), "lonely")
+	gitIn(t, bare, "worktree", "add", "-q", "-b", "lonely", lonely)
+	gitIn(t, lonely, "commit", "--allow-empty", "-q", "-m", "work on lonely")
+	gitIn(t, bare, "worktree", "remove", "--force", lonely)
 
-	directive := userdata.Directive{
-		ID: "lg", Name: "Local", Collector: "local-git", Enabled: true,
-		CodeHome: codeHome,
-	}
-	clock := func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) }
-	c := LocalGitCollector{Clock: clock}
-	items, err := c.CollectEvents(context.Background(), directive, &CollectOpts{
-		Since: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-		Until: clock(),
-		Scope: ScopeAll,
-	})
-	if err != nil {
-		t.Fatalf("CollectEvents: %v", err)
-	}
-
+	items := collectAll(t, project)
 	found := false
 	for _, it := range items {
 		if it.Kind != "commit" || it.Fields["subject"] != "work on lonely" {
@@ -283,6 +262,174 @@ func TestLocalGitCollectDropsPathForWorktreelessBranch(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a commit for the worktreeless 'lonely' branch, got items=%#v", items)
+	}
+}
+
+// gitIn runs git in dir with fixed identity and dates, so a fixture's commits
+// land inside the collection window.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Kurt", "GIT_AUTHOR_EMAIL=kurt@example",
+		"GIT_COMMITTER_NAME=Kurt", "GIT_COMMITTER_EMAIL=kurt@example",
+		"GIT_AUTHOR_DATE=2026-05-13T12:00:00+00:00",
+		"GIT_COMMITTER_DATE=2026-05-13T12:00:00+00:00",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+}
+
+// collectAll runs the collector over codeHome with the window the fixtures'
+// fixed commit dates fall inside.
+func collectAll(t *testing.T, codeHome string) []StatusItem {
+	t.Helper()
+	clock := func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) }
+	items, err := LocalGitCollector{Clock: clock}.CollectEvents(context.Background(), userdata.Directive{
+		ID: "lg", Name: "Local", Collector: "local-git", Enabled: true, CodeHome: codeHome,
+	}, &CollectOpts{
+		Since: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Until: clock(),
+		Scope: ScopeAll,
+	})
+	if err != nil {
+		t.Fatalf("CollectEvents: %v", err)
+	}
+	return items
+}
+
+// commitPath returns the path a commit with the given subject was attributed to,
+// and whether the field was present at all.
+func commitPath(t *testing.T, items []StatusItem, subject string) (string, bool) {
+	t.Helper()
+	for _, it := range items {
+		if it.Kind == "commit" && it.Fields["subject"] == subject {
+			p, ok := it.Fields["path"]
+			return p, ok
+		}
+	}
+	t.Fatalf("no commit with subject %q among %d items", subject, len(items))
+	return "", false
+}
+
+// TestLocalGitCollectDropsPathInABareBackedProjectWithOneWorktree pins the
+// distinction the old worktree-count rule got wrong. A project whose repository
+// is a bare directory beside its worktrees can perfectly well have exactly one
+// worktree — a fresh project, or one whose branches have all been merged away —
+// and counting worktrees then says "an ordinary clone, trust the scanned
+// directory". It is not: that worktree is the home for its own branch and
+// nothing else, so a branch with no worktree has nowhere to open.
+func TestLocalGitCollectDropsPathInABareBackedProjectWithOneWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	// The project root doubles as code_home, which is the per-project code_home
+	// shape; its dot-prefixed bare directory is skipped by the repo scan, so the
+	// single worktree is the only directory collected from.
+	project := t.TempDir()
+	seed := filepath.Join(t.TempDir(), "seed")
+	if err := os.MkdirAll(seed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, seed, "init", "--initial-branch=main", "-q", ".")
+	gitIn(t, seed, "commit", "--allow-empty", "-q", "-m", "seed on main")
+
+	bare := filepath.Join(project, ".base")
+	gitIn(t, project, "clone", "--bare", "-q", seed, bare)
+	only := filepath.Join(project, "main")
+	gitIn(t, bare, "worktree", "add", "-q", only, "main")
+	gitIn(t, only, "commit", "--allow-empty", "-q", "-m", "work on main")
+
+	// A branch with its own commit and no worktree: built in a throwaway
+	// worktree that is then removed, exactly as a merged branch ends up.
+	lonely := filepath.Join(t.TempDir(), "lonely")
+	gitIn(t, bare, "worktree", "add", "-q", "-b", "lonely", lonely)
+	gitIn(t, lonely, "commit", "--allow-empty", "-q", "-m", "work on lonely")
+	gitIn(t, bare, "worktree", "remove", "--force", lonely)
+
+	items := collectAll(t, project)
+	if p, ok := commitPath(t, items, "work on lonely"); ok {
+		t.Errorf("worktreeless branch commit carries path %q; a bare-backed project's one worktree is not a home for other branches", p)
+	}
+	// The worktree's own branch still resolves, so the fix has not simply
+	// stopped attributing anything.
+	if p, _ := commitPath(t, items, "work on main"); filepath.Base(p) != "main" {
+		t.Errorf("main-branch commit path = %q, want the worktree holding it", p)
+	}
+}
+
+// TestLocalGitCollectKeepsMainTreeForWorktreelessBranch is the other side of the
+// same rule: an ordinary clone has a working tree of its own, and adding linked
+// worktrees beside it does not stop that checkout being where its other branches
+// live. The answer must not depend on which sibling the scan started from, so the
+// linked worktree here is named to sort first.
+func TestLocalGitCollectKeepsMainTreeForWorktreelessBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	codeHome := t.TempDir()
+	mainDir := filepath.Join(codeHome, "main")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, mainDir, "init", "--initial-branch=main", "-q", ".")
+	gitIn(t, mainDir, "commit", "--allow-empty", "-q", "-m", "initial on main")
+	// "aaa" sorts before "main", so it is the directory the shared commit scan
+	// runs from. It is a linked worktree, not the repository's home.
+	gitIn(t, mainDir, "worktree", "add", "-q", "-b", "aaa", filepath.Join(codeHome, "aaa"))
+
+	lonely := filepath.Join(t.TempDir(), "lonely")
+	gitIn(t, mainDir, "worktree", "add", "-q", "-b", "lonely", lonely)
+	gitIn(t, lonely, "commit", "--allow-empty", "-q", "-m", "work on lonely")
+	gitIn(t, mainDir, "worktree", "remove", "--force", lonely)
+
+	items := collectAll(t, codeHome)
+	p, ok := commitPath(t, items, "work on lonely")
+	if !ok {
+		t.Fatalf("worktreeless branch lost its path; an ordinary clone's checkout is where its branches live")
+	}
+	if filepath.Base(p) != "main" {
+		t.Errorf("path = %q, want the clone's own working tree, not the sibling the scan started from", p)
+	}
+}
+
+// TestLocalGitCollectReflogDoesNotResupplyASiblingPath covers the half that
+// undoes the commit-side fix if it is missed. A `checkout: moving from X to Y`
+// entry is recorded in the worktree you left, and correlation takes the FIRST
+// path among a work item's commit and reflog entities — so a reflog row left
+// tagged with the departed worktree hands branch Y that worktree's path even
+// after the commit rows correctly declined to.
+func TestLocalGitCollectReflogDoesNotResupplyASiblingPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	project := t.TempDir()
+	seed := filepath.Join(t.TempDir(), "seed")
+	if err := os.MkdirAll(seed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, seed, "init", "--initial-branch=main", "-q", ".")
+	gitIn(t, seed, "commit", "--allow-empty", "-q", "-m", "seed on main")
+	bare := filepath.Join(project, ".base")
+	gitIn(t, project, "clone", "--bare", "-q", seed, bare)
+	wt := filepath.Join(project, "main")
+	gitIn(t, bare, "worktree", "add", "-q", wt, "main")
+
+	// Switch away and back inside that worktree, leaving a "moving from main to
+	// departed" entry in its reflog, then delete the branch so it has no
+	// worktree anywhere.
+	gitIn(t, wt, "checkout", "-q", "-b", "departed")
+	gitIn(t, wt, "checkout", "-q", "main")
+	gitIn(t, wt, "branch", "-q", "-D", "departed")
+
+	for _, it := range collectAll(t, project) {
+		if it.Kind != "reflog" || it.Fields["branch"] != "departed" {
+			continue
+		}
+		if p, ok := it.Fields["path"]; ok {
+			t.Errorf("reflog row for a branch with no worktree carries path %q; it would become the work item's open path: %+v", p, it.Fields)
+		}
 	}
 }
 
