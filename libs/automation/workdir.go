@@ -10,6 +10,10 @@ import (
 )
 
 // WorkdirMode selects how an agent action provisions its working directory.
+//
+// These are the automation-facing names, kept because they are written in
+// people's config files. They map onto the target kinds the picker offers:
+// worktree is worktree.TargetIsolated, open_path is a directory named outright.
 const (
 	WorkdirWorktree = "worktree"  // docent's own isolated worktree for the branch
 	WorkdirOpenPath = "open_path" // an existing checkout, used as-is
@@ -20,6 +24,11 @@ type WorkdirRequest struct {
 	Mode   string // worktree | open_path
 	Repo   string // owner/repo
 	Branch string
+	// Target is the placement the user picked: one of the worktree.Target*
+	// kinds. Empty means docent's own isolated worktree, which is what an
+	// automation gets -- a rule fires unattended, and the placements that touch
+	// the developer's repository are only ever chosen deliberately.
+	Target string
 	// From is the ref a brand-new branch is based on. Empty means the remote's
 	// default branch, which is right for fresh work and wrong for a backport.
 	From string
@@ -48,6 +57,8 @@ type WorkdirResult struct {
 	// Owned reports that Path is docent's own directory: safe to commit into and
 	// to sync, as opposed to one the developer may have open in an editor.
 	Owned bool
+	// PreviousBranch is the branch an in-place checkout switched away from.
+	PreviousBranch string
 	// SetupErr is the setup hook's failure, if it had one. Not fatal.
 	SetupErr error
 }
@@ -103,7 +114,7 @@ func ProvisionWorkdir(ctx context.Context, req WorkdirRequest) (WorkdirResult, e
 }
 
 func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, error) {
-	res, err := worktree.Resolve(ctx, worktree.Request{
+	wreq := worktree.Request{
 		Repo:      req.Repo,
 		Branch:    req.Branch,
 		BaseRef:   req.From,
@@ -111,15 +122,22 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 		Roots:     req.Roots,
 		RemoteURL: req.RemoteURL,
 		Hook:      req.Hook,
+		Target:    req.Target,
 		StateRoot: req.StateRoot,
-	})
+	}
+	resolve := worktree.Resolve
+	if t := strings.TrimSpace(req.Target); t != "" && t != worktree.TargetIsolated {
+		resolve = worktree.ResolveDeveloper
+	}
+	res, err := resolve(ctx, wreq)
 	if err != nil {
 		return WorkdirResult{}, err
 	}
 	return WorkdirResult{
-		Path:       res.Dir,
-		ProjectDir: res.Project,
-		Owned:      res.Owned,
-		SetupErr:   res.SetupErr,
+		Path:           res.Dir,
+		ProjectDir:     res.Project,
+		Owned:          res.Owned,
+		PreviousBranch: res.PreviousBranch,
+		SetupErr:       res.SetupErr,
 	}, nil
 }

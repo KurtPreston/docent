@@ -351,6 +351,15 @@ func (e *Engine) Projects() []worktree.Project {
 	return worktree.DiscoverProjects(collectors.LocalGitRoots(e.cfg.Directives))
 }
 
+// WorktreeSnapshot is one view of the developer's projects, for enumerating
+// where an agent could run. Made per request rather than held, for the same
+// reason Projects is not cached: a repository cloned a minute ago has to show
+// up. A caller that asks about several branches should reuse one, so the
+// filesystem walk and each project's `git worktree list` happen once.
+func (e *Engine) WorktreeSnapshot() *worktree.Snapshot {
+	return worktree.NewSnapshot(collectors.LocalGitRoots(e.cfg.Directives), "")
+}
+
 // jiraBaseURL returns the first configured jira directive's base_url (trailing
 // slash trimmed), or "" when none is configured. Used to build /browse/<key>
 // links for resolved ticket keys that lack a collected JIRA entity.

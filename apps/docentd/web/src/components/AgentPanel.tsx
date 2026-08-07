@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentConflictError,
   deleteAgent,
+  fetchWorktreeTargets,
   promoteAgent,
   sendAgentTurn,
   startAgent,
@@ -11,7 +12,13 @@ import {
 import { openWSMPath } from "../lib/sessions";
 import { errMsg, timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
-import type { AgentEvent, AgentSession, AgentStartRequest, RepoProject } from "../lib/types";
+import type {
+  AgentEvent,
+  AgentSession,
+  AgentStartRequest,
+  RepoProject,
+  WorktreeTarget,
+} from "../lib/types";
 
 // The agent panel is the cockpit's centerpiece: a lane's agent runs here, in the
 // browser, instead of in a Cursor window you have to go find. It shows the live
@@ -27,6 +34,10 @@ export const AGENT_STATUS_LABEL: Record<string, string> = {
   failed: "failed",
   stopped: "stopped",
 };
+
+// How long to let a branch name settle before asking the daemon where an agent
+// could run for it. Each ask is a filesystem walk and a git subprocess.
+const TARGET_DEBOUNCE_MS = 300;
 
 // How long to wait after opening the editor before firing the prompt deeplink,
 // which lands in whichever window has focus. Long enough for a cold Cursor
@@ -169,8 +180,13 @@ export function AgentPanel({
   // rather than at the next five-second poll.
   const [status, setStatus] = useState(session?.status);
   // The reason the daemon refused this send, when it was something the user can
-  // overrule -- an agent already working in the worktree.
+  // overrule -- an agent already working in the worktree, or a branch that has
+  // forked from the local copy.
   const [conflict, setConflict] = useState("");
+  // Where a new session will run. The placements depend on what is on disk for
+  // this repo and branch, so they are fetched rather than assumed.
+  const [targets, setTargets] = useState<WorktreeTarget[]>([]);
+  const [target, setTarget] = useState("");
 
   const id = session?.id;
   // A lane that already knows its worktree does not ask; one that does not
@@ -183,6 +199,36 @@ export function AgentPanel({
     setRepo(start.repo ?? "");
     setBranch(start.branch ?? suggestBranch ?? "");
   }, [start.repo, start.branch, suggestBranch]);
+
+  // Recomputed as the branch is typed, because two of the four placements are
+  // named after a directory that does not exist yet, and a label naming the
+  // wrong path is worse than none. Debounced so a keystroke is not a subprocess.
+  const wantRepo = repo.trim();
+  const wantBranch = branch.trim();
+  const placing = !session && wantRepo !== "" && wantBranch !== "";
+  useEffect(() => {
+    if (!placing) {
+      setTargets([]);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      void fetchWorktreeTargets(wantRepo, wantBranch)
+        .then((list) => {
+          if (!live) return;
+          setTargets(list);
+          // Re-defaulted on every change rather than remembered: a placement
+          // that quietly persisted into a start nobody thought about is exactly
+          // the surprise the picker exists to prevent.
+          setTarget(list.find((t) => t.default && !t.disabled)?.kind ?? "");
+        })
+        .catch(() => live && setTargets([]));
+    }, TARGET_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [placing, wantRepo, wantBranch]);
 
   // A seed replaces an untouched draft, so clicking a second inbox item does
   // what it looks like, but never discards something typed.
@@ -238,6 +284,7 @@ export function AgentPanel({
             ...start,
             repo: repo.trim() || start.repo,
             branch: branch.trim() || start.branch,
+            target,
             prompt,
             force,
           });
@@ -254,7 +301,7 @@ export function AgentPanel({
         setBusy(false);
       }
     },
-    [branch, busy, draft, id, onChanged, repo, start, targetReady],
+    [branch, busy, draft, id, onChanged, repo, start, target, targetReady],
   );
 
   // promote is the escape hatch for work that needs hands: it stops the agent,
@@ -382,6 +429,18 @@ export function AgentPanel({
             placeholder="branch to create"
             spellCheck={false}
           />
+        </div>
+      ) : null}
+
+      {placing && targets.length > 0 ? (
+        <div className="ag-target">
+          <select value={target} onChange={(e) => setTarget(e.target.value)}>
+            {targets.map((t) => (
+              <option key={t.kind} value={t.kind} disabled={!!t.disabled}>
+                {t.disabled ? `${t.label} — ${t.disabled}` : t.label}
+              </option>
+            ))}
+          </select>
         </div>
       ) : null}
 

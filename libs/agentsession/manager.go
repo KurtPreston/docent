@@ -75,6 +75,10 @@ type ProvisionRequest struct {
 	Branch   string
 	BaseRef  string
 	OpenPath string
+	// Target is the placement the user picked, opaque here: the manager passes
+	// it to the provisioner, which is the only part that knows what the
+	// placements are.
+	Target string
 }
 
 // ProvisionResult is a resolved worktree.
@@ -113,6 +117,9 @@ type StartRequest struct {
 	// OpenPath is a known local path for this work item, the best hint for which
 	// project to provision in.
 	OpenPath string
+	// Target is where the agent should run, from the placements docent offered
+	// for this repo and branch. Empty means the provisioner's default.
+	Target string
 	// Prompt, when set, is run as the opening turn.
 	Prompt string
 	// Color is the lane color, normally derived from the branch name.
@@ -184,7 +191,8 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 			return Session{}, errors.New("agentsession: no dir given and no provisioner configured")
 		}
 		res, err := m.Provision(ctx, ProvisionRequest{
-			Repo: req.Repo, Branch: req.Branch, BaseRef: req.BaseRef, OpenPath: req.OpenPath,
+			Repo: req.Repo, Branch: req.Branch, BaseRef: req.BaseRef,
+			OpenPath: req.OpenPath, Target: req.Target,
 		})
 		if err != nil {
 			return Session{}, err

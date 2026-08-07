@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/KurtPreston/docent/libs/automation"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 func gitAt(t *testing.T, dir string, args ...string) {
@@ -122,5 +123,81 @@ func TestEmptyModeDefaultsToWorktree(t *testing.T) {
 	_, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{})
 	if err == nil || !strings.Contains(err.Error(), "repository") {
 		t.Fatalf("err = %v, want the worktree path's own validation", err)
+	}
+}
+
+// developerProject is a worktree project the discovery pass can find: a bare
+// clone under code/<name>, whose origin is a forge-shaped URL. Repository
+// identity is derived from that URL, so a fixture whose origin is a bare
+// filesystem path would have no identity and never match a lookup; git's
+// insteadOf rewriting keeps the objects on local disk regardless.
+func developerProject(t *testing.T, code, name, repo string) string {
+	t.Helper()
+	seed := remoteRepo(t)
+	forge := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	body := "[url \"" + forge + string(filepath.Separator) + "\"]\n\tinsteadOf = git@forge.test:\n"
+	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+
+	published := filepath.Join(forge, filepath.FromSlash(repo)+".git")
+	if err := os.MkdirAll(filepath.Dir(published), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, filepath.Dir(published), "clone", "--bare", "-q", seed, published)
+
+	project := filepath.Join(code, name)
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, project, "clone", "--bare", "-q", "git@forge.test:"+repo+".git", filepath.Join(project, ".base"))
+	return project
+}
+
+// A target routes provisioning into the developer's own project, and the result
+// says it is not docent's -- which is what keeps the turn-boundary commit and
+// the divergence guard out of a directory somebody may have open.
+func TestATargetRoutesIntoTheDevelopersProject(t *testing.T) {
+	code := t.TempDir()
+	project := developerProject(t, code, "salsa", "Chip/salsa")
+
+	res, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+		Repo: "Chip/salsa", Branch: "salsa-1/fix",
+		Target: worktree.TargetCreate,
+		Roots:  []string{code}, StateRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("ProvisionWorkdir: %v", err)
+	}
+	if res.Owned {
+		t.Error("Owned = true for the developer's own project")
+	}
+	if !strings.HasPrefix(res.Path, project) {
+		t.Errorf("path = %q, want it under %q", res.Path, project)
+	}
+}
+
+// An automation names no target, so it lands in docent's own tree. A rule fires
+// unattended, and the placements that touch the developer's repository are only
+// ever arrived at by someone choosing them.
+func TestNoTargetMeansDocentsOwnTree(t *testing.T) {
+	state := t.TempDir()
+	code := t.TempDir()
+	project := developerProject(t, code, "salsa", "Chip/salsa")
+
+	res, err := automation.ProvisionWorkdir(context.Background(), automation.WorkdirRequest{
+		Repo: "Chip/salsa", Branch: "salsa-1/fix",
+		Roots: []string{code}, StateRoot: state,
+	})
+	if err != nil {
+		t.Fatalf("ProvisionWorkdir: %v", err)
+	}
+	if !res.Owned || !strings.HasPrefix(res.Path, state) {
+		t.Errorf("path = %q owned = %v, want docent's own tree under %q", res.Path, res.Owned, state)
+	}
+	if strings.HasPrefix(res.Path, project) {
+		t.Error("an automation landed in the developer's project")
 	}
 }

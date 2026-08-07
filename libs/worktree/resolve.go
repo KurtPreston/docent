@@ -58,6 +58,10 @@ type Request struct {
 	// Hook is the per-worktree setup script, run once when a directory is
 	// created. Empty or missing means no setup.
 	Hook string
+	// Target names which placement the caller chose, for ResolveDeveloper. One
+	// of TargetExisting, TargetCreate or TargetInPlace; Resolve ignores it,
+	// being the isolated placement itself.
+	Target string
 	// StateRoot overrides the docent state directory, for tests.
 	StateRoot string
 }
@@ -75,6 +79,10 @@ type Result struct {
 	// to sync, and to rebuild when it breaks. False for anywhere the developer
 	// might have open in an editor.
 	Owned bool
+	// PreviousBranch is what an in-place checkout switched away from, so the
+	// user can be told which branch their editor is no longer on. Empty for
+	// every other placement, none of which move anything.
+	PreviousBranch string
 	// SetupErr is the setup hook's failure, if it had one. Not fatal: a checkout
 	// with failed setup is still a checkout, and stranding it is worse than
 	// reporting it.
@@ -407,14 +415,17 @@ func startPoint(ctx context.Context, base, baseRef string) (string, error) {
 		return "", fmt.Errorf("worktree: base ref %q is not in %s", ref, base)
 	}
 	out, err := gitOutput(ctx, base, gitTimeout, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-	if err != nil {
-		return "", fmt.Errorf("worktree: cannot tell what %s's default branch is: %w", base, err)
+	if head := strings.TrimSpace(out); err == nil && head != "" {
+		return head, nil
 	}
-	head := strings.TrimSpace(out)
-	if head == "" {
-		return "", fmt.Errorf("worktree: cannot tell what %s's default branch is", base)
+	// Not every repository has origin/HEAD -- git only writes it on a clone that
+	// asked for it, and docent reads other people's repositories as well as its
+	// own. The repository's own HEAD is the same answer from the other side, and
+	// only a repository with no commits at all has neither.
+	if err := gitRun(ctx, base, gitTimeout, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err == nil {
+		return "HEAD", nil
 	}
-	return head, nil
+	return "", fmt.Errorf("worktree: cannot tell what %s's default branch is", base)
 }
 
 func hasRef(ctx context.Context, base, ref string) bool {

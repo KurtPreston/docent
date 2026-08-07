@@ -118,6 +118,55 @@ func TestProjectsAlwaysReturnsAList(t *testing.T) {
 	}
 }
 
+// The picker binds straight to this, and an unknown repository is the normal
+// state while somebody is still typing -- so it answers with the one placement
+// that never depends on anything being on disk rather than with an error.
+func TestWorktreeTargetsAlwaysOffersTheIsolatedOne(t *testing.T) {
+	h := newTestServer(t, "")
+	rr := doJSON(t, h, http.MethodGet, "/api/worktree-targets?repo=Chip%2Fsalsa&branch=salsa-1%2Ffix", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/worktree-targets: %d\n%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Targets []struct {
+			Kind    string `json:"kind"`
+			Dir     string `json:"dir"`
+			Label   string `json:"label"`
+			Owned   bool   `json:"owned"`
+			Default bool   `json:"default"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 1 {
+		t.Fatalf("targets = %+v, want just the isolated one", got.Targets)
+	}
+	only := got.Targets[0]
+	if only.Kind != "isolated" || !only.Default || !only.Owned || only.Dir == "" || only.Label == "" {
+		t.Errorf("target = %+v", only)
+	}
+}
+
+// An incomplete question gets an empty list rather than null: the picker maps
+// over it directly.
+func TestWorktreeTargetsIsAlwaysAList(t *testing.T) {
+	h := newTestServer(t, "")
+	rr := doJSON(t, h, http.MethodGet, "/api/worktree-targets?repo=Chip%2Fsalsa", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/worktree-targets: %d", rr.Code)
+	}
+	var got struct {
+		Targets []struct{} `json:"targets"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Targets == nil {
+		t.Fatal("targets is null, want an empty list")
+	}
+}
+
 // The two refusals a user can overrule have to reach the client as a marker
 // rather than as prose, since that is what the "start anyway" button keys off.
 func TestOverridableRefusalsCarryAConflictMarker(t *testing.T) {

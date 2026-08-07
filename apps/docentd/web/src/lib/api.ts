@@ -21,6 +21,7 @@ import type {
   AgentEvent,
   AgentStartRequest,
   RepoProject,
+  WorktreeTarget,
 } from "./types";
 
 async function getJSON<T>(url: string): Promise<T> {
@@ -174,6 +175,11 @@ async function agentPost<T>(url: string, body?: unknown): Promise<T> {
   }
   return d;
 }
+
+export const fetchWorktreeTargets = (repo: string, branch: string): Promise<WorktreeTarget[]> =>
+  getJSON<{ targets: WorktreeTarget[] }>(
+    "/api/worktree-targets?repo=" + encodeURIComponent(repo) + "&branch=" + encodeURIComponent(branch),
+  ).then((r) => r.targets ?? []);
 
 export async function startAgent(req: AgentStartRequest): Promise<AgentSession> {
   const d = await agentPost<{ session: AgentSession }>("/api/agents", req);

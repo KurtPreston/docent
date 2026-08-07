@@ -75,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/agents", s.requireAuth(s.agentsAPI))
 	mux.HandleFunc("/api/agents/", s.requireAuth(s.agentsSub))
 	mux.HandleFunc("/api/projects", s.requireAuth(s.projectsAPI))
+	mux.HandleFunc("/api/worktree-targets", s.requireAuth(s.worktreeTargetsAPI))
 	mux.HandleFunc("/", s.staticOrIndex)
 	return mux
 }

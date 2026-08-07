@@ -254,11 +254,26 @@ export type AgentStartRequest = {
   repo?: string;
   branch?: string;
   dir?: string;
+  /** Which placement from GET /api/worktree-targets the agent should run in.
+   * Omitted means docent's own isolated worktree. */
+  target?: string;
   baseRef?: string;
   openPath?: string;
   prompt: string;
   /** Proceed even though another agent appears to be working in the worktree. */
   force?: boolean;
+};
+
+/** One place an agent could run, from GET /api/worktree-targets. `label` is the
+ * whole of what the user reads; `disabled` is why it cannot be picked, shown
+ * rather than hidden so an option missing for a clearable reason still says so. */
+export type WorktreeTarget = {
+  kind: "existing" | "create" | "isolated" | "in_place";
+  dir: string;
+  label: string;
+  owned: boolean;
+  default?: boolean;
+  disabled?: string;
 };
 
 export type SignalView = {

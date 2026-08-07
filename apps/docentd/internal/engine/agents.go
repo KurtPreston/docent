@@ -54,6 +54,7 @@ func newAgentManager(cfg config.DaemonConfig, sessions *registry.Store) (*agents
 				Branch:   req.Branch,
 				From:     req.BaseRef,
 				OpenPath: req.OpenPath,
+				Target:   req.Target,
 				Roots:    roots,
 				Hook:     cfg.WorktreeHook,
 			})

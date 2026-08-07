@@ -90,6 +90,7 @@ func TestAuth_requiredWhenTokenSet(t *testing.T) {
 		{http.MethodPost, "/api/agents"},
 		{http.MethodGet, "/api/agents/abc/events"},
 		{http.MethodGet, "/api/projects"},
+		{http.MethodGet, "/api/worktree-targets"},
 	}
 	for _, g := range gated {
 		if code := status(t, h, g.method, g.path, ""); code != http.StatusUnauthorized {

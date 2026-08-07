@@ -29,6 +29,19 @@ func recordingHook(t *testing.T, exitCode string) (script, record string) {
 	return script, record
 }
 
+// writeHook makes an executable hook out of a shell fragment.
+func writeHook(t *testing.T, body string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture hook is a shell script")
+	}
+	script := filepath.Join(t.TempDir(), "worktree.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
 func recorded(t *testing.T, record string) map[string]string {
 	t.Helper()
 	b, err := os.ReadFile(record)

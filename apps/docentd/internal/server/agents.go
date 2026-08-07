@@ -23,6 +23,7 @@ type agentStartRequest struct {
 	Repo     string `json:"repo"`
 	Branch   string `json:"branch"`
 	Dir      string `json:"dir"`
+	Target   string `json:"target"`
 	BaseRef  string `json:"baseRef"`
 	OpenPath string `json:"openPath"`
 	Prompt   string `json:"prompt"`
@@ -93,6 +94,7 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 		Repo:     strings.TrimSpace(req.Repo),
 		Branch:   branch,
 		Dir:      strings.TrimSpace(req.Dir),
+		Target:   strings.TrimSpace(req.Target),
 		BaseRef:  strings.TrimSpace(req.BaseRef),
 		OpenPath: strings.TrimSpace(req.OpenPath),
 		Prompt:   req.Prompt,
@@ -130,6 +132,47 @@ func (s *Server) projectsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
+
+// worktreeTargetsAPI answers GET /api/worktree-targets?repo=&branch= with the
+// places an agent could run.
+//
+// The picker exists because the right answer differs by situation and only the
+// user knows which they are in: docent's own worktree keeps an agent away from
+// anything they have open, and their own project is where they will actually
+// look at the result. Guessing between those was the previous two designs, and
+// each guess was wrong for somebody.
+func (s *Server) worktreeTargetsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	type targetView struct {
+		Kind     string `json:"kind"`
+		Dir      string `json:"dir"`
+		Label    string `json:"label"`
+		Owned    bool   `json:"owned"`
+		Default  bool   `json:"default,omitempty"`
+		Disabled string `json:"disabled,omitempty"`
+	}
+	q := r.URL.Query()
+	out := []targetView{}
+	// Bounded: enumerating runs `git worktree list` and possibly one
+	// `status --porcelain`, both against local disk, but a repository on a slow
+	// filesystem should fail the picker rather than hold the connection.
+	ctx, cancel := context.WithTimeout(r.Context(), worktreeTargetsTimeout)
+	defer cancel()
+	for _, t := range s.engine.WorktreeSnapshot().Targets(ctx, q.Get("repo"), q.Get("branch")) {
+		out = append(out, targetView{
+			Kind: t.Kind, Dir: t.Dir, Label: t.Label,
+			Owned: t.Owned, Default: t.Default, Disabled: t.Disabled,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"targets": out})
+}
+
+// worktreeTargetsTimeout bounds enumerating placements. Short: this runs while
+// somebody is typing a branch name.
+const worktreeTargetsTimeout = 20 * time.Second
 
 // agentsSub handles /api/agents/{id} and its sub-resources.
 func (s *Server) agentsSub(w http.ResponseWriter, r *http.Request) {
