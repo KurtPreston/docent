@@ -2,9 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/KurtPreston/docent/libs/agentsession"
 )
 
 func TestAgentsListIsEmptyBeforeAnyRun(t *testing.T) {
@@ -111,5 +115,36 @@ func TestProjectsAlwaysReturnsAList(t *testing.T) {
 	}
 	if got.Projects == nil {
 		t.Fatal("projects is null, want an empty list")
+	}
+}
+
+// The two refusals a user can overrule have to reach the client as a marker
+// rather than as prose, since that is what the "start anyway" button keys off.
+func TestOverridableRefusalsCarryAConflictMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"foreign agent", fmt.Errorf("%w: cursor", agentsession.ErrForeignAgent), "foreign-agent"},
+		{"diverged", fmt.Errorf("%w: 1 ahead", agentsession.ErrDiverged), "diverged"},
+		{"busy", fmt.Errorf("%w (session x)", agentsession.ErrBusy), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			writeAgentError(rr, tc.err)
+			if rr.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409", rr.Code)
+			}
+			var got struct {
+				Conflict string `json:"conflict"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Conflict != tc.want {
+				t.Errorf("conflict = %q, want %q", got.Conflict, tc.want)
+			}
+		})
 	}
 }

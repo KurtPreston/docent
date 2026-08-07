@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 // agentSessionsDir holds sessions and transcripts, under the same state root as
@@ -60,7 +62,50 @@ func newAgentManager(cfg config.DaemonConfig, sessions *registry.Store) (*agents
 			}
 			return agentsession.ProvisionResult{Dir: wd.Path, Project: wd.ProjectDir, Owned: wd.Owned}, nil
 		},
+		PreTurn:   syncBeforeTurn,
+		AfterTurn: commitAfterTurn,
 	}, nil
+}
+
+// syncBeforeTurn pulls the developer's commits into docent's worktree and
+// refuses the turn when the two have forked.
+//
+// Only reached for docent's own directories; the manager checks that. The
+// refusal is the point: a fork that nobody notices ends with two versions of a
+// branch, each a plausible candidate for the real one. Better to stop and say so
+// while both are still small, with force available for the case where the user
+// has looked and wants the turn anyway.
+func syncBeforeTurn(ctx context.Context, sess agentsession.Session, _ bool) error {
+	res, err := worktree.Sync(ctx, worktree.SyncRequest{Dir: sess.Dir, Branch: sess.Branch})
+	if err != nil {
+		// Reported, not fatal: an agent that cannot run because docent could
+		// not read a ref is a worse outcome than one running from stale objects.
+		log.Printf("agents: pre-turn sync of %s (%s): %v", sess.Branch, sess.Dir, err)
+		return nil
+	}
+	if res.Note != "" {
+		log.Printf("agents: pre-turn sync of %s: %s", sess.Branch, res.Note)
+	}
+	if res.Diverged {
+		return fmt.Errorf("%w: docent is %d commit(s) ahead and %d behind %s. "+
+			"Reconcile them, or send anyway to add to docent's copy",
+			agentsession.ErrDiverged, res.Ahead, res.Behind, sess.Branch)
+	}
+	return nil
+}
+
+// commitAfterTurn snapshots the worktree so the turn's work is fetchable.
+//
+// docent's worktree is a directory the developer has never opened, so anything
+// left uncommitted in it is invisible to every git command they run. This is the
+// step that makes the open button and the divergence check above mean anything:
+// both compare committed tips.
+func commitAfterTurn(ctx context.Context, sess agentsession.Session, _ *agentsession.TurnResult, _ error) error {
+	msg := fmt.Sprintf("docent: turn %d (%s)", sess.Turns+1, sess.ID)
+	if _, err := worktree.CommitAll(ctx, sess.Dir, msg); err != nil {
+		return fmt.Errorf("could not commit this turn's changes in %s: %w", sess.Dir, err)
+	}
+	return nil
 }
 
 // foreignTurnMaxAge is how long an IDE's reported turn may keep claiming a
@@ -110,8 +155,15 @@ func foreignAgentAt(sessions *registry.Store, cfg userdata.SessionsConfig, dir s
 //
 // The action's `post` steps (validate / commit / push / jira_comment) are not
 // carried over. They were the queue worker's way of doing something useful with
-// a run nobody watched; a session is watched, and the agent can be told to
-// commit and push in its prompt.
+// a run nobody watched, and a session is watched.
+//
+// Committing is no longer any of the prompt's business either: the session ends
+// every turn with a commit of its own, because the worktree is docent's and
+// leaving it dirty would hide the work. Pushing deliberately is not: a session's
+// branch reaches the developer over the filesystem when they open it, and a
+// daemon that pushes a WIP snapshot to a shared forge on a rule's schedule would
+// publish work nobody has read. An action that wants a branch pushed says so in
+// its prompt.
 type sessionAgentRunner struct {
 	manager *agentsession.Manager
 	// err explains why manager is nil, so a rule firing against a broken setup

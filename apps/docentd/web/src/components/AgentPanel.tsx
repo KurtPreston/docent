@@ -398,7 +398,7 @@ export function AgentPanel({
             {session ? "send anyway" : "start anyway"}
           </button>
           <button type="button" className="mini-btn" onClick={() => setConflict("")}>
-            wait
+            not now
           </button>
         </div>
       ) : null}

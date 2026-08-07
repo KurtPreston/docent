@@ -36,6 +36,23 @@ type Manager struct {
 	// daemon's session registry, and how stale a report may be before it is
 	// ignored is config the manager should not have to know.
 	ForeignAgent func(dir string) string
+	// PreTurn runs before a turn is admitted, only for a session whose worktree
+	// is docent's own, and is skipped when the caller forced. Returning an error
+	// refuses the turn: this is where a branch that has forked from the
+	// developer's copy is caught, before an agent adds to the fork.
+	//
+	// Optional, and a function for the same reason Provision is one -- the
+	// manager stays free of git.
+	PreTurn func(ctx context.Context, sess Session, force bool) error
+	// AfterTurn runs once a turn has finished, whatever its outcome, and only
+	// for a session whose worktree is docent's own. It is where the turn's edits
+	// are committed, so nothing an agent did is left only in a directory the
+	// developer has never opened.
+	//
+	// Its error is recorded on the transcript and otherwise ignored: the turn
+	// has already happened, and reporting it as failed because the bookkeeping
+	// afterwards did not work would misdescribe it.
+	AfterTurn func(ctx context.Context, sess Session, res *TurnResult, turnErr error) error
 	// Now is overridable for tests.
 	Now func() time.Time
 	// TurnTimeout bounds a single turn. Zero means DefaultTurnTimeout.
@@ -117,6 +134,12 @@ var (
 	// from an editor's own reporting rather than known. Callers are expected to
 	// offer the user an override instead of only refusing.
 	ErrForeignAgent = errors.New("agentsession: another agent appears to be working in this worktree")
+	// ErrDiverged means docent's copy of the branch and the developer's have
+	// both moved since they last agreed. Refused rather than reconciled: the
+	// only honest resolutions are a merge and a rebase, and doing either to
+	// somebody's work while they are not looking is not docent's call. Callers
+	// are expected to offer the same override ErrForeignAgent gets.
+	ErrDiverged = errors.New("agentsession: this branch has diverged from your copy")
 	// ErrNoRunner means no runner is registered for the requested provider.
 	ErrNoRunner = errors.New("agentsession: no runner for provider")
 )
@@ -248,6 +271,9 @@ func (m *Manager) turn(id, prompt string, force bool) error {
 			return fmt.Errorf("%w: %s", ErrForeignAgent, who)
 		}
 	}
+	if err := m.preTurn(sess, force); err != nil {
+		return err
+	}
 
 	// Claim the worktree and the session in one critical section, so two
 	// concurrent requests cannot both see it free.
@@ -315,6 +341,12 @@ func (m *Manager) runTurn(ctx context.Context, lt *liveTurn, runner Runner, sess
 		m.record(sess.ID, ev)
 	})
 
+	// Before the terminal switch, so a stopped turn is covered too: a
+	// cancellation's partial edits are exactly what must not be stranded. Also
+	// before the deferred release, so the worktree is still docent's while the
+	// commit is written.
+	m.afterTurn(sess, &res, err)
+
 	switch {
 	case err != nil && ctx.Err() != nil:
 		// Cancelled by Stop. The conversation survives inside the CLI, so this
@@ -358,6 +390,37 @@ func (m *Manager) release(id string) {
 	delete(m.live, id)
 	m.mu.Unlock()
 }
+
+// preTurn runs the pre-turn guard, which is a no-op for any worktree that is
+// not docent's: the developer's directory is theirs to leave in whatever state
+// they like, and docent has no business fetching into it or judging it.
+func (m *Manager) preTurn(sess Session, force bool) error {
+	if m.PreTurn == nil || !sess.Owned || force {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), turnBoundaryTimeout)
+	defer cancel()
+	return m.PreTurn(ctx, sess, force)
+}
+
+// afterTurn commits what the turn did. Same ownership rule as preTurn, and a
+// context of its own: the turn's has usually just been cancelled, and a stopped
+// turn is precisely the case where the snapshot matters most.
+func (m *Manager) afterTurn(sess Session, res *TurnResult, turnErr error) {
+	if m.AfterTurn == nil || !sess.Owned {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), turnBoundaryTimeout)
+	defer cancel()
+	if err := m.AfterTurn(ctx, sess, res, turnErr); err != nil {
+		m.record(sess.ID, Event{Kind: KindError, Error: err.Error(), SessionID: sess.ID, At: m.now()})
+	}
+}
+
+// turnBoundaryTimeout bounds the git work either side of a turn. Long enough
+// for a fetch of a large repository over a slow link, short enough that a
+// credential prompt nobody can answer does not hold a turn forever.
+const turnBoundaryTimeout = 3 * time.Minute
 
 func (m *Manager) foreignAgent(dir string) string {
 	if m.ForeignAgent == nil {

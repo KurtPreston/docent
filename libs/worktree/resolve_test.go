@@ -29,7 +29,11 @@ func newForge(t *testing.T) *forge {
 	requireGit(t)
 	root := t.TempDir()
 	cfg := filepath.Join(t.TempDir(), "gitconfig")
-	body := "[url \"" + root + string(filepath.Separator) + "\"]\n\tinsteadOf = " + forgePrefix + "\n"
+	// The identity is part of the fixture because GIT_CONFIG_GLOBAL replaces the
+	// machine's own, and docent commits as whoever runs it -- there is no
+	// docent identity to fall back on.
+	body := "[url \"" + root + string(filepath.Separator) + "\"]\n\tinsteadOf = " + forgePrefix + "\n" +
+		"[user]\n\tname = Test\n\temail = test@example\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

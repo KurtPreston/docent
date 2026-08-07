@@ -768,3 +768,156 @@ func TestDeleteStopsARunningTurn(t *testing.T) {
 		t.Errorf("session survived deletion: %v", err)
 	}
 }
+
+// ownedManager provisions docent's own directory, which is what the turn
+// boundary callbacks are gated on.
+func ownedManager(t *testing.T, r *fakeRunner) *Manager {
+	t.Helper()
+	m := newManager(t, r)
+	dir := t.TempDir()
+	m.Provision = func(context.Context, ProvisionRequest) (ProvisionResult, error) {
+		return ProvisionResult{Dir: dir, Project: "/state/projects/Chip-salsa", Owned: true}, nil
+	}
+	return m
+}
+
+func TestPreTurnRefusalStopsTheTurn(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := ownedManager(t, r)
+	m.PreTurn = func(context.Context, Session, bool) error {
+		return errors.New("diverged")
+	}
+
+	_, err := m.Start(context.Background(), StartRequest{Prompt: "go"})
+	if err == nil || !strings.Contains(err.Error(), "diverged") {
+		t.Fatalf("err = %v, want the guard's refusal", err)
+	}
+	// The session still exists: it was created before the turn was refused, and
+	// the user's next move is to force it rather than to start over.
+	if _, err := m.Store.Get("sess-1"); err != nil {
+		t.Fatalf("session not created: %v", err)
+	}
+	if got := len(r.requests()); got != 0 {
+		t.Errorf("%d turns ran despite the refusal", got)
+	}
+}
+
+// force is the whole reason a refusal is worth offering rather than a hard stop.
+func TestPreTurnIsSkippedWhenForced(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := ownedManager(t, r)
+	m.PreTurn = func(context.Context, Session, bool) error {
+		t.Error("the guard ran on a forced turn")
+		return nil
+	}
+
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "go", Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusIdle)
+}
+
+// The developer's own directory is theirs. Nothing docent does at a turn
+// boundary -- no fetch, no commit, no judgement about what it contains -- has
+// any business happening in it.
+func TestTurnBoundaryCallbacksSkipUnownedDirs(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := newManager(t, r)
+	m.PreTurn = func(context.Context, Session, bool) error {
+		t.Error("the pre-turn guard ran in a directory docent does not own")
+		return nil
+	}
+	m.AfterTurn = func(context.Context, Session, *TurnResult, error) error {
+		t.Error("the turn-end commit ran in a directory docent does not own")
+		return nil
+	}
+
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusIdle)
+}
+
+func TestAfterTurnRunsOnSuccess(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := ownedManager(t, r)
+	seen := make(chan Session, 1)
+	m.AfterTurn = func(_ context.Context, s Session, _ *TurnResult, _ error) error {
+		seen <- s
+		return nil
+	}
+
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusIdle)
+	select {
+	case s := <-seen:
+		if !s.Owned {
+			t.Error("the callback was handed a session that says it is not owned")
+		}
+	default:
+		t.Fatal("the turn ended without a commit")
+	}
+}
+
+// A cancelled turn is exactly the case that matters: its half-finished edits are
+// what would otherwise be stranded in a directory nobody opens.
+func TestAfterTurnRunsOnAStoppedTurn(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	r.turn = func(ctx context.Context, _ TurnRequest, _ func(Event)) (TurnResult, error) {
+		<-ctx.Done()
+		return TurnResult{}, ctx.Err()
+	}
+	m := ownedManager(t, r)
+	ran := make(chan struct{})
+	m.AfterTurn = func(context.Context, Session, *TurnResult, error) error {
+		close(ran)
+		return nil
+	}
+
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, m, "sess-1", StatusRunning)
+	if err := m.Stop("sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stopped turn ended without a commit")
+	}
+	waitStatus(t, m, "sess-1", StatusStopped)
+}
+
+// The turn happened. Describing it as failed because the bookkeeping afterwards
+// did not work would misreport it, so the failure goes on the transcript instead.
+func TestAfterTurnFailureIsRecordedNotFatal(t *testing.T) {
+	r := &fakeRunner{provider: ProviderClaude}
+	m := ownedManager(t, r)
+	m.AfterTurn = func(context.Context, Session, *TurnResult, error) error {
+		return errors.New("could not commit: index.lock exists")
+	}
+
+	if _, err := m.Start(context.Background(), StartRequest{Prompt: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := waitStatus(t, m, "sess-1", StatusIdle)
+	if sess.Error != "" {
+		t.Errorf("session marked failed: %q", sess.Error)
+	}
+	events, err := m.Store.Events("sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Kind == KindError && strings.Contains(ev.Error, "index.lock") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the commit failure is nowhere in the transcript")
+	}
+}

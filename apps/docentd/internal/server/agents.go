@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/agentsession"
-	"github.com/KurtPreston/docent/libs/worktree"
 	"github.com/KurtPreston/docent/libs/model"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 // agentStartRequest is the POST /api/agents body.
@@ -322,14 +322,18 @@ func (s *Server) agentsUnavailable(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": msg})
 }
 
-// writeAgentError renders a failed agent request. A foreign agent's claim on the
-// worktree is flagged as such, because it is the one refusal the user can
-// overrule: docent inferred it from an editor's own reporting, so the client is
-// told it may retry with force rather than being left at a dead end.
+// writeAgentError renders a failed agent request. The two refusals the user can
+// overrule are named, so the client can offer the override rather than leaving a
+// dead end: a foreign agent's claim on the worktree, which docent only inferred
+// from an editor's own reporting, and a branch that has forked from the
+// developer's copy, which docent declines to reconcile on its own.
 func writeAgentError(w http.ResponseWriter, err error) {
 	body := map[string]any{"ok": false, "error": err.Error()}
-	if errors.Is(err, agentsession.ErrForeignAgent) {
+	switch {
+	case errors.Is(err, agentsession.ErrForeignAgent):
 		body["conflict"] = "foreign-agent"
+	case errors.Is(err, agentsession.ErrDiverged):
+		body["conflict"] = "diverged"
 	}
 	writeJSON(w, agentErrorStatus(err), body)
 }
@@ -341,7 +345,9 @@ func agentErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, agentsession.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, agentsession.ErrBusy), errors.Is(err, agentsession.ErrForeignAgent):
+	case errors.Is(err, agentsession.ErrBusy),
+		errors.Is(err, agentsession.ErrForeignAgent),
+		errors.Is(err, agentsession.ErrDiverged):
 		return http.StatusConflict
 	case errors.Is(err, agentsession.ErrNoRunner):
 		return http.StatusBadRequest

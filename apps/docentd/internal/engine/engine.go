@@ -17,11 +17,11 @@ import (
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
-	"github.com/KurtPreston/docent/libs/worktree"
 	"github.com/KurtPreston/docent/libs/model"
 	"github.com/KurtPreston/docent/libs/prstatus"
 	"github.com/KurtPreston/docent/libs/sessionmanager"
 	"github.com/KurtPreston/docent/libs/workitem"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 // Dashboard is the dashboard payload for the web UI, served by GET /api/workitems.
