@@ -51,6 +51,7 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 		t.Fatalf("directive identity skip flags: id=%v name=%v", m.SkipDirectiveIDSetupPrompt, m.SkipDirectiveNameSetupPrompt)
 	}
 	var ghUserSkips int
+	var localGitScanDepth bool
 	for _, br := range m.Collectors {
 		for _, f := range br.Fields {
 			if br.Collector == "github" && f.Section == configschema.SectionTarget && f.Key == "username" {
@@ -59,10 +60,19 @@ func TestWizardModelParsesCollectors(t *testing.T) {
 				}
 				ghUserSkips++
 			}
+			if br.Collector == "local-git" && f.Section == configschema.SectionConfig && f.Key == "scan_depth" {
+				localGitScanDepth = true
+				if f.Default != "1" {
+					t.Errorf("local-git scan_depth default = %q, want 1", f.Default)
+				}
+			}
 		}
 	}
 	if ghUserSkips != 1 {
 		t.Fatalf("github username skip: got %d", ghUserSkips)
+	}
+	if !localGitScanDepth {
+		t.Fatal("expected the wizard to offer local-git config.scan_depth")
 	}
 }
 
@@ -98,6 +108,32 @@ directives:
 		doc := strings.ReplaceAll(strings.TrimSpace(yamlDoc), "VALUE", val)
 		if err := configschema.ValidateYAML([]byte(doc)); err != nil {
 			t.Fatalf("%q: %v", val, configschema.ValidationProblems(err))
+		}
+	}
+}
+
+func TestValidateYAML_localGitScanDepth(t *testing.T) {
+	doc := func(depth string) []byte {
+		return []byte(strings.TrimSpace(`
+directives:
+  - id: local-git
+    name: Local repos
+    collector: local-git
+    enabled: true
+    code_home: /home/me/Code
+    config:
+      scan_depth: "` + depth + `"
+`))
+	}
+	for _, depth := range []string{"1", "2", "3"} {
+		if err := configschema.ValidateYAML(doc(depth)); err != nil {
+			t.Errorf("scan_depth %q: %v", depth, configschema.ValidationProblems(err))
+		}
+	}
+	// Out of range or non-numeric depths are a typo, not a deeper scan.
+	for _, depth := range []string{"0", "9", "deep"} {
+		if err := configschema.ValidateYAML(doc(depth)); err == nil {
+			t.Errorf("scan_depth %q should be rejected", depth)
 		}
 	}
 }

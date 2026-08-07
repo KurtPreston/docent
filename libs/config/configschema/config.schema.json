@@ -629,6 +629,21 @@
             "x-docent-validator": "dir-exists"
           },
           "x-docent-prompt": "Explicit repo paths (optional if code_home is set)"
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "scan_depth": {
+              "type": "string",
+              "pattern": "^[1-3]$",
+              "description": "Directory levels examined below each scan root. 1 (default) is the immediate children of code_home, or the paths entries themselves. Use 2 when repos sit one level deeper — e.g. a grove project whose worktrees are its subdirectories — since a root that is itself a repo is never descended into.",
+              "x-docent-prompt": "Levels to scan for repos (1 = immediate children, 2 = also one level deeper)",
+              "x-docent-default": "1"
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": ["collector"],

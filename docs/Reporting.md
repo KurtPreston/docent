@@ -28,7 +28,7 @@ Single file: `ai`, `directives`, optional `execution_modes`, optional
 `output_dir`.
 
 - **`directives`**: Collector, target, config, `credential_refs` for secrets in `~/.config/docent/.env`.
-- **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory's immediate children that contain `.git`.
+- **`local-git`**: Use **`paths`** for explicit repo roots, or **`code_home`** to scan that directory's immediate children that contain `.git`. Set **`config.scan_depth: "2"`** to also look one level further in — see [Nested repos](#nested-repos-configscan_depth).
 - **`output_dir`** (optional): where `docent-reporter` writes generated markdown (supports a leading `~`). Defaults to `~/docent`; override per-run with `--out-dir`.
 
 Config shape is validated at runtime against [`jsonschema/config.schema.json`](../jsonschema/config.schema.json) (kept in sync with the embedded copy at [`libs/config/configschema/config.schema.json`](../libs/config/configschema/config.schema.json); tests enforce this). See [README › Setup](../README.md#setup) for how `docent-setup` populates the file.
@@ -274,9 +274,30 @@ On an interactive terminal, docent-reporter prints `Press 'c' to abort pending c
 
 All collectors run in **date range** mode (`since` → `until`). Implemented:
 
-- `local-git` — commits + reflog under `code_home` or explicit `paths`. Scope picks commits by author, by local-branch membership, or every commit on every ref.
+- `local-git` — commits + reflog under `code_home` or explicit `paths`. Scope picks commits by author, by local-branch membership, or every commit on every ref. See [Nested repos](#nested-repos-configscan_depth) if your working trees sit a level deeper.
 - `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). Open-PR status also covers anything matched by [`pr_queries`](#extra-open-pr-searches). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
 - `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
 - `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [Slack.md](Slack.md) for token setup and required scopes.
+
+### Nested repos (`config.scan_depth`)
+
+By default `local-git` looks exactly one level in: the immediate children of `code_home`, or the `paths` entries themselves. That misses layouts where a project directory is a container rather than a checkout — most commonly a **grove** project, where `~/Code/salsa` holds a bare `.base` clone plus one worktree directory per branch, so the working trees live at `~/Code/salsa/<branch>`.
+
+Set **`config.scan_depth`** to `"2"` to check one level further in whenever a candidate directory is not itself a git working tree:
+
+```yaml
+directives:
+  - id: local-git
+    name: Local repos
+    collector: local-git
+    enabled: true
+    code_home: ~/Code
+    config:
+      scan_depth: "2"   # 1 (default) through 3
+```
+
+A directory that **is** a working tree ends the descent, so this never walks into a repo's own source tree or picks up vendored clones, and dot-directories (including grove's `.base`) are skipped. The same depth applies to `paths`, so you can list `~/Code/salsa` directly and get its worktrees.
+
+Scanning deeper multiplies the number of directories visited — a grove project can hold a dozen worktrees. Commit history is only walked once per repository even so (sibling worktrees share one object store), but each worktree still gets its own reflog read, which is why the option is opt-in.

@@ -34,7 +34,7 @@ type Directive struct {
 	Name           string            `yaml:"name"`
 	Collector      string            `yaml:"collector"`
 	Enabled        bool              `yaml:"enabled"`
-	CodeHome       string            `yaml:"code_home,omitempty"` // local-git: parent dir of immediate child repos when paths empty
+	CodeHome       string            `yaml:"code_home,omitempty"` // local-git: parent dir of immediate child repos when paths empty (see config.scan_depth to look deeper)
 	Paths          []string          `yaml:"paths,omitempty"`     // local-git: explicit repo roots; if empty, use code_home scan
 	Target         map[string]string `yaml:"target,omitempty"`
 	Config         map[string]string `yaml:"config,omitempty"`
