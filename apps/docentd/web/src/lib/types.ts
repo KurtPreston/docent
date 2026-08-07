@@ -196,6 +196,9 @@ export type Cockpit = {
 
 export type AgentStatus = "running" | "idle" | "failed" | "stopped";
 
+/** cursor-agent execution mode. Empty string is the default agent mode. */
+export type AgentMode = "" | "plan" | "ask";
+
 export type AgentTurnResult = {
   text?: string;
   isError?: boolean;
@@ -211,6 +214,7 @@ export type AgentSession = {
   id: string;
   provider: string;
   model?: string;
+  mode?: AgentMode;
   title?: string;
   repo?: string;
   branch?: string;
@@ -230,6 +234,7 @@ export type AgentEventKind =
   | "started"
   | "text"
   | "thinking"
+  | "plan"
   | "tool"
   | "tool-result"
   | "done"
@@ -256,6 +261,7 @@ export type RepoProject = {
 
 export type AgentStartRequest = {
   provider?: string;
+  mode?: AgentMode;
   title?: string;
   repo?: string;
   branch?: string;

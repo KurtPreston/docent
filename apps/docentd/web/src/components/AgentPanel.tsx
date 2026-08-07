@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   AgentConflictError,
   deleteAgent,
   fetchWorktreeTargets,
   promoteAgent,
   sendAgentTurn,
+  setAgentMode,
   startAgent,
   stopAgent,
   streamAgent,
@@ -14,6 +17,7 @@ import { errMsg, timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
 import type {
   AgentEvent,
+  AgentMode,
   AgentSession,
   AgentStartRequest,
   RepoProject,
@@ -44,10 +48,16 @@ const TARGET_DEBOUNCE_MS = 300;
 // window to appear and claim it.
 const PROMOTE_PROMPT_DELAY_MS = 2500;
 
+const AGENT_MODES: { value: AgentMode; label: string }[] = [
+  { value: "", label: "agent" },
+  { value: "plan", label: "plan" },
+  { value: "ask", label: "ask" },
+];
+
 // Blocks coalesce the stream into something readable: both CLIs flush prose in
 // fragments, so rendering one node per event produces a column of loose words.
 type Block =
-  | { kind: "prompt" | "text" | "thinking"; text: string }
+  | { kind: "prompt" | "text" | "thinking" | "plan"; text: string }
   | { kind: "tool"; tool: string; text: string }
   | { kind: "note"; text: string; error?: boolean };
 
@@ -66,6 +76,8 @@ function reduce(blocks: Block[], ev: AgentEvent): Block[] {
       return append("text", ev.text ?? "");
     case "thinking":
       return append("thinking", ev.text ?? "");
+    case "plan":
+      return [...blocks, { kind: "plan", text: ev.text ?? "" }];
     case "tool":
       return [...blocks, { kind: "tool", tool: ev.tool ?? "tool", text: ev.text ?? "" }];
     case "tool-result":
@@ -105,6 +117,12 @@ function TranscriptBlock({ block }: { block: Block }) {
           <summary>thinking</summary>
           <div>{block.text}</div>
         </details>
+      );
+    case "plan":
+      return (
+        <div className="ag-plan">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+        </div>
       );
     case "tool":
       return (
@@ -187,13 +205,19 @@ export function AgentPanel({
   // this repo and branch, so they are fetched rather than assumed.
   const [targets, setTargets] = useState<WorktreeTarget[]>([]);
   const [target, setTarget] = useState("");
+  const [mode, setMode] = useState<AgentMode>("");
 
   const id = session?.id;
+  const isCursor = (session?.provider ?? start.provider ?? "") === "cursor";
   // A lane that already knows its worktree does not ask; one that does not
   // collects the target inline rather than sending the user elsewhere.
   const needsTarget = !session && !start.branch && !start.openPath;
 
   useEffect(() => setStatus(session?.status), [session?.status]);
+
+  useEffect(() => {
+    setMode(session?.mode ?? "");
+  }, [session?.mode, session?.id]);
 
   useEffect(() => {
     setRepo(start.repo ?? "");
@@ -262,6 +286,22 @@ export function AgentPanel({
 
   const running = status === "running";
 
+  const changeMode = useCallback(
+    async (next: AgentMode) => {
+      const prev = mode;
+      setMode(next);
+      if (id) {
+        try {
+          await setAgentMode(id, next);
+        } catch (e) {
+          setMode(prev);
+          toast(errMsg(e), true);
+        }
+      }
+    },
+    [id, mode],
+  );
+
   const targetReady = !needsTarget || (repo.trim() !== "" && branch.trim() !== "");
 
   // force carries the user's answer to the conflict note below. It is deliberately
@@ -285,6 +325,7 @@ export function AgentPanel({
             repo: repo.trim() || start.repo,
             branch: branch.trim() || start.branch,
             target,
+            mode: isCursor ? mode : undefined,
             prompt,
             force,
           });
@@ -301,7 +342,7 @@ export function AgentPanel({
         setBusy(false);
       }
     },
-    [branch, busy, draft, id, onChanged, repo, start, target, targetReady],
+    [branch, busy, draft, id, isCursor, mode, onChanged, repo, start, target, targetReady],
   );
 
   // promote is the escape hatch for work that needs hands: it stops the agent,
@@ -365,6 +406,7 @@ export function AgentPanel({
             </span>
             <span className="muted tiny">
               {session.provider}
+              {session.mode ? " · " + session.mode : ""}
               {session.turns ? " · " + session.turns + " turns" : ""}
               {cost ? " · " + cost : ""}
             </span>
@@ -375,6 +417,21 @@ export function AgentPanel({
         ) : (
           <span className="muted tiny">not started</span>
         )}
+        {isCursor ? (
+          <div className="ag-mode" role="group" aria-label="execution mode">
+            {AGENT_MODES.map((m) => (
+              <button
+                key={m.label}
+                type="button"
+                className={"ag-mode-btn" + (mode === m.value ? " active" : "")}
+                disabled={running}
+                onClick={() => void changeMode(m.value)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <span className="grow" />
         {session && running ? (
           <button

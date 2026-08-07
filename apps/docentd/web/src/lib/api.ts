@@ -20,6 +20,7 @@ import type {
   AgentSession,
   AgentEvent,
   AgentStartRequest,
+  AgentMode,
   RepoProject,
   WorktreeTarget,
 } from "./types";
@@ -176,6 +177,25 @@ async function agentPost<T>(url: string, body?: unknown): Promise<T> {
   return d;
 }
 
+async function agentPatch<T>(url: string, body: unknown): Promise<T> {
+  const r = await docentFetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const d = (await r.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    conflict?: string;
+  } & T;
+  if (!r.ok || !d.ok) {
+    const msg = d.error ?? "HTTP " + r.status;
+    if (d.conflict) throw new AgentConflictError(msg, d.conflict);
+    throw new Error(msg);
+  }
+  return d;
+}
+
 export const fetchWorktreeTargets = (repo: string, branch: string): Promise<WorktreeTarget[]> =>
   getJSON<{ targets: WorktreeTarget[] }>(
     "/api/worktree-targets?repo=" + encodeURIComponent(repo) + "&branch=" + encodeURIComponent(branch),
@@ -188,6 +208,11 @@ export async function startAgent(req: AgentStartRequest): Promise<AgentSession> 
 
 export const sendAgentTurn = (id: string, prompt: string, force = false): Promise<unknown> =>
   agentPost(`/api/agents/${encodeURIComponent(id)}/turn`, { prompt, force });
+
+export async function setAgentMode(id: string, mode: AgentMode): Promise<AgentSession> {
+  const d = await agentPatch<{ session: AgentSession }>(`/api/agents/${encodeURIComponent(id)}`, { mode });
+  return d.session;
+}
 
 export const stopAgent = (id: string): Promise<unknown> =>
   agentPost(`/api/agents/${encodeURIComponent(id)}/stop`);

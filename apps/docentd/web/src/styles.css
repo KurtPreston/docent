@@ -493,6 +493,21 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 .pill.ag-failed { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, var(--border)); }
 .pill.ag-stopped { color: var(--text-faint); }
 
+.ag-mode {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 7px;
+  overflow: hidden; font-size: 11px;
+}
+.ag-mode-btn {
+  border: none; background: transparent; color: var(--text-dim);
+  padding: 3px 8px; cursor: pointer; font: inherit;
+}
+.ag-mode-btn + .ag-mode-btn { border-left: 1px solid var(--border); }
+.ag-mode-btn.active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+  color: var(--text);
+}
+.ag-mode-btn:disabled { opacity: .45; cursor: not-allowed; }
+
 .ag-target { display: flex; gap: 8px; }
 .ag-target select, .ag-target input {
   flex: 1; min-width: 0; background: var(--bg-elev); color: var(--text);
@@ -512,6 +527,17 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
   border-left: 2px solid var(--accent); padding-left: 8px;
 }
 .ag-text { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; }
+.ag-plan {
+  font-size: 12.5px; line-height: 1.5;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  padding-left: 10px;
+}
+.ag-plan :first-child { margin-top: 0; }
+.ag-plan :last-child { margin-bottom: 0; }
+.ag-plan pre {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 10px; overflow-x: auto;
+}
 .ag-thinking { color: var(--text-faint); font-size: 11.5px; }
 .ag-thinking summary { cursor: pointer; }
 .ag-thinking div { white-space: pre-wrap; padding: 4px 0 0 10px; }
