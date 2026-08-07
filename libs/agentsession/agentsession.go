@@ -85,6 +85,10 @@ const (
 	KindTool EventKind = "tool"
 	// KindToolResult is what the tool returned.
 	KindToolResult EventKind = "tool-result"
+	// KindPlan is a plan-mode artifact from cursor-agent's createPlan tool.
+	// Kept separate from KindText so a UI can render it as structured markdown
+	// rather than as chat prose.
+	KindPlan EventKind = "plan"
 	// KindDone is the terminal success event, carrying the turn's result.
 	KindDone EventKind = "done"
 	// KindError is the terminal failure event.

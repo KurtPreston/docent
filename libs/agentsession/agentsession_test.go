@@ -135,6 +135,48 @@ func TestCursorStreamNormalizes(t *testing.T) {
 	}
 }
 
+// cursorPlanStream is the shape captured from cursor-agent 2026.08.04 running a
+// plan-mode turn. Tool activity arrives as top-level type=tool_call envelopes, and
+// the plan itself is inside createPlanToolCall rather than in assistant prose.
+var cursorPlanStream = []string{
+	`{"type":"system","subtype":"init","session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking"}]},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" the repo."}]},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking the repo.\n"}]},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa","model_call_id":"abc-0"}`,
+	`{"type":"tool_call","subtype":"started","call_id":"tool_read","tool_call":{"readToolCall":{"args":{"path":"/tmp/wt/README.md"}}},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"tool_call","subtype":"completed","call_id":"tool_read","tool_call":{"readToolCall":{"args":{"path":"/tmp/wt/README.md"},"result":{"success":{"content":"hello\n"}}}},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"tool_call","subtype":"started","call_id":"tool_plan","tool_call":{"createPlanToolCall":{"args":{"plan":"# Create foo.txt\n\nWrite foo.txt with bar."}}},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"tool_call","subtype":"completed","call_id":"tool_plan","tool_call":{"createPlanToolCall":{"args":{"plan":"# Create foo.txt\n\nWrite foo.txt with bar."},"result":{"success":{}}}},"session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"interaction_query","subtype":"request","query_type":"createPlanRequestQuery","session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa"}`,
+	`{"type":"result","subtype":"success","duration_ms":6030,"is_error":false,"result":"Checking the repo.\n","session_id":"61199176-3525-4cae-9e72-52fe4d0a15aa","usage":{"inputTokens":6115,"outputTokens":466}}`,
+}
+
+func TestCursorPlanStreamSurfacesToolsAndPlan(t *testing.T) {
+	evs, res, got := collect(t, parseCursorLine, cursorPlanStream)
+	if !got {
+		t.Fatal("no terminal result parsed")
+	}
+	if got := textOf(evs, KindText); got != "Checking the repo." {
+		t.Errorf("text = %q, want deltas exactly once without the consolidated repeat", got)
+	}
+	if got := textOf(evs, KindPlan); got != "# Create foo.txt\n\nWrite foo.txt with bar." {
+		t.Errorf("plan = %q", got)
+	}
+	if want := []EventKind{
+		KindStarted, KindText, KindText, KindTool, KindToolResult, KindTool, KindPlan, KindToolResult, KindDone,
+	}; !sameKinds(kinds(evs), want) {
+		t.Fatalf("kinds = %v, want %v", kinds(evs), want)
+	}
+	for _, e := range evs {
+		if e.Kind == KindTool && e.Tool == "read" && e.Text != "/tmp/wt/README.md" {
+			t.Errorf("read tool arg = %q", e.Text)
+		}
+	}
+	if res.Text != "Checking the repo.\n" {
+		t.Errorf("result = %+v", res)
+	}
+}
+
 // A failed turn is a normal outcome to record, not an operational fault, so it
 // surfaces as a result with IsError rather than as a parse failure.
 func TestErrorResultIsTerminalNotFatal(t *testing.T) {

@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -77,6 +78,17 @@ func (c Cursor) Turn(ctx context.Context, req TurnRequest, emit func(Event)) (Tu
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	cmd := exec.CommandContext(cctx, c.bin(), cursorArgs(req)...)
+	cmd.Dir = req.Dir
+	if c.Env != nil {
+		cmd.Env = c.Env
+	}
+	return runStreaming(cctx, cmd, req.Prompt, parseCursorLine, emit)
+}
+
+// cursorArgs builds the argv for one cursor-agent turn. Exported to tests so flag
+// construction can be asserted without spawning a process.
+func cursorArgs(req TurnRequest) []string {
 	// --resume on every turn including the first: the id came from create-chat, so
 	// there is no "new session" invocation to distinguish. req.First is therefore
 	// meaningless here, unlike for Claude.
@@ -93,24 +105,21 @@ func (c Cursor) Turn(ctx context.Context, req TurnRequest, emit func(Event)) (Tu
 	if m := strings.TrimSpace(req.Model); m != "" {
 		args = append(args, "--model", m)
 	}
-
-	cmd := exec.CommandContext(cctx, c.bin(), args...)
-	cmd.Dir = req.Dir
-	if c.Env != nil {
-		cmd.Env = c.Env
-	}
-	return runStreaming(cctx, cmd, req.Prompt, parseCursorLine, emit)
+	return args
 }
 
 // cursorLine is cursor-agent's stream-json envelope. It overlaps Claude's but is
 // not the same: text deltas arrive directly on type=assistant rather than wrapped
 // in a stream_event, and thinking is its own top-level type.
 type cursorLine struct {
-	Type      string `json:"type"`
-	Subtype   string `json:"subtype"`
-	SessionID string `json:"session_id"`
-	Text      string `json:"text"`
-	Message   struct {
+	Type         string                       `json:"type"`
+	Subtype      string                       `json:"subtype"`
+	SessionID    string                       `json:"session_id"`
+	ModelCallID  string                       `json:"model_call_id"`
+	CallID       string                       `json:"call_id"`
+	Text         string                       `json:"text"`
+	ToolCall     map[string]json.RawMessage   `json:"tool_call"`
+	Message      struct {
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -151,9 +160,12 @@ func parseCursorLine(line string) ([]Event, TurnResult, bool) {
 		return nil, TurnResult{}, false
 
 	case "assistant":
-		// With --stream-partial-output each assistant line carries one delta, so
-		// text blocks are emitted directly rather than deduplicated against a
-		// separate stream (the shape Claude needs).
+		// With --stream-partial-output, per-word deltas arrive without
+		// model_call_id and a consolidated repeat of the whole block follows with
+		// one. Emitting both would duplicate every sentence.
+		if l.ModelCallID != "" {
+			return nil, TurnResult{}, false
+		}
 		var out []Event
 		for _, b := range l.Message.Content {
 			switch {
@@ -164,6 +176,9 @@ func parseCursorLine(line string) ([]Event, TurnResult, bool) {
 			}
 		}
 		return out, TurnResult{}, false
+
+	case "tool_call":
+		return parseCursorToolCall(l)
 
 	case "user":
 		var out []Event
@@ -196,4 +211,105 @@ func parseCursorLine(line string) ([]Event, TurnResult, bool) {
 		return []Event{ev}, res, true
 	}
 	return nil, TurnResult{}, false
+}
+
+func parseCursorToolCall(l cursorLine) ([]Event, TurnResult, bool) {
+	if l.ToolCall == nil {
+		return nil, TurnResult{}, false
+	}
+	name := cursorToolName(l.ToolCall)
+	if name == "" {
+		return nil, TurnResult{}, false
+	}
+	switch l.Subtype {
+	case "started":
+		var out []Event
+		out = append(out, Event{
+			Kind:      KindTool,
+			Tool:      name,
+			Text:      cursorToolArgsSummary(l.ToolCall),
+			SessionID: l.SessionID,
+		})
+		if plan := cursorPlanText(l.ToolCall); plan != "" {
+			out = append(out, Event{Kind: KindPlan, Text: plan, SessionID: l.SessionID})
+		}
+		return out, TurnResult{}, false
+	case "completed":
+		payload := cursorToolResult(l.ToolCall)
+		if payload == nil {
+			return nil, TurnResult{}, false
+		}
+		return []Event{{
+			Kind:      KindToolResult,
+			Text:      summarizeToolResult(payload),
+			SessionID: l.SessionID,
+		}}, TurnResult{}, false
+	default:
+		return nil, TurnResult{}, false
+	}
+}
+
+// cursorToolName reads the one *ToolCall key in a tool_call envelope.
+func cursorToolName(toolCall map[string]json.RawMessage) string {
+	for k := range toolCall {
+		if strings.HasSuffix(k, "ToolCall") {
+			return strings.TrimSuffix(k, "ToolCall")
+		}
+	}
+	return ""
+}
+
+func cursorToolArgsSummary(toolCall map[string]json.RawMessage) string {
+	for k, raw := range toolCall {
+		if !strings.HasSuffix(k, "ToolCall") {
+			continue
+		}
+		var wrapper struct {
+			Args map[string]any `json:"args"`
+		}
+		if json.Unmarshal(raw, &wrapper) != nil || wrapper.Args == nil {
+			continue
+		}
+		for _, key := range []string{"path", "command", "globPattern", "query"} {
+			if val, ok := wrapper.Args[key]; ok {
+				return fmt.Sprint(val)
+			}
+		}
+	}
+	return ""
+}
+
+func cursorPlanText(toolCall map[string]json.RawMessage) string {
+	raw, ok := toolCall["createPlanToolCall"]
+	if !ok {
+		return ""
+	}
+	var wrapper struct {
+		Args struct {
+			Plan string `json:"plan"`
+		} `json:"args"`
+	}
+	if json.Unmarshal(raw, &wrapper) != nil {
+		return ""
+	}
+	return wrapper.Args.Plan
+}
+
+func cursorToolResult(toolCall map[string]json.RawMessage) any {
+	for k, raw := range toolCall {
+		if !strings.HasSuffix(k, "ToolCall") {
+			continue
+		}
+		var wrapper struct {
+			Result json.RawMessage `json:"result"`
+		}
+		if json.Unmarshal(raw, &wrapper) != nil || len(wrapper.Result) == 0 {
+			continue
+		}
+		var result any
+		if json.Unmarshal(wrapper.Result, &result) == nil {
+			return result
+		}
+	}
+	return nil
 }
