@@ -668,7 +668,106 @@ func LocalGitRoots(directives []userdata.Directive) []string {
 	return out
 }
 
+// localGitDefaultScanDepth is the historical reach of a scan: only the
+// immediate children of code_home, and the `paths` entries themselves.
+const localGitDefaultScanDepth = 1
+
+// localGitMaxScanDepth caps config.scan_depth. Two levels covers the layout
+// that motivated the option — a grove project root holding a bare `.base`
+// clone plus one worktree directory per branch — and the cap keeps a typo from
+// turning collection into a walk of the whole home directory.
+const localGitMaxScanDepth = 3
+
+// localGitScanDepth reads Config["scan_depth"]: how many directory levels a
+// scan may examine below each root. Missing, unparseable, or out-of-range
+// values fall back to the single level local-git has always scanned.
+func localGitScanDepth(directive userdata.Directive) int {
+	raw := strings.TrimSpace(directive.Config["scan_depth"])
+	if raw == "" {
+		return localGitDefaultScanDepth
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < localGitDefaultScanDepth {
+		return localGitDefaultScanDepth
+	}
+	if n > localGitMaxScanDepth {
+		return localGitMaxScanDepth
+	}
+	return n
+}
+
+// localGitDepthSuffix annotates an empty-scan message with the depth actually
+// searched, so "no repositories" is not read as a deeper search than it was.
+func localGitDepthSuffix(depth int) string {
+	if depth <= localGitDefaultScanDepth {
+		return ""
+	}
+	return fmt.Sprintf(" (searched %d levels deep)", depth)
+}
+
+// localGitMissingRepoRemediation extends a "found nothing" remediation with the
+// scan_depth hint, but only while the scan is still at its default reach: a
+// grove project root looks empty to a one-level scan even though every worktree
+// under it is a repo, and that is the most likely reason to be reading this.
+func localGitMissingRepoRemediation(depth int, base string) string {
+	if depth > localGitDefaultScanDepth {
+		return base
+	}
+	return base + `; if the repos sit one level deeper (e.g. grove worktrees), set config.scan_depth: "2"`
+}
+
+// appendLocalGitRepos collects the git working trees at or below dir, appending
+// each expanded, de-duplicated path to dirs, and reports whether it found any.
+//
+// A directory that is itself a working tree ends the descent: everything under
+// it is its own source tree, not separate repositories. Only a directory that
+// is NOT a repo gets opened up, which is exactly the shape of a grove project
+// root — a bare `.base` clone beside one worktree directory per branch, with no
+// `.git` of its own. Dot-directories are skipped while recursing, which is what
+// keeps `.base` out of the results.
+//
+// depth is how many levels this call may examine: 1 means "dir or nothing", 2
+// means "dir, else its children", and so on.
+func appendLocalGitRepos(dir string, depth int, expand func(string) string, seen map[string]bool, dirs *[]string) bool {
+	if depth < 1 {
+		return false
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		abs := expand(dir)
+		if !seen[abs] {
+			seen[abs] = true
+			*dirs = append(*dirs, abs)
+		}
+		return true
+	}
+	if depth == 1 {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		if appendLocalGitRepos(filepath.Join(dir, e.Name()), depth-1, expand, seen, dirs) {
+			found = true
+		}
+	}
+	return found
+}
+
+// localGitRepoDirs resolves the directive to the working trees to scan: the
+// `paths` entries when set, otherwise the children of code_home. Each candidate
+// is walked to config.scan_depth levels, so a root that is not a repo itself
+// can still yield the repos nested inside it.
 func localGitRepoDirs(directive userdata.Directive, opts *CollectOpts, expand func(string) string) ([]string, error) {
+	depth := localGitScanDepth(directive)
 	var dirs []string
 	seen := map[string]bool{}
 	for _, p := range directive.Paths {
@@ -676,15 +775,7 @@ func localGitRepoDirs(directive userdata.Directive, opts *CollectOpts, expand fu
 		if p == "" {
 			continue
 		}
-		if st, err := os.Stat(p); err == nil && st.IsDir() {
-			if _, err := os.Stat(filepath.Join(p, ".git")); err != nil {
-				continue
-			}
-			if !seen[p] {
-				seen[p] = true
-				dirs = append(dirs, p)
-			}
-		}
+		appendLocalGitRepos(p, depth, expand, seen, &dirs)
 	}
 	if len(dirs) > 0 {
 		return dirs, nil
@@ -701,18 +792,10 @@ func localGitRepoDirs(directive userdata.Directive, opts *CollectOpts, expand fu
 		if !e.IsDir() {
 			continue
 		}
-		cand := filepath.Join(codeHome, e.Name())
-		if _, err := os.Stat(filepath.Join(cand, ".git")); err != nil {
-			continue
-		}
-		abs := expand(cand)
-		if !seen[abs] {
-			seen[abs] = true
-			dirs = append(dirs, abs)
-		}
+		appendLocalGitRepos(filepath.Join(codeHome, e.Name()), depth, expand, seen, &dirs)
 	}
 	if len(dirs) == 0 {
-		return nil, fmt.Errorf("local-git: no git repositories under %s", codeHome)
+		return nil, fmt.Errorf("local-git: no git repositories under %s%s", codeHome, localGitDepthSuffix(depth))
 	}
 	return dirs, nil
 }
@@ -755,6 +838,7 @@ func (c LocalGitCollector) ValidateDirective(ctx context.Context, directive user
 	if opts != nil && opts.ExpandRepoPath != nil {
 		expand = opts.ExpandRepoPath
 	}
+	depth := localGitScanDepth(directive)
 	var (
 		issues   []ValidationIssue
 		resolved []string
@@ -774,17 +858,13 @@ func (c LocalGitCollector) ValidateDirective(ctx context.Context, directive user
 			})
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(p, ".git")); err != nil {
+		if !appendLocalGitRepos(p, depth, expand, seen, &resolved) {
 			issues = append(issues, ValidationIssue{
 				Field:       "paths",
-				Message:     fmt.Sprintf("%s is not a git working tree (missing .git)", p),
-				Remediation: "point to a directory containing .git, or drop this entry",
+				Message:     fmt.Sprintf("%s is not a git working tree (missing .git)%s", p, localGitDepthSuffix(depth)),
+				Remediation: localGitMissingRepoRemediation(depth, "point to a directory containing .git, or drop this entry"),
 			})
 			continue
-		}
-		if !seen[p] {
-			seen[p] = true
-			resolved = append(resolved, p)
 		}
 	}
 	if len(resolved) == 0 {
@@ -816,21 +896,13 @@ func (c LocalGitCollector) ValidateDirective(ctx context.Context, directive user
 			if !e.IsDir() {
 				continue
 			}
-			cand := filepath.Join(codeHome, e.Name())
-			if _, err := os.Stat(filepath.Join(cand, ".git")); err != nil {
-				continue
-			}
-			abs := expand(cand)
-			if !seen[abs] {
-				seen[abs] = true
-				resolved = append(resolved, abs)
-			}
+			appendLocalGitRepos(filepath.Join(codeHome, e.Name()), depth, expand, seen, &resolved)
 		}
 		if len(resolved) == 0 {
 			return append(issues, ValidationIssue{
 				Field:       "code_home",
-				Message:     fmt.Sprintf("no git repositories found under %s", codeHome),
-				Remediation: "clone repos into code_home or point it at a directory of repos",
+				Message:     fmt.Sprintf("no git repositories found under %s%s", codeHome, localGitDepthSuffix(depth)),
+				Remediation: localGitMissingRepoRemediation(depth, "clone repos into code_home or point it at a directory of repos"),
 			})
 		}
 	}

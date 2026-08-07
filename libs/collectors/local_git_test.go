@@ -1,9 +1,15 @@
 package collectors
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 )
 
@@ -147,5 +153,187 @@ func TestParseGitRemoteToRepositoryKey(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("parseGitRemoteToRepositoryKey(%q) = %q; want %q", tt.raw, got, tt.want)
 		}
+	}
+}
+
+func TestLocalGitScanDepth(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want int
+	}{
+		{"", 1},
+		{"  ", 1},
+		{"0", 1},
+		{"-3", 1},
+		{"abc", 1},
+		{"1", 1},
+		{" 2 ", 2},
+		{"3", 3},
+		{"99", localGitMaxScanDepth},
+	}
+	for _, tt := range tests {
+		d := userdata.Directive{Config: map[string]string{"scan_depth": tt.raw}}
+		if got := localGitScanDepth(d); got != tt.want {
+			t.Errorf("localGitScanDepth(scan_depth=%q) = %d, want %d", tt.raw, got, tt.want)
+		}
+	}
+	if got := localGitScanDepth(userdata.Directive{}); got != 1 {
+		t.Errorf("localGitScanDepth with no config = %d, want 1", got)
+	}
+}
+
+// mkLocalGitScanTree builds a code_home fixture covering every case the depth
+// walk has to get right:
+//
+//	plain/.git                an ordinary clone, found at any depth
+//	plain/vendor/.git         a nested repo the walk must not descend to
+//	project/.base/HEAD        a grove project root: bare clone, no .git of its own
+//	project/.hidden/.git      a dot-directory the walk must skip
+//	project/wt-a/.git         the project's worktrees, one level further in
+//	project/wt-b/.git
+//	loose/notes.txt           no repo anywhere below
+func mkLocalGitScanTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{
+		"plain/.git",
+		"plain/vendor/.git",
+		"project/.base",
+		"project/.hidden/.git",
+		"project/wt-a/.git",
+		"project/wt-b/.git",
+		"loose",
+	} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "project", ".base", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "loose", "notes.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// identityExpand keeps t.TempDir() paths verbatim so assertions can compare
+// against the paths the fixture built (on macOS the real expander resolves
+// /var to /private/var).
+func identityExpand(s string) string { return s }
+
+func relPaths(t *testing.T, root string, dirs []string) []string {
+	t.Helper()
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		rel, err := filepath.Rel(root, d)
+		if err != nil {
+			t.Fatalf("Rel(%q, %q): %v", root, d, err)
+		}
+		out = append(out, filepath.ToSlash(rel))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestLocalGitRepoDirsCodeHomeDepth(t *testing.T) {
+	root := mkLocalGitScanTree(t)
+	tests := []struct {
+		name  string
+		depth string
+		want  []string
+	}{
+		{
+			name: "default depth stays at the immediate children",
+			want: []string{"plain"},
+		},
+		{
+			name:  "depth 2 reaches the grove project's worktrees",
+			depth: "2",
+			want:  []string{"plain", "project/wt-a", "project/wt-b"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := userdata.Directive{ID: "lg", Collector: "local-git", CodeHome: root}
+			if tt.depth != "" {
+				d.Config = map[string]string{"scan_depth": tt.depth}
+			}
+			dirs, err := localGitRepoDirs(d, nil, identityExpand)
+			if err != nil {
+				t.Fatalf("localGitRepoDirs: %v", err)
+			}
+			got := relPaths(t, root, dirs)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("scanned %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocalGitRepoDirsPathsDepth(t *testing.T) {
+	root := mkLocalGitScanTree(t)
+	project := filepath.Join(root, "project")
+
+	// A grove project root is not a working tree, so at the default depth the
+	// entry contributes nothing and resolution falls through to code_home.
+	d := userdata.Directive{ID: "lg", Collector: "local-git", Paths: []string{project}, CodeHome: root}
+	dirs, err := localGitRepoDirs(d, nil, identityExpand)
+	if err != nil {
+		t.Fatalf("localGitRepoDirs: %v", err)
+	}
+	if got, want := relPaths(t, root, dirs), []string{"plain"}; !slices.Equal(got, want) {
+		t.Errorf("default depth scanned %v, want %v (the project root itself is not a repo)", got, want)
+	}
+
+	d.Config = map[string]string{"scan_depth": "2"}
+	dirs, err = localGitRepoDirs(d, nil, identityExpand)
+	if err != nil {
+		t.Fatalf("localGitRepoDirs: %v", err)
+	}
+	want := []string{"project/wt-a", "project/wt-b"}
+	if got := relPaths(t, root, dirs); !slices.Equal(got, want) {
+		t.Errorf("scanned %v, want %v", got, want)
+	}
+}
+
+// A directory that is already a working tree ends the descent: its
+// subdirectories are its source tree, so a vendored repo inside it is not a
+// separate thing to collect.
+func TestLocalGitRepoDirsDoesNotDescendIntoRepos(t *testing.T) {
+	root := mkLocalGitScanTree(t)
+	d := userdata.Directive{
+		ID:        "lg",
+		Collector: "local-git",
+		Paths:     []string{filepath.Join(root, "plain")},
+		Config:    map[string]string{"scan_depth": "3"},
+	}
+	dirs, err := localGitRepoDirs(d, nil, identityExpand)
+	if err != nil {
+		t.Fatalf("localGitRepoDirs: %v", err)
+	}
+	want := []string{"plain"}
+	if got := relPaths(t, root, dirs); !slices.Equal(got, want) {
+		t.Errorf("scanned %v, want %v (plain/vendor is inside a repo)", got, want)
+	}
+}
+
+func TestLocalGitRepoDirsEmptyCodeHomeMentionsDepth(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d := userdata.Directive{
+		ID:        "lg",
+		Collector: "local-git",
+		CodeHome:  root,
+		Config:    map[string]string{"scan_depth": "2"},
+	}
+	_, err := localGitRepoDirs(d, nil, identityExpand)
+	if err == nil {
+		t.Fatal("expected an error when nothing under code_home is a repo")
+	}
+	if !strings.Contains(err.Error(), "searched 2 levels deep") {
+		t.Errorf("error %q should say how deep the scan looked", err)
 	}
 }

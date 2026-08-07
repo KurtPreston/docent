@@ -88,6 +88,51 @@ func TestLocalGitValidateRunsGitProbe(t *testing.T) {
 	}
 }
 
+// A grove project root — a bare `.base` clone plus one worktree directory per
+// branch, and no `.git` of its own — reads as "not a git working tree" at the
+// default depth, and as a perfectly good scan root at scan_depth 2.
+func TestLocalGitValidateGroveProjectNeedsScanDepth(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary unavailable")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	worktree := filepath.Join(project, "wt-a")
+	if err := os.MkdirAll(filepath.Join(project, ".base"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "--initial-branch=main", worktree).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	c := LocalGitCollector{Clock: time.Now}
+	validate := func(d userdata.Directive) []ValidationIssue {
+		return c.ValidateDirective(context.Background(), d, &ValidateOpts{ExpandRepoPath: func(s string) string { return s }})
+	}
+	base := userdata.Directive{
+		ID:        "local",
+		Name:      "Local",
+		Collector: "local-git",
+		Enabled:   true,
+		CodeHome:  root,
+		Paths:     []string{project},
+	}
+
+	issues := validate(base)
+	if !hasField(issues, "paths") {
+		t.Fatalf("expected a paths issue for the project root at the default depth, got %#v", issues)
+	}
+	if !hasRemediationContains(issues, "scan_depth") {
+		t.Errorf("the default-depth remediation should point at scan_depth: %#v", issues)
+	}
+
+	deep := base
+	deep.Config = map[string]string{"scan_depth": "2"}
+	if issues := validate(deep); len(issues) != 0 {
+		t.Fatalf("scan_depth 2 should resolve the project's worktree cleanly, got %#v", issues)
+	}
+}
+
 func TestLocalGitValidateBadPath(t *testing.T) {
 	c := LocalGitCollector{Clock: time.Now}
 	issues := c.ValidateDirective(context.Background(), userdata.Directive{
@@ -315,6 +360,15 @@ func hasField(issues []ValidationIssue, field string) bool {
 func hasMessageContains(issues []ValidationIssue, sub string) bool {
 	for _, iss := range issues {
 		if strings.Contains(iss.Message, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRemediationContains(issues []ValidationIssue, sub string) bool {
+	for _, iss := range issues {
+		if strings.Contains(iss.Remediation, sub) {
 			return true
 		}
 	}
