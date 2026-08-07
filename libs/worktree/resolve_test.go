@@ -2,9 +2,11 @@ package worktree
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -445,6 +447,44 @@ func TestResolveAddsTheLocalRemoteLater(t *testing.T) {
 	}
 	if got := gitConfig(base)["remote.local.url"]; got != filepath.Join(local, ".git") {
 		t.Errorf("remote.local.url = %q, want the newly cloned copy's git dir", got)
+	}
+}
+
+// Two branches of the same repository resolved at once must share one .base
+// clone. Agent runs lock per branch, so without a repo-level lock the second
+// resolve would race git clone and fail with "already exists".
+func TestResolveConcurrentBranchesShareOneBase(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	f.clone(code, "salsa", remote)
+	state := t.TempDir()
+
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := Resolve(context.Background(), Request{
+				Repo: "Chip/salsa", Branch: fmt.Sprintf("feature-%d", i),
+				Roots: []string{code}, StateRoot: state,
+			})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := filepath.Join(state, "projects", "Chip-salsa", ".base")
+	if !isBareRepo(base) {
+		t.Fatalf("no bare repository at %s", base)
 	}
 }
 

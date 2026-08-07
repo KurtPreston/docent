@@ -176,15 +176,28 @@ func stateRoot(override string) string {
 func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal bool, remoteURL string) (string, error) {
 	base := filepath.Join(root, baseDirName)
 	if isBareRepo(base) {
-		// A repository cloned locally after docent made its base should still
-		// become reachable, so the local remote is reconciled every time rather
-		// than only at creation.
-		if hasLocal {
-			if err := setRemote(ctx, base, localRemote, local.GitDir); err != nil {
-				return "", err
-			}
+		return reconcileLocalRemote(ctx, base, local, hasLocal)
+	}
+
+	// Agent runs lock per branch, but .base is shared across branches of the
+	// same repository. Without this, two first-time resolves racing would both
+	// see no bare repo and one would fail with "destination already exists".
+	release, err := baseLocks.acquire(ctx, root)
+	if err != nil {
+		return "", fmt.Errorf("worktree: waiting to provision %s: %w", repo, err)
+	}
+	defer release()
+
+	if isBareRepo(base) {
+		return reconcileLocalRemote(ctx, base, local, hasLocal)
+	}
+
+	// A half-written directory from an interrupted clone is not a bare repo and
+	// would make git clone fail with "already exists".
+	if isDir(base) {
+		if err := os.RemoveAll(base); err != nil {
+			return "", fmt.Errorf("worktree: %w", err)
 		}
-		return base, nil
 	}
 
 	url, err := cloneURL(repo, local, hasLocal, remoteURL)
@@ -205,11 +218,34 @@ func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal 
 	}
 	args = append(args, url, base)
 	if err := gitRun(ctx, root, cloneTimeout, args...); err != nil {
+		if isBareRepo(base) {
+			// Another caller finished while this one was cloning.
+			return finishBase(ctx, base, local, hasLocal, url)
+		}
 		// A half-written clone would be mistaken for a usable one next time.
 		os.RemoveAll(base)
 		return "", err
 	}
 
+	return finishBase(ctx, base, local, hasLocal, url)
+}
+
+// reconcileLocalRemote registers the developer's git dir as remote.local when
+// docent's bare clone already exists.
+func reconcileLocalRemote(ctx context.Context, base string, local Project, hasLocal bool) (string, error) {
+	// A repository cloned locally after docent made its base should still
+	// become reachable, so the local remote is reconciled every time rather
+	// than only at creation.
+	if hasLocal {
+		if err := setRemote(ctx, base, localRemote, local.GitDir); err != nil {
+			return "", err
+		}
+	}
+	return base, nil
+}
+
+// finishBase completes setup after a fresh bare clone.
+func finishBase(ctx context.Context, base string, local Project, hasLocal bool, url string) (string, error) {
 	// A bare clone has no fetch refspec, so without this `git fetch origin`
 	// updates FETCH_HEAD and no remote-tracking branch, and every lookup of
 	// origin/<branch> comes up empty.
@@ -225,12 +261,7 @@ func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal 
 	if err := clearHeads(ctx, base); err != nil {
 		return "", err
 	}
-	if hasLocal {
-		if err := setRemote(ctx, base, localRemote, local.GitDir); err != nil {
-			return "", err
-		}
-	}
-	return base, nil
+	return reconcileLocalRemote(ctx, base, local, hasLocal)
 }
 
 // adoptRemoteHead records the remote's default branch as origin/HEAD.
