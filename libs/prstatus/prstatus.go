@@ -66,6 +66,19 @@ var Order = []Bucket{
 	Draft,
 }
 
+// ReviewOrder is Order read from the other side of the PR: for somebody else's
+// PR, "how much does this need me" inverts almost exactly. A PR waiting on a
+// reviewer is the only one that wants anything from you, and an approved one
+// wants the least — the opposite of where each sits when the PR is your own.
+var ReviewOrder = []Bucket{
+	AwaitingReview,
+	PendingValidation,
+	FailingValidation,
+	AwaitingAuthor,
+	ReadyToMerge,
+	Draft,
+}
+
 var labels = map[Bucket]string{
 	ReadyToMerge:      "ready to merge",
 	FailingValidation: "checks failing",
@@ -314,12 +327,21 @@ func remarkSide(a Actor, me, body string) (Side, bool) {
 // Rank orders buckets by Order, for sorting a mixed list of PRs. Unknown buckets
 // sort last.
 func Rank(b Bucket) int {
-	for i, id := range Order {
+	return rankIn(Order, b)
+}
+
+// ReviewRank orders buckets by ReviewOrder, for a list of other people's PRs.
+func ReviewRank(b Bucket) int {
+	return rankIn(ReviewOrder, b)
+}
+
+func rankIn(order []Bucket, b Bucket) int {
+	for i, id := range order {
 		if id == b {
 			return i
 		}
 	}
-	return len(Order)
+	return len(order)
 }
 
 // SortByUrgency orders results most-actionable first, breaking ties oldest-first

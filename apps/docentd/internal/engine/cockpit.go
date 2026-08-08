@@ -45,6 +45,9 @@ const (
 	AttentionInProgress = "in-progress"
 	// AttentionTodo is an assigned ticket not started yet.
 	AttentionTodo = "todo"
+	// AttentionReviewable is someone else's open PR that nobody has asked the
+	// user to look at: the pool a review is picked from.
+	AttentionReviewable = "reviewable"
 
 	rankAgentWaiting    = 0
 	rankMyTurnPR        = 1
@@ -53,6 +56,7 @@ const (
 	rankAgentWorking    = 4
 	rankInProgress      = 5
 	rankTodo            = 6
+	rankReviewable      = 7
 	rankNotInCockpit    = 99
 )
 
@@ -73,6 +77,12 @@ type Cockpit struct {
 	// query returns 43 tickets, which would be six times the number of real
 	// lanes and would bury them.
 	Queue []CockpitLane `json:"queue"`
+	// ReviewQueue is the same idea for other people's work: open PRs the user
+	// could review but that nobody has asked them to. Kept out of Lanes for the
+	// reason Queue is — a busy repo's whole open-PR list would outnumber the
+	// lanes and bury them — and separate from Queue because "what could I pick
+	// up" and "what could I review" are answered at different moments.
+	ReviewQueue []CockpitLane `json:"reviewQueue"`
 	// Inbox is the flat follow-up queue: individual review comments and PR
 	// states that want a response, newest first.
 	Inbox []InboxItem `json:"inbox"`
@@ -103,6 +113,7 @@ type CockpitCounts struct {
 	AgentWorking    int `json:"agentWorking"`
 	InProgress      int `json:"inProgress"`
 	Todo            int `json:"todo"`
+	Reviewable      int `json:"reviewable"`
 	// Actionable counts the lanes that want a decision now, which is the one
 	// number worth putting on a hotkey badge.
 	Actionable int `json:"actionable"`
@@ -127,8 +138,12 @@ type CockpitLane struct {
 	JiraStatus string `json:"jiraStatus,omitempty"`
 	// Color is the branch's color, so a lane in the cockpit
 	// matches the title bar of the window it opens.
-	Color         string `json:"color,omitempty"`
-	FG            string `json:"fg,omitempty"`
+	Color string `json:"color,omitempty"`
+	FG    string `json:"fg,omitempty"`
+	// ReviewBucket is the prstatus bucket of the PR that put this lane in the
+	// review queue, which is what that list groups by — the counterpart of
+	// JiraStatus for the assigned queue. Empty everywhere else.
+	ReviewBucket  string `json:"reviewBucket,omitempty"`
 	Attention     string `json:"attention"`
 	AttentionRank int    `json:"attentionRank"`
 	// Reasons names every concrete thing wanting attention in this lane. A lane
@@ -197,9 +212,16 @@ func (e *Engine) Cockpit(ctx context.Context) Cockpit {
 			out.Counts.InProgress++
 		case AttentionTodo:
 			out.Counts.Todo++
+		case AttentionReviewable:
+			out.Counts.Reviewable++
 		}
+		// The two lists that are not lanes: work nobody has started, and work
+		// that is not the user's at all.
 		if lane.Attention == AttentionTodo {
 			out.Queue = append(out.Queue, lane)
+			continue
+		} else if lane.Attention == AttentionReviewable {
+			out.ReviewQueue = append(out.ReviewQueue, lane)
 			continue
 		}
 		out.Lanes = append(out.Lanes, lane)
@@ -231,6 +253,19 @@ func (e *Engine) Cockpit(ctx context.Context) Cockpit {
 			return out.Queue[i].LastActivity > out.Queue[j].LastActivity
 		}
 		return out.Queue[i].Key < out.Queue[j].Key
+	})
+	// Grouped by bucket in the UI the way the queue is grouped by JIRA status,
+	// so sort by it here to keep each group contiguous — in review order, which
+	// puts the PRs actually waiting on a reviewer at the top.
+	sort.SliceStable(out.ReviewQueue, func(i, j int) bool {
+		a, b := out.ReviewQueue[i], out.ReviewQueue[j]
+		if ra, rb := prstatus.ReviewRank(prstatus.Bucket(a.ReviewBucket)), prstatus.ReviewRank(prstatus.Bucket(b.ReviewBucket)); ra != rb {
+			return ra < rb
+		}
+		if a.LastActivity != b.LastActivity {
+			return a.LastActivity > b.LastActivity
+		}
+		return a.Key < b.Key
 	})
 	sort.SliceStable(out.Inbox, func(i, j int) bool {
 		if out.Inbox[i].At != out.Inbox[j].At {
@@ -314,6 +349,17 @@ func laneFor(g DashboardGroup) (CockpitLane, []InboxItem) {
 	}
 
 	for _, pr := range g.PRs {
+		// A PR nobody asked about earns a place in the review queue and nothing
+		// else: no inbox item, because the inbox is what is waiting on the
+		// user, and this is only ever an offer.
+		if pr.Reviewable {
+			promote(AttentionReviewable, rankReviewable)
+			if lane.ReviewBucket == "" {
+				lane.ReviewBucket = pr.Bucket
+			}
+			lane.Reasons = append(lane.Reasons, reviewableReason(pr))
+			continue
+		}
 		if !pr.Mine {
 			promote(AttentionReviewRequested, rankReviewRequested)
 			lane.Reasons = append(lane.Reasons, "waiting on your review")
@@ -432,6 +478,32 @@ func withStatus(reason, status string) string {
 		return reason
 	}
 	return reason + ": " + status
+}
+
+// reviewableReason names a candidate PR the way someone deciding what to review
+// reads it: whose it is, and whether anyone is still waiting on a reviewer.
+func reviewableReason(pr DashboardPR) string {
+	who := "open PR"
+	if pr.Author != "" {
+		who = "open PR by " + pr.Author
+	}
+	state := reviewBucketLabel(prstatus.Bucket(pr.Bucket))
+	if state == "" {
+		return who
+	}
+	return who + ", " + state
+}
+
+// reviewBucketLabel is prstatus's own label read from the other side of the PR.
+// Only one bucket changes: "awaiting author" is phrased "awaiting you" for a PR
+// of the user's, which on somebody else's is simply wrong.
+func reviewBucketLabel(b prstatus.Bucket) string {
+	if b == prstatus.AwaitingAuthor {
+		return "awaiting its author"
+	} else if !b.Valid() {
+		return ""
+	}
+	return b.Label()
 }
 
 func prInbox(kind string, g DashboardGroup, pr DashboardPR, title string) InboxItem {

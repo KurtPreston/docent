@@ -502,6 +502,69 @@ func TestQueueIsSeparateFromLanes(t *testing.T) {
 	}
 }
 
+// PRs nobody asked the user to review get the same treatment as the assigned
+// backlog: a list of their own, off the rail, out of the badge, and out of the
+// inbox. A followed repo's open PRs are other people's work, and lanes are for
+// the user's.
+func TestReviewQueueIsSeparateFromLanes(t *testing.T) {
+	e := &Engine{}
+	e.lastDashboard = Dashboard{Groups: []DashboardGroup{
+		{Key: "SALSA-1", LastActivity: "2026-05-04T10:00:00Z", PRs: []DashboardPR{
+			{Title: "theirs", Author: "bob", Reviewable: true, Bucket: "ready_to_merge"},
+		}},
+		{Key: "SALSA-2", LastActivity: "2026-05-04T09:00:00Z", PRs: []DashboardPR{
+			{Title: "also theirs", Author: "carol", Reviewable: true, Bucket: "awaiting_review"},
+		}},
+		// Explicitly asked of the user: still a lane, still actionable.
+		{Key: "SALSA-3", PRs: []DashboardPR{{Title: "review me", Mine: false}}},
+		{Key: "SALSA-4", PRs: []DashboardPR{{Title: "mine", Mine: true, Checks: "failing"}}},
+	}}
+
+	got := e.Cockpit(context.Background())
+	if len(got.Lanes) != 2 {
+		t.Errorf("lanes = %+v, want only the review request and the user's own PR", got.Lanes)
+	}
+	if len(got.ReviewQueue) != 2 {
+		t.Fatalf("review queue = %+v, want the 2 candidates", got.ReviewQueue)
+	}
+	// Review order, not the order a PR of the user's would take: the one still
+	// waiting on a reviewer comes before the one already approved.
+	if got.ReviewQueue[0].Key != "SALSA-2" || got.ReviewQueue[1].Key != "SALSA-1" {
+		t.Errorf("review queue order = %q, %q", got.ReviewQueue[0].Key, got.ReviewQueue[1].Key)
+	}
+	if got.ReviewQueue[0].ReviewBucket != "awaiting_review" {
+		t.Errorf("ReviewBucket = %q, want the bucket the UI groups by", got.ReviewQueue[0].ReviewBucket)
+	}
+	if got.ReviewQueue[0].Reasons[0] != "open PR by carol, awaiting review" {
+		t.Errorf("reason = %q", got.ReviewQueue[0].Reasons[0])
+	}
+	if got.Counts.Reviewable != 2 {
+		t.Errorf("Reviewable = %d, want 2", got.Counts.Reviewable)
+	}
+	// The badge counts what wants a decision. Nobody asked for these.
+	if got.Counts.Actionable != 2 {
+		t.Errorf("Actionable = %d, want 2 (the review request and the failing PR)", got.Counts.Actionable)
+	}
+	for _, item := range got.Inbox {
+		if item.LaneKey == "SALSA-1" || item.LaneKey == "SALSA-2" {
+			t.Errorf("a candidate PR is not waiting on the user: %+v", item)
+		}
+	}
+}
+
+// A PR of somebody else's is read from the other side, so the bucket that reads
+// "awaiting you" on the user's own PR must not say that here.
+func TestReviewableReasonSpeaksFromTheReviewersSide(t *testing.T) {
+	got := reviewableReason(DashboardPR{Author: "bob", Bucket: "awaiting_author"})
+	if got != "open PR by bob, awaiting its author" {
+		t.Errorf("reason = %q", got)
+	}
+	// An unclassified PR still says whose it is rather than inventing a state.
+	if got := reviewableReason(DashboardPR{Author: "bob"}); got != "open PR by bob" {
+		t.Errorf("unclassified reason = %q", got)
+	}
+}
+
 // Every lane must be able to say why it is there; an unexplained lane is the
 // dashboard's failure mode repeated.
 func TestEveryLaneHasAReason(t *testing.T) {
