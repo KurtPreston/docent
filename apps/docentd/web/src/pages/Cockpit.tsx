@@ -42,6 +42,7 @@ const ATTENTION_LABEL: Record<Attention, string> = {
   "agent-working": "agent working",
   "in-progress": "in progress",
   todo: "to do",
+  reviewable: "could review",
 };
 
 // The six buckets docent classifies a PR into, from libs/prstatus. Rendered as
@@ -54,6 +55,18 @@ const BUCKET_LABEL: Record<string, string> = {
   pending_validation: "checks running",
   draft: "draft",
 };
+
+// The same buckets read from the other side of the PR. Only one differs, and it
+// has to: "awaiting you" is true of your own PR and false of everyone else's.
+const REVIEW_BUCKET_LABEL: Record<string, string> = {
+  ...BUCKET_LABEL,
+  awaiting_author: "awaiting its author",
+};
+
+function bucketLabel(bucket: string, reviewable?: boolean): string {
+  const labels = reviewable ? REVIEW_BUCKET_LABEL : BUCKET_LABEL;
+  return labels[bucket] ?? bucket;
+}
 
 const INBOX_LABEL: Record<InboxKind, string> = {
   "agent-waiting": "agent",
@@ -428,8 +441,11 @@ function LaneDetail({
                   both puts two verdicts on one row, or literally "draft draft". */}
               {!pr.bucket && pr.draft ? <span className="pill">draft</span> : null}
               {pr.bucket ? (
-                <span className={"pill bk-" + pr.bucket}>{BUCKET_LABEL[pr.bucket] ?? pr.bucket}</span>
+                <span className={"pill bk-" + pr.bucket}>
+                  {bucketLabel(pr.bucket, pr.reviewable)}
+                </span>
               ) : null}
+              {pr.author ? <span className="muted tiny">by {pr.author}</span> : null}
               {pr.checks ? <span className={"pill checks-" + pr.checks}>{pr.checks}</span> : null}
               {!pr.bucket && pr.reviewDecision ? (
                 <span className="pill">{pr.reviewDecision.toLowerCase().replace(/_/g, " ")}</span>
@@ -533,6 +549,76 @@ function QueueList({
                   <span className="muted">{l.title}</span>
                 </button>
               ))}
+            </div>
+          ))
+        : null}
+    </div>
+  );
+}
+
+// ReviewList is the pool of PRs the user could review: everything open in a
+// followed repo, plus anything assigned to them. Nobody asked for any of it, so
+// it sits below the rail with the backlog rather than in it, collapsed by
+// default, and answers "what could I pick up" rather than "what needs me".
+//
+// Grouped by state in the order the backend sorted them, which is review order:
+// the PRs still waiting on a reviewer first, the ones already approved last.
+function ReviewList({
+  queue,
+  selected,
+  forceOpen,
+  onSelect,
+}: {
+  queue: CockpitLane[];
+  selected?: string;
+  forceOpen?: boolean;
+  onSelect: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const groups = useMemo(() => {
+    const by = new Map<string, CockpitLane[]>();
+    for (const l of queue) {
+      const k = l.reviewBucket || "open";
+      const list = by.get(k);
+      if (list) list.push(l);
+      else by.set(k, [l]);
+    }
+    return [...by.entries()];
+  }, [queue]);
+
+  if (queue.length === 0) return null;
+  return (
+    <div className="queue">
+      {forceOpen ? (
+        <div className="queue-toggle static">PRs to review ({queue.length} matching)</div>
+      ) : (
+        <button type="button" className="queue-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? "▾" : "▸"} PRs to review ({queue.length})
+        </button>
+      )}
+      {open || forceOpen
+        ? groups.map(([bucket, lanes]) => (
+            <div className="queue-group" key={bucket}>
+              <div className="queue-status">
+                {REVIEW_BUCKET_LABEL[bucket] ?? bucket}{" "}
+                <span className="muted tiny">({lanes.length})</span>
+              </div>
+              {lanes.map((l) => {
+                const pr = l.prs.find((p) => p.reviewable) ?? l.prs[0];
+                return (
+                  <button
+                    type="button"
+                    className={"queue-item" + (selected === l.key ? " selected" : "")}
+                    key={l.key}
+                    onClick={() => onSelect(l.key)}
+                  >
+                    {pr?.prNumber ? <span className="ticket">#{pr.prNumber}</span> : null}
+                    <span className="muted">{pr?.title || l.title || l.key}</span>
+                    {/* Whose it is, which is most of how a reviewer picks. */}
+                    {pr?.author ? <span className="who tiny">{pr.author}</span> : null}
+                  </button>
+                );
+              })}
             </div>
           ))
         : null}
@@ -668,9 +754,11 @@ export function Cockpit() {
 
   const lanes = data?.lanes ?? [];
   const queue = data?.queue ?? [];
+  const reviewQueue = data?.reviewQueue ?? [];
   const query = filter.trim();
   const shownLanes = useMemo(() => filterLanes(lanes, query), [lanes, query]);
   const shownQueue = useMemo(() => filterLanes(queue, query), [queue, query]);
+  const shownReview = useMemo(() => filterLanes(reviewQueue, query), [reviewQueue, query]);
 
   // The backlog is selectable too, even though it is not in the rail: picking a
   // ticket to start is the whole point of having it here. Keep the user's
@@ -683,7 +771,8 @@ export function Cockpit() {
   const current =
     shownLanes.find((l) => l.key === selected) ??
     shownQueue.find((l) => l.key === selected) ??
-    (query ? (shownLanes[0] ?? shownQueue[0]) : lanes[0]);
+    shownReview.find((l) => l.key === selected) ??
+    (query ? (shownLanes[0] ?? shownQueue[0] ?? shownReview[0]) : lanes[0]);
 
   // Newest session wins when a branch has been worked more than once: an old
   // finished conversation should not shadow the one running now.
@@ -736,7 +825,7 @@ export function Cockpit() {
   const railMessage =
     errText ??
     (query
-      ? shownQueue.length > 0
+      ? shownQueue.length > 0 || shownReview.length > 0
         ? null
         : `Nothing matches “${query}”.`
       : "Nothing needs you right now.");
@@ -794,6 +883,12 @@ export function Cockpit() {
           ) : null}
           <QueueList
             queue={shownQueue}
+            selected={current?.key}
+            forceOpen={query !== ""}
+            onSelect={setSelected}
+          />
+          <ReviewList
+            queue={shownReview}
             selected={current?.key}
             forceOpen={query !== ""}
             onSelect={setSelected}

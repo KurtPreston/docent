@@ -478,6 +478,8 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 .queue-item.selected { background: var(--bg-elev-2); color: var(--text); }
 .queue-item .ticket { font-size: 11.5px; font-weight: 620; }
 .queue-item .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The PR's author, pushed to the far edge so a column of them reads down. */
+.queue-item .who { margin-left: auto; padding-left: 6px; color: var(--text-faint); white-space: nowrap; }
 
 /* --- Agent panel -----------------------------------------------------------
    The lane's hosted agent: a transcript that scrolls on its own and a compose

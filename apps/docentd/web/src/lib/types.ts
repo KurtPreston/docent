@@ -40,6 +40,10 @@ export type DashboardPR = {
   draft: boolean;
   ticket?: string;
   mine?: boolean;
+  /** Someone else's open PR that nobody asked the user to review. */
+  reviewable?: boolean;
+  /** The login that opened the PR. Only set on PRs that are not the user's. */
+  author?: string;
   checks?: string;
   reviewDecision?: string;
   unresolved?: number;
@@ -107,7 +111,8 @@ export type Attention =
   | "review-requested"
   | "agent-working"
   | "in-progress"
-  | "todo";
+  | "todo"
+  | "reviewable";
 
 export type CockpitLane = {
   key: string;
@@ -122,6 +127,8 @@ export type CockpitLane = {
   jiraStatus?: string;
   color?: string;
   fg?: string;
+  /** The bucket the review queue groups by; only set on its own lanes. */
+  reviewBucket?: string;
   attention: Attention;
   attentionRank: number;
   /** Every concrete thing wanting attention; never empty. */
@@ -165,6 +172,7 @@ export type CockpitCounts = {
   agentWorking: number;
   inProgress: number;
   todo: number;
+  reviewable: number;
   actionable: number;
 };
 
@@ -186,6 +194,8 @@ export type Cockpit = {
   counts: CockpitCounts;
   lanes: CockpitLane[];
   queue: CockpitLane[];
+  /** Open PRs the user could review but was never asked to. */
+  reviewQueue: CockpitLane[];
   inbox: InboxItem[];
   sources: CockpitSource[];
 };
