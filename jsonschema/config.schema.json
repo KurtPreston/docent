@@ -704,7 +704,7 @@
             },
             "followed_repos": {
               "type": "string",
-              "x-docent-prompt": "Comma-separated owner/repo list to include when scope=all",
+              "x-docent-prompt": "Comma-separated owner/repo list: broadens scope=all, and fills the cockpit's PRs-to-review list",
               "x-docent-setup-skip-prompt": true
             }
           },
@@ -762,7 +762,7 @@
             },
             "followed_repos": {
               "type": "string",
-              "x-docent-prompt": "Comma-separated owner/repo list to include when scope=all",
+              "x-docent-prompt": "Comma-separated owner/repo list: broadens scope=all, and fills the cockpit's PRs-to-review list",
               "x-docent-setup-skip-prompt": true
             }
           },

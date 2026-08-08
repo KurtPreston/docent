@@ -122,7 +122,7 @@ Each collector honors `scope` directly — there is no post-collection filter. `
 | Collector | `self` | `involved` (default) | `all` |
 |-----------|--------|----------------------|-------|
 | `local-git` | Commits whose author matches your `git config user.email` / `$USER`. Reflog rows always emitted. | Self commits **plus** commits on local branches (branches you've created or checked out). | Every commit on every ref in the window. |
-| `github` / `github-enterprise` | `gh search prs --author <you>` and commits authored by you. | Self plus PRs reviewed by you, issues you're involved with, comments you left on either, PRs awaiting your review, and any [`pr_queries`](#extra-open-pr-searches) declared on the directive. | `involved` plus per-repo `gh search prs/issues/commits --repo <r>` for each entry in `config.followed_repos`. |
+| `github` / `github-enterprise` | `gh search prs --author <you>` and commits authored by you. | Self plus PRs reviewed by you, issues you're involved with, comments you left on either, PRs awaiting your review, any [`pr_queries`](#extra-open-pr-searches) declared on the directive, and the [review candidates](#prs-you-could-review). | `involved` plus per-repo `gh search prs/issues/commits --repo <r>` for each entry in `config.followed_repos`. |
 | `gitea` | Repos you own; issues + PRs created by you. | Self plus issues/PRs assigned to you or mentioning you (deduped). | `involved` plus per-repo issue + PR listings for each entry in `config.followed_repos`. Bare-`owner` entries fan out across all repos under that owner. |
 | `jira` | `(assignee = currentUser() OR reporter = currentUser()) AND updated >= …` | Adds `OR watcher = currentUser()`. Today's default JQL. | Wraps with `project in (…) OR …` using `config.followed_projects` (falls back to `involved` when no projects are configured). |
 | `google-calendar` | All scopes return all events on the secret iCal feed (the feed is your personal calendar by definition). | Same as `self`. | Same as `self`. |
@@ -130,14 +130,17 @@ Each collector honors `scope` directly — there is no post-collection filter. `
 How each collector decides whether a row is **yours** (`is_self: true`):
 
 - **`local-git`**: author email matches per-repo/global `user.email`, or `$USER` appears (case-insensitive) in the author name. Reflog rows are always yours.
-- **`github` / `github-enterprise`**: user-anchored queries (`--author`, `--reviewed-by`, `--commenter`, `--involves`) yield `is_self=true`. Repo-scoped queries used in `scope: all` yield `is_self=false` unless the result author matches your username.
+- **`github` / `github-enterprise`**: user-anchored queries (`--author`, `--reviewed-by`, `--commenter`, `--involves`) yield `is_self=true`. Repo-scoped queries used in `scope: all` yield `is_self=false` unless the result author matches your username, and the [review candidates](#prs-you-could-review) are always `is_self=false`.
 - **`gitea`**: user-anchored queries (created/assigned/mentioned) yield `is_self=true`. Repo-scoped queries used in `scope: all` set `is_self=true` only when the issue/PR author matches your login.
 - **`jira`**: `self` / `involved` rows are `is_self=true` (the JQL guarantees it). `all` rows are `is_self=true` only when the issue's assignee or reporter email matches `config.email` (Basic auth); otherwise `is_self=false`.
 - **`google-calendar`**: every event is `is_self=true` today.
 
-### Following repos / projects in scope: all
+### Following repos / projects
 
-To make `scope: all` collect more than `involved` for the forge and ticket-tracker collectors, declare what you'd like to follow:
+`followed_repos` does two jobs. It is what `scope: all` broadens on for the forge
+collectors, and — for `github` / `github-enterprise` only — it is also the pool
+the cockpit's [PRs to review](#prs-you-could-review) list is drawn from, which
+needs no `scope: all`. Declare what you'd like to follow:
 
 ```yaml
 directives:
@@ -145,7 +148,7 @@ directives:
     collector: github
     enabled: true
     config:
-      followed_repos: "rust-lang/rust, golang/go"   # comma-, space-, or newline-separated
+      followed_repos: "rust-lang/rust, golang/go"   # comma-, space-, or newline-separated; owner/repo only
   - id: gitea
     collector: gitea
     enabled: true
@@ -164,7 +167,35 @@ directives:
       pat: DOCENT_JIRA_PAT
 ```
 
-Without these fields, `scope: all` collects the same set as `scope: involved` (the collectors have nothing extra to broaden on).
+Without these fields, `scope: all` collects the same set as `scope: involved` (the collectors have nothing extra to broaden on), and the cockpit's review queue holds only PRs assigned to you.
+
+### PRs you could review
+
+Docent's other PR searches all answer "who asked for me": you authored it, a bot
+authored it for you, someone requested your review. The review queue answers the
+question before that one — what is there to pick up — so it searches for open
+PRs nobody has pointed at you at all:
+
+- every open, non-draft PR in each `followed_repos` entry (`owner/repo`; bare
+  owners are skipped, since `gh search prs --repo` rejects them);
+- every open PR assigned to you, draft or not, wherever it lives. A draft handed
+  to you personally is still yours to look at.
+
+Anything an earlier search already claimed stays what that search called it, so
+your own PRs never turn up here. What is left is emitted as `pr_review_status`
+rows with `relation: reviewable`, `reviewable: "true"`, and — this part matters —
+`is_self: false`. They are somebody else's work, and `conditions.self` is what
+keeps an automation like `autofix-pr` from pushing commits at a teammate's PR.
+
+Each candidate is resolved as fully as one of your own, because the
+[bucket](#how-an-open-pr-is-classified) is the whole reason a candidate is worth
+listing: it says whether anyone is still waiting on a reviewer. That costs one
+API round trip each, so the pool is capped at the 50 most recently updated and
+the lookups run concurrently. A repo with hundreds of open PRs will show you the
+newest 50 rather than spending a collection on the rest.
+
+Like `pr_queries`, these searches run at `involved` and `all` only: `scope: self`
+is your own work by definition, and other people's PRs are the opposite of that.
 
 ### Extra open-PR searches
 
@@ -197,7 +228,8 @@ Matches are treated exactly like PRs you authored: docent resolves their checks,
 review decision, and merge state, counts them in the dashboard's
 action-required tally, and lists them in the standup. `relation` labels the rows
 so automations can single them out via `match.fields`; it may be any lowercase
-identifier other than the built-in `authored` and `review_requested`.
+identifier other than the built-in `authored`, `review_requested`, and
+`reviewable`.
 
 Because a PR opened on your behalf is adjacent context rather than something you
 wrote, these searches run at `involved` and `all` only. `scope: self` — which
@@ -205,9 +237,10 @@ the `prs` mode pins — stays limited to PRs you authored.
 
 ### How an open PR is classified
 
-Every open PR of yours is put into exactly one of six buckets, reported on the
-`pr_review_status` signal as the `bucket` field (so automations can match it via
-`match.fields`) and shown as a pill in the cockpit:
+Every open PR docent resolves — yours, and the ones you could review — is put
+into exactly one of six buckets, reported on the `pr_review_status` signal as
+the `bucket` field (so automations can match it via `match.fields`) and shown as
+a pill in the cockpit:
 
 | Bucket | Meaning |
 |--------|---------|
@@ -215,8 +248,13 @@ Every open PR of yours is put into exactly one of six buckets, reported on the
 | `failing_validation` | The head commit's check rollup is failing. |
 | `pending_validation` | Checks are still running. |
 | `ready_to_merge` | Checks green (or absent) and approved. |
-| `awaiting_author` | Checks green, not approved, and a **reviewer** acted last: your move. |
-| `awaiting_review` | Checks green, not approved, and **you** acted last: their move. |
+| `awaiting_author` | Checks green, not approved, and a **reviewer** acted last: the author's move. |
+| `awaiting_review` | Checks green, not approved, and the **author** acted last: a reviewer's move. |
+
+The last two are written from the PR's own point of view because they read from
+both sides: `awaiting_author` is your move on a PR of yours and somebody else's
+on a PR you could review, which is why the cockpit labels the same bucket
+"awaiting you" in your lanes and "awaiting its author" in the review queue.
 
 Two details are worth knowing because they are easy to get wrong:
 
@@ -275,7 +313,7 @@ On an interactive terminal, docent-reporter prints `Press 'c' to abort pending c
 All collectors run in **date range** mode (`since` → `until`). Implemented:
 
 - `local-git` — commits + reflog under `code_home` or explicit `paths`. Scope picks commits by author, by local-branch membership, or every commit on every ref. See [Nested repos](#nested-repos-configscan_depth) if your working trees sit a level deeper.
-- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). Open-PR status also covers anything matched by [`pr_queries`](#extra-open-pr-searches). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
+- `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). Open-PR status also covers anything matched by [`pr_queries`](#extra-open-pr-searches) and the [PRs you could review](#prs-you-could-review). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
 - `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
 - `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.

@@ -203,7 +203,7 @@ rather always pull every DM directly, set `dm_discovery: off`.
 `scope: all` only collects extra messages when `config.followed_channels`
 is non-empty. Without it, `all` behaves like `involved` for this
 collector — same as the other forge/ticket collectors documented in
-[Reporting › Following repos / projects in scope: all](Reporting.md#following-repos--projects-in-scope-all).
+[Reporting › Following repos / projects](Reporting.md#following-repos--projects).
 
 ## Common gotchas
 

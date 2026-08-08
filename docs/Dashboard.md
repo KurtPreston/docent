@@ -122,6 +122,17 @@ colors come from `model.ColorForName`, which derives them from the branch
 name, so a lane
 matches the title bar of the window it opens.
 
+Two collapsed lists sit under the rail for the same reason, one for each kind of
+work nobody has actually asked you for. **Assigned to you** is the unstarted
+backlog, grouped by the project's own JIRA status names. **PRs to review** is
+every open PR in a [followed repo](Reporting.md#prs-you-could-review) — plus
+anything assigned to you, draft or not — that is not yours and did not name you
+as a reviewer, grouped by review state with the ones still waiting on a reviewer
+first. Neither list counts toward the "need you" badge and neither
+reaches the inbox; a PR you were actually asked to review is a lane, not a
+queue entry. Selecting either opens it like any other lane, so an agent can be
+pointed at it.
+
 Three columns: the lane rail, the selected lane's detail (windows, PRs, the
 threads waiting on a reply, and its agent), and the follow-up inbox. Each inbox
 row has a default action that seeds an agent prompt into the row's lane —
