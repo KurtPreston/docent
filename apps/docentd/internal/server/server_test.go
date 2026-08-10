@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,13 @@ import (
 )
 
 func newTestServer(t *testing.T, token string) http.Handler {
+	t.Helper()
+	return newTestServerConfig(t, config.DaemonConfig{Token: token})
+}
+
+// newTestServerConfig is newTestServer for tests that need to shape the
+// daemon config, e.g. to point an agent provider at a stub binary.
+func newTestServerConfig(t *testing.T, cfg config.DaemonConfig) http.Handler {
 	t.Helper()
 	// Agent sessions and their transcripts live under the state dir, so point it
 	// at a temp one: a test that starts a session must not write it into the
@@ -35,10 +43,26 @@ func newTestServer(t *testing.T, token string) http.Handler {
 			t.Fatal(err)
 		}
 	}
-	cfg := config.DaemonConfig{Token: token}
 	eng := engine.New(cfg, reg)
 	// nil webFS => disk-serve mode from the temp dir above.
 	return New(cfg, eng, reg, web, nil).Handler()
+}
+
+// stubAgentBinary writes an executable that answers `create-chat` with a fixed
+// id, and returns its path for cfg.AI.<provider>.Command. Starting a session
+// shells out to the real CLI, which is absent on CI and on any machine without
+// it installed; a test about docent's own bookkeeping should not depend on it.
+func stubAgentBinary(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stub agent binary is a shell script")
+	}
+	path := filepath.Join(t.TempDir(), "stub-agent")
+	script := "#!/bin/sh\nif [ \"$1\" = \"create-chat\" ]; then echo stub-chat-id; exit 0; fi\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func status(t *testing.T, h http.Handler, method, path, bearer string) int {

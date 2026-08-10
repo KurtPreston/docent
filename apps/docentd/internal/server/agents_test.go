@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/libs/agentsession"
 )
 
@@ -207,7 +208,9 @@ func TestStartRejectsUnknownMode(t *testing.T) {
 }
 
 func TestPatchSessionMode(t *testing.T) {
-	h := newTestServer(t, "")
+	cfg := config.DaemonConfig{}
+	cfg.AI.Cursor.Command = stubAgentBinary(t)
+	h := newTestServerConfig(t, cfg)
 	dir := t.TempDir()
 	rr := doJSON(t, h, http.MethodPost, "/api/agents", "", fmt.Sprintf(`{"dir":%q,"provider":"cursor"}`, dir))
 	if rr.Code != http.StatusAccepted {
