@@ -72,6 +72,10 @@ Skip the docent IDE extension (default is to ask when running interactively).
 .PARAMETER Hotkey
 Launcher hotkey (default: Ctrl+Alt+Space).
 
+.PARAMETER DashboardHotkey
+Launcher hotkey that opens the dashboard directly, skipping the picker (default:
+Ctrl+Alt+Shift+Space). Pass '' to skip it.
+
 .PARAMETER CockpitHotkey
 Cockpit-window hotkey (default: Ctrl+Alt+C).
 
@@ -116,6 +120,7 @@ param(
     [switch]$Extension,
     [switch]$NoExtension,
     [string]$Hotkey = 'Ctrl+Alt+Space',
+    [string]$DashboardHotkey = 'Ctrl+Alt+Shift+Space',
     [string]$CockpitHotkey = 'Ctrl+Alt+C',
     [string]$CockpitDesktop = 'cockpit',
     [switch]$NoCockpit,
@@ -673,7 +678,8 @@ else {
     # docent-launcher-windows (always)
     $lnVbs = Join-Path $ConfigDir 'docent-launcher-hidden.vbs'
     $lnScript = Join-Path $Root 'apps\docent-launcher-windows\docent-launcher.ps1'
-    $lnArgs = ('-NoLogo -NoProfile -File "{0}" -SessionsUrl "{1}" -WsmUrl "http://127.0.0.1:{2}" -Hotkey "{3}"' -f $lnScript, $Sessions, $WsmPort, $Hotkey)
+    $lnArgs = ('-NoLogo -NoProfile -File "{0}" -SessionsUrl "{1}" -WsmUrl "http://127.0.0.1:{2}" -Hotkey "{3}" -DashboardHotkey "{4}"' -f `
+            $lnScript, $Sessions, $WsmPort, $Hotkey, $DashboardHotkey)
     if ($Token) { $lnArgs += (' -Token "{0}"' -f $Token) }
     Write-HiddenVbs -Path $lnVbs -Exe $PwshExe -ArgLine $lnArgs `
         -LogFile (Join-Path $tmp 'docent-launcher.log')
@@ -1023,7 +1029,8 @@ Install-DocentExtension
 # --- summary -----------------------------------------------------------------
 Write-Host ""
 Write-Host "Installed (docentd: $Mode):"
-Write-Host "  docent-launcher-windows apps/docent-launcher-windows/docent-launcher.ps1  (hotkey $Hotkey)"
+$lnNote = if ($DashboardHotkey) { "hotkey $Hotkey, dashboard $DashboardHotkey" } else { "hotkey $Hotkey" }
+Write-Host "  docent-launcher-windows apps/docent-launcher-windows/docent-launcher.ps1  ($lnNote)"
 if (-not $NoCockpit) {
     $deskNote = if ($CockpitDesktop) { "hotkey $CockpitHotkey, desktop '$CockpitDesktop'" } else { "hotkey $CockpitHotkey" }
     Write-Host "  docent-cockpit          apps/docent-launcher-windows/docent-cockpit.ps1  ($deskNote)"

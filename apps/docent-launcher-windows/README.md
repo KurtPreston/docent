@@ -10,11 +10,14 @@ A Spotlight-style, always-on-top picker for docent on Windows, bound to a global
 hotkey (default **Ctrl+Alt+Space**). Type to fuzzy-filter dashboard **work
 items** (plus nested sessions / JIRA tickets / GitHub PRs); **Enter** opens or
 launches a work item, focuses a session window, or opens a ticket/PR URL;
-**Esc** hides it. The **Open ↗** button brings up the cockpit window (via
-`docent-cockpit.ps1 -Once`), falling back to your system browser if that script
-is not alongside it — when `-Token` (or `DOCENT_TOKEN`) is set it is forwarded as
-a one-time `?token=` query param, which the dashboard caches in `sessionStorage`
-and strips from the address bar.
+**Esc** hides it. The **Open ↗** button hands the dashboard URL to the shell, so
+it opens in your **default browser** like any other link — when `-Token` (or
+`DOCENT_TOKEN`) is set it is forwarded as a one-time `?token=` query param, which
+the dashboard caches in `sessionStorage` and strips from the address bar. A
+second global hotkey (`-DashboardHotkey`, default **Ctrl+Alt+Shift+Space**) does
+the same thing without summoning the picker first; pass `-DashboardHotkey ''` to
+skip registering it. For the dashboard as a window you keep rather than a tab you
+reopen, see `docent-cockpit.ps1` below.
 
 Built on WPF + Win32 `RegisterHotKey` (both ship with Windows) — no extra
 runtime, no admin. It is a faithful port of the legacy docent WPF launcher,
@@ -48,13 +51,17 @@ pwsh -File docent-launcher.ps1
 # remote docentd, local window manager
 pwsh -File docent-launcher.ps1 -SessionsUrl http://desktop:39787 -WsmUrl http://127.0.0.1:39788
 
+# custom chords for the picker and the dashboard
+pwsh -File docent-launcher.ps1 -Hotkey "Win+Space" -DashboardHotkey "Win+Shift+Space"
+
 # connectivity / parsing check (no GUI)
 pwsh -File docent-launcher.ps1 -SelfTest
 ```
 
 `scripts/install-docent-windows.ps1` registers this as a hidden, auto-restarting
 Scheduled Task (see the repo `docent-powershell` README for the watchdog
-pattern). `SessionsUrl`/`WsmUrl`/`Token`/`Hotkey` may also be supplied via the
+pattern), and takes `-Hotkey` / `-DashboardHotkey` to override both chords.
+`SessionsUrl`/`WsmUrl`/`Token`/`Hotkey` may also be supplied via the
 `DOCENT_SESSIONS_URL` (or `DOCENT_URL`), `WSM_URL`, and `DOCENT_TOKEN`
 environment variables.
 
@@ -70,7 +77,7 @@ pwsh -File docent-cockpit.ps1
 # remote docentd, different hotkey
 pwsh -File docent-cockpit.ps1 -Url http://desktop:39787 -Hotkey "Ctrl+Alt+D"
 
-# open-or-focus once and exit (what the picker's "Open ↗" calls)
+# open-or-focus once and exit (useful from another launcher or a shortcut)
 pwsh -File docent-cockpit.ps1 -Once
 ```
 

@@ -166,22 +166,26 @@ while focusing a session POSTs to the **local** wsm `/focus` — the window
 manager on the machine you're sitting at. An **Open ↗** toolbar button pops
 the full dashboard into your system browser; when a token is configured it's
 forwarded once as a `?token=` query param, which the dashboard caches in
-`sessionStorage` and strips from the address bar.
+`sessionStorage` and strips from the address bar. A second hotkey — the picker's
+chord plus **Shift** (default **Ctrl+Alt+Shift+Space**) — opens the dashboard in
+your default browser directly, for when the dashboard rather than a work item is
+what you're after.
 
 - **Windows** — `apps/docent-launcher-windows/docent-launcher.ps1`: a WPF
   window with a Win32 `RegisterHotKey` (default **Ctrl+Alt+Space**), no extra
   runtime or admin required. Configurable via flags (`-SessionsUrl`,
-  `-WsmUrl`, `-Token`, `-Hotkey`) or the equivalent `DOCENT_SESSIONS_URL` /
+  `-WsmUrl`, `-Token`, `-Hotkey`, `-DashboardHotkey`) or the equivalent `DOCENT_SESSIONS_URL` /
   `DOCENT_URL`, `WSM_URL`, `DOCENT_TOKEN` env vars; `-SelfTest` checks
   connectivity/parsing without opening a GUI. `scripts/install-docent-windows.ps1`
   registers it as a hidden, auto-restarting Scheduled Task. See its
   [README](apps/docent-launcher-windows/README.md) for the full flag/env
   reference and the `docent-tunnel` wiring.
 - **macOS** — `apps/docent-launcher-macos/docent.lua`: a Hammerspoon chooser
-  (default **Cmd+Alt+Space**). Copy to `~/.hammerspoon/` and add
+  (default **Ctrl+Alt+Space**). Copy to `~/.hammerspoon/` and add
   `require("docent")` to `init.lua`. Reads `DOCENT_PORT` / `WSM_PORT` /
   `DOCENT_TOKEN` env vars, or overrides written to
-  `~/.config/docent/launcher.lua` by the install script (e.g. a remote `url`).
+  `~/.config/docent/launcher.lua` by the install script (e.g. a remote `url`);
+  `hotkey` / `dashboardHotkey` can be overridden there too.
   Focus failures due to missing Accessibility permissions surface as a native
   notification with the fix.
 

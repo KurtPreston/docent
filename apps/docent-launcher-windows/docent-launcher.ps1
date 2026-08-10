@@ -4,9 +4,10 @@
 docent launcher (Windows) -- a Spotlight-style, always-on-top picker bound to a
 global hotkey (default Ctrl+Alt+Space). Type to fuzzy-filter work items (plus
 nested sessions / tickets / PRs); Enter opens/launches a work item, focuses a
-session window, or opens a ticket/PR URL; Esc hides. The "Open ↗" button pops
-the full dashboard out into your system browser (forwarding the -Token as a
-one-time ?token= query param when set).
+session window, or opens a ticket/PR URL; Esc hides. The "Open ↗" button opens
+the full dashboard in your default browser, the way clicking a link would, as
+does a second global hotkey (default Ctrl+Alt+Shift+Space) that skips the picker
+entirely. Both forward the -Token as a one-time ?token= query param when set.
 
 .DESCRIPTION
 Built on WPF (PresentationFramework) + Win32 RegisterHotKey -- both ship with
@@ -34,6 +35,11 @@ GET /api/workitems; the default docentd leaves it open).
 .PARAMETER Hotkey
 Modifier+key string, e.g. "Ctrl+Alt+Space" (default) or "Win+Space".
 
+.PARAMETER DashboardHotkey
+Modifier+key string that opens the dashboard in your default browser without
+going through the picker, exactly as the "Open ↗" button does (default
+"Ctrl+Alt+Shift+Space"). Pass '' to skip it.
+
 .PARAMETER SelfTest
 Fetch + flatten /api/workitems and print the entries, then exit (no window).
 
@@ -47,6 +53,7 @@ param(
     [string]$WsmUrl = $(if ($env:WSM_URL) { $env:WSM_URL } else { 'http://127.0.0.1:39788' }),
     [string]$Token = $env:DOCENT_TOKEN,
     [string]$Hotkey = 'Ctrl+Alt+Space',
+    [string]$DashboardHotkey = 'Ctrl+Alt+Shift+Space',
     [switch]$SelfTest
 )
 
@@ -332,28 +339,15 @@ function New-StatusEntry {
     }
 }
 
-# Open the docentd dashboard (served at SessionsUrl), preferring the persistent
-# cockpit app window over a new browser tab: docentd serves the cockpit at /, and
-# the point of the cockpit is to be one window you keep rather than a tab you
-# reopen. docent-cockpit.ps1 -Once is focus-or-open, so pressing this repeatedly
-# lands on the same window. Falling back to the system browser keeps the button
-# working when that script is not alongside this one (or on a non-Windows shell).
+# Hand the dashboard URL (docentd's /) to the shell, which opens it in the
+# default browser exactly as clicking a link would -- no dedicated window and no
+# virtual desktop, unlike docent-cockpit.ps1, which is still there on its own
+# hotkey for anyone who wants the cockpit as a window it never leaves.
+#
+# When a token is configured we pass it as a one-time ?token= query param; the
+# dashboard's auth.js caches it in sessionStorage and strips it from the URL.
 function Open-DashboardInBrowser {
     Hide-Launcher
-    $cockpit = Join-Path $PSScriptRoot 'docent-cockpit.ps1'
-    if (Test-Path $cockpit) {
-        $a = @('-NoProfile', '-File', $cockpit, '-Once', '-Url', $script:SessionsUrl)
-        if ($script:Token) { $a += @('-Token', $script:Token) }
-        try {
-            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $a -WindowStyle Hidden
-            return
-        }
-        catch {
-            Write-Warning "Could not open the cockpit window, falling back to the browser: $_"
-        }
-    }
-    # When a token is configured we pass it as a one-time ?token= query param;
-    # the dashboard's auth.js caches it in sessionStorage and strips it from the URL.
     $url = "$script:SessionsUrl/"
     if ($script:Token) {
         $url += "?token=$([uri]::EscapeDataString($script:Token))"
@@ -483,11 +477,16 @@ $helper = New-Object System.Windows.Interop.WindowInteropHelper $window
 $hwnd = $helper.EnsureHandle()
 $hk = ConvertTo-HotkeyParts -Spec $Hotkey
 $hotkeyId = 0xD0C
+$dashHotkeyId = 0xD0E
 $source = [System.Windows.Interop.HwndSource]::FromHwnd($hwnd)
 $source.AddHook({
         param($hwnd, $msg, $wParam, $lParam, [ref]$handled)
         if ($msg -eq 0x0312 -and ([int]$wParam -eq $hotkeyId)) {
             if ($window.Visibility -eq 'Visible') { Hide-Launcher } else { Show-Launcher }
+            $handled.Value = $true
+        }
+        elseif ($msg -eq 0x0312 -and ([int]$wParam -eq $dashHotkeyId)) {
+            Open-DashboardInBrowser
             $handled.Value = $true
         }
         return [IntPtr]::Zero
@@ -496,12 +495,20 @@ $source.AddHook({
 if (-not [DocentHotKey]::RegisterHotKey($hwnd, $hotkeyId, $hk.Mods, $hk.Vk)) {
     Write-Warning "Could not register hotkey '$Hotkey' (already in use?). The launcher will still run; press the hotkey owner or restart."
 }
+if ($DashboardHotkey) {
+    $dashHk = ConvertTo-HotkeyParts -Spec $DashboardHotkey
+    if (-not [DocentHotKey]::RegisterHotKey($hwnd, $dashHotkeyId, $dashHk.Mods, $dashHk.Vk)) {
+        Write-Warning "Could not register dashboard hotkey '$DashboardHotkey' (already in use?). The picker's 'Open ↗' button still works."
+    }
+}
 
-Write-Host "docent launcher running. Hotkey: $Hotkey  (sessions: $script:SessionsUrl, focus: $script:WsmUrl)"
+$dashNote = if ($DashboardHotkey) { ", dashboard: $DashboardHotkey" } else { '' }
+Write-Host "docent launcher running. Hotkey: $Hotkey$dashNote  (sessions: $script:SessionsUrl, focus: $script:WsmUrl)"
 Write-Host "Press the hotkey to summon; Esc to dismiss. Close this window to quit."
 
 $app = New-Object System.Windows.Application
 try { $app.Run() }
 finally {
     [DocentHotKey]::UnregisterHotKey($hwnd, $hotkeyId) | Out-Null
+    [DocentHotKey]::UnregisterHotKey($hwnd, $dashHotkeyId) | Out-Null
 }

@@ -3,15 +3,17 @@
 --
 -- Spotlight-style chooser (default Ctrl+Alt+Space). Enter focuses a session or
 -- opens a ticket/PR URL; Esc hides. The dashboard toolbar button (top-right)
--- pops the full dashboard into your system browser — when DOCENT.token is set it is forwarded
--- as a one-time ?token= query param, which the dashboard caches in
--- sessionStorage and strips from the address bar.
+-- pops the full dashboard into your system browser — as does a second hotkey
+-- (default Ctrl+Alt+Shift+Space), for when the dashboard is all you wanted.
+-- When DOCENT.token is set it is forwarded as a one-time ?token= query param,
+-- which the dashboard caches in sessionStorage and strips from the address bar.
 
 local DOCENT = {
   port = tonumber(os.getenv("DOCENT_PORT")) or 39787,
   wsmPort = tonumber(os.getenv("WSM_PORT")) or 39788,
   token = os.getenv("DOCENT_TOKEN"),
   hotkey = { mods = { "ctrl", "alt" }, key = "space" },
+  dashboardHotkey = { mods = { "ctrl", "alt", "shift" }, key = "space" },
 }
 
 local launcher_cfg = (os.getenv("HOME") or "") .. "/.config/docent/launcher.lua"
@@ -298,4 +300,9 @@ local function show()
 end
 
 hs.hotkey.bind(DOCENT.hotkey.mods, DOCENT.hotkey.key, show)
+-- Setting dashboardHotkey = false in launcher.lua leaves the toolbar button as
+-- the only way in.
+if DOCENT.dashboardHotkey then
+  hs.hotkey.bind(DOCENT.dashboardHotkey.mods, DOCENT.dashboardHotkey.key, openDashboard)
+end
 return DOCENT
