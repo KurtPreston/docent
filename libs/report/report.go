@@ -263,6 +263,14 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 		Scope:              collectors.Scope(resolved.Scope),
 		OnlyCollectorTypes: resolved.Collectors,
 		RunLog:             opts.RunLog,
+		// Collectors that stamp ticket fields need the same matching config
+		// the report stage uses, or a zero Config disables matching entirely
+		// and local-git silently stops anchoring commits and reflog rows to
+		// the branch's ticket. Derived without signals because collection is
+		// what produces them: this is the directive-declared half of the
+		// config, which Correlate later re-derives with observed projects
+		// folded in.
+		CorrCfg: correlationConfigFrom(cfg, nil),
 	}
 
 	collect := resolved.Collect

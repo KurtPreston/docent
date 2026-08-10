@@ -2,12 +2,15 @@ package report
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/executionmode"
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
 )
 
@@ -130,4 +133,61 @@ func TestCorrelateNoJiraDirectiveSkipsBackfill(t *testing.T) {
 		t.Fatalf("expected no annotation without jira directive, got %d signals", len(enriched))
 	}
 	_ = workItems
+}
+
+// corrCfgSpy records the CorrCfg the collector was handed.
+type corrCfgSpy struct {
+	got correlation.Config
+}
+
+func (s *corrCfgSpy) CollectEvents(_ context.Context, _ userdata.Directive, opts *collectors.CollectOpts) ([]collectors.StatusItem, error) {
+	s.got = opts.CorrCfg
+	return nil, nil
+}
+
+func (s *corrCfgSpy) CollectState(context.Context, userdata.Directive, *collectors.CollectOpts) ([]collectors.StatusItem, error) {
+	return nil, nil
+}
+
+// Collect must hand collectors the directive-declared ticket-matching config.
+// A zero correlation.Config disables matching outright, which silently stops
+// local-git from stamping the branch-derived ticket that anchors commits and
+// reflog rows whose own text never names one.
+func TestCollectPassesTicketMatchingConfigToCollectors(t *testing.T) {
+	spy := &corrCfgSpy{}
+	reg := collectors.NewRegistry(time.Now)
+	reg.Register("spy", spy)
+
+	cfg := userdata.ConfigFile{
+		Directives: []userdata.Directive{
+			{
+				ID:        "jira",
+				Collector: "jira",
+				Enabled:   true,
+				Config: map[string]string{
+					"base_url":          "https://jira.example",
+					"followed_projects": "JASPER, TANGO",
+				},
+			},
+			{ID: "spy", Collector: "spy", Enabled: true},
+		},
+	}
+
+	if _, err := Collect(context.Background(), reg, cfg, executionmode.ResolvedRun{
+		Collect: executionmode.CollectEvents,
+	}, CollectOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !spy.got.AllowGeneric {
+		t.Error("AllowGeneric = false, want true (an enabled jira directive is configured)")
+	}
+	want := []string{"JASPER", "TANGO"}
+	if !slices.Equal(spy.got.Projects, want) {
+		t.Errorf("Projects = %v, want %v (from the jira directive's followed_projects)", spy.got.Projects, want)
+	}
+	// The config must actually match the keys those projects imply.
+	if got := correlation.ScanTicketKey("jasper-4034-ioc-details", spy.got); got != "JASPER-4034" {
+		t.Errorf("ScanTicketKey = %q, want JASPER-4034", got)
+	}
 }
