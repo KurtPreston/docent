@@ -379,6 +379,12 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 }
 .lane:hover { background: var(--bg-elev-2); }
 .lane.selected { border-color: var(--accent); background: var(--bg-elev-2); }
+/* The filter box's keyboard highlight, drawn as a ring so it reads as a
+   different thing from the selection it is about to become: the pane still shows
+   the selected lane until Enter. */
+.lane.active, .queue-item.active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
 .lane-top { display: flex; align-items: center; gap: 7px; }
 .lane-name { font-weight: 620; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lane-bottom { display: flex; align-items: center; gap: 7px; }

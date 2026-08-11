@@ -132,6 +132,14 @@ function filterLanes(lanes: CockpitLane[], query: string): CockpitLane[] {
   });
 }
 
+// Rail rows are addressable so the filter box can name the row it has
+// highlighted, for screen readers and for scrolling that row into view. Lane
+// keys look like "wb:Chip/salsa@salsa-42-fix", so lookups go through
+// getElementById rather than a CSS selector.
+function rowID(laneKey: string): string {
+  return "rail-row-" + laneKey;
+}
+
 function Chip({ value, label }: { value: number; label: string }) {
   if (!value) return null;
   return (
@@ -141,15 +149,19 @@ function Chip({ value, label }: { value: number; label: string }) {
   );
 }
 
+// active is the filter box's keyboard highlight, which is not the selection:
+// the pane keeps showing the selected lane until Enter moves it.
 function LaneRow({
   lane,
   agent,
   selected,
+  active,
   onSelect,
 }: {
   lane: CockpitLane;
   agent?: AgentSession;
   selected: boolean;
+  active: boolean;
   onSelect: () => void;
 }) {
   const style = lane.color ? ({ "--g-color": lane.color } as CSSProperties) : undefined;
@@ -157,7 +169,8 @@ function LaneRow({
   return (
     <button
       type="button"
-      className={"lane" + (selected ? " selected" : "")}
+      id={rowID(lane.key)}
+      className={"lane" + (selected ? " selected" : "") + (active ? " active" : "")}
       style={style}
       onClick={onSelect}
       aria-current={selected}
@@ -496,18 +509,27 @@ function LaneDetail({
 // forceOpen expands the list while the rail is filtered: a ticket you search for
 // is usually one you have not started, so requiring a click to reveal the
 // matches would make the filter look like it found nothing.
+//
+// open is owned by the cockpit rather than here because the filter box's arrow
+// keys walk what the rail is showing, and a list that kept its own expanded
+// state would be visible but unreachable.
 function QueueList({
   queue,
   selected,
+  active,
+  open,
   forceOpen,
+  onToggle,
   onSelect,
 }: {
   queue: CockpitLane[];
   selected?: string;
+  active?: string | null;
+  open: boolean;
   forceOpen?: boolean;
+  onToggle: () => void;
   onSelect: (key: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const groups = useMemo(() => {
     const by = new Map<string, CockpitLane[]>();
     for (const l of queue) {
@@ -525,7 +547,7 @@ function QueueList({
       {forceOpen ? (
         <div className="queue-toggle static">Assigned to you ({queue.length} matching)</div>
       ) : (
-        <button type="button" className="queue-toggle" onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="queue-toggle" onClick={onToggle}>
           {open ? "▾" : "▸"} Assigned to you ({queue.length})
         </button>
       )}
@@ -541,7 +563,12 @@ function QueueList({
               {lanes.map((l) => (
                 <button
                   type="button"
-                  className={"queue-item" + (selected === l.key ? " selected" : "")}
+                  id={rowID(l.key)}
+                  className={
+                    "queue-item" +
+                    (selected === l.key ? " selected" : "") +
+                    (active === l.key ? " active" : "")
+                  }
                   key={l.key}
                   onClick={() => onSelect(l.key)}
                 >
@@ -566,15 +593,20 @@ function QueueList({
 function ReviewList({
   queue,
   selected,
+  active,
+  open,
   forceOpen,
+  onToggle,
   onSelect,
 }: {
   queue: CockpitLane[];
   selected?: string;
+  active?: string | null;
+  open: boolean;
   forceOpen?: boolean;
+  onToggle: () => void;
   onSelect: (key: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const groups = useMemo(() => {
     const by = new Map<string, CockpitLane[]>();
     for (const l of queue) {
@@ -592,7 +624,7 @@ function ReviewList({
       {forceOpen ? (
         <div className="queue-toggle static">PRs to review ({queue.length} matching)</div>
       ) : (
-        <button type="button" className="queue-toggle" onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="queue-toggle" onClick={onToggle}>
           {open ? "▾" : "▸"} PRs to review ({queue.length})
         </button>
       )}
@@ -608,7 +640,12 @@ function ReviewList({
                 return (
                   <button
                     type="button"
-                    className={"queue-item" + (selected === l.key ? " selected" : "")}
+                    id={rowID(l.key)}
+                    className={
+                      "queue-item" +
+                      (selected === l.key ? " selected" : "") +
+                      (active === l.key ? " active" : "")
+                    }
                     key={l.key}
                     onClick={() => onSelect(l.key)}
                   >
@@ -691,6 +728,15 @@ export function Cockpit() {
   const [auto, setAuto] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  // The rail's keyboard highlight, held as a lane key rather than a row index so
+  // that a poll which reorders the rail leaves it on the same lane. Null until
+  // an arrow key is pressed: a ring nobody asked for reads as a second
+  // selection.
+  const [active, setActive] = useState<string | null>(null);
+  // Whether each list under the rail is expanded. Held here rather than in the
+  // lists so the arrow keys can walk exactly the rows on screen.
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   // seeds are per-lane so switching lanes and coming back keeps a prompt you
   // were composing, and an inbox click never overwrites another lane's draft.
   const [seeds, setSeeds] = useState<Record<string, string>>({});
@@ -760,6 +806,22 @@ export function Cockpit() {
   const shownQueue = useMemo(() => filterLanes(queue, query), [queue, query]);
   const shownReview = useMemo(() => filterLanes(reviewQueue, query), [reviewQueue, query]);
 
+  // Every row the rail is currently showing, in the order it shows them, which
+  // is the order the filter box's arrow keys walk: lanes first, then whichever
+  // of the two lists below them is expanded.
+  const railRows = useMemo(
+    () => [
+      ...shownLanes,
+      ...(queueOpen || query ? shownQueue : []),
+      ...(reviewOpen || query ? shownReview : []),
+    ],
+    [shownLanes, shownQueue, shownReview, queueOpen, reviewOpen, query],
+  );
+
+  // A highlight is dropped rather than moved when its row leaves the rail: one
+  // more character typed should not hand the ring to an unrelated lane.
+  const activeKey = active && railRows.some((l) => l.key === active) ? active : null;
+
   // The backlog is selectable too, even though it is not in the rail: picking a
   // ticket to start is the whole point of having it here. Keep the user's
   // selection across polls, but never leave a stale lane selected once it stops
@@ -801,6 +863,45 @@ export function Cockpit() {
     setFilter("");
     setSelected(laneKey);
   }, []);
+
+  // Keep the highlighted row on screen: the rail scrolls, and a highlight the
+  // arrow keys walked off the bottom of it is indistinguishable from none.
+  useEffect(() => {
+    if (!activeKey) return;
+    document.getElementById(rowID(activeKey))?.scrollIntoView({ block: "nearest" });
+  }, [activeKey]);
+
+  // The filter box drives the rail, so finding a ticket and opening it never
+  // needs the mouse: type enough of it to narrow the rail, walk the matches with
+  // the arrow keys, and load the one you want with Enter.
+  //
+  // Enter loads rather than the highlight doing it, because a lane's detail
+  // mounts its agent panel and opens a transcript stream; arrowing past twenty
+  // lanes would open twenty of them.
+  const onFilterKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      setFilter("");
+      setActive(null);
+      e.currentTarget.blur();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (railRows.length === 0) return;
+      // Otherwise the caret jumps to the end of the query on every press.
+      e.preventDefault();
+      // With nothing highlighted yet, walking starts from whatever the pane is
+      // showing, so the first press steps off the current lane rather than
+      // jumping back to the top of the rail.
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      const from = railRows.findIndex((l) => l.key === (activeKey ?? current?.key));
+      // Clamped rather than wrapped: the rail is a list you scroll, not a dial.
+      const next = from < 0 ? (step > 0 ? 0 : railRows.length - 1) : from + step;
+      if (next >= 0 && next < railRows.length) setActive(railRows[next].key);
+    } else if (e.key === "Enter") {
+      // Without a highlight this pins whatever the filter already landed on,
+      // which is what keeps it selected once the query is cleared.
+      const key = activeKey ?? current?.key;
+      if (key) setSelected(key);
+    }
+  };
 
   // "/" focuses the filter, the convention everywhere else it exists. Guarded on
   // the event target, since most typing on this page happens in the agent's
@@ -853,19 +954,22 @@ export function Cockpit() {
       <div className="cockpit-grid">
         <aside className="rail">
           <div className="rail-filter">
+            {/* Focused on arrival, because the cockpit is usually opened by its
+                hotkey to get to one particular ticket, and typing its number
+                should not need a click first. */}
             <input
               ref={filterRef}
+              autoFocus
               type="search"
               value={filter}
               placeholder="Filter lanes and tickets  /"
               aria-label="Filter lanes and tickets"
+              aria-activedescendant={activeKey ? rowID(activeKey) : undefined}
               onChange={(e) => setFilter(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setFilter("");
-                  e.currentTarget.blur();
-                }
-              }}
+              // The highlight belongs to the keyboard: leaving the box for the
+              // pane would otherwise leave a ring behind that nothing moves.
+              onBlur={() => setActive(null)}
+              onKeyDown={onFilterKey}
             />
           </div>
           {shownLanes.length > 0 ? (
@@ -875,6 +979,7 @@ export function Cockpit() {
                 lane={l}
                 agent={agentByLane.get(agentKey(l.repo, l.branch))}
                 selected={current?.key === l.key}
+                active={activeKey === l.key}
                 onSelect={() => setSelected(l.key)}
               />
             ))
@@ -884,13 +989,19 @@ export function Cockpit() {
           <QueueList
             queue={shownQueue}
             selected={current?.key}
+            active={activeKey}
+            open={queueOpen}
             forceOpen={query !== ""}
+            onToggle={() => setQueueOpen((v) => !v)}
             onSelect={setSelected}
           />
           <ReviewList
             queue={shownReview}
             selected={current?.key}
+            active={activeKey}
+            open={reviewOpen}
             forceOpen={query !== ""}
+            onToggle={() => setReviewOpen((v) => !v)}
             onSelect={setSelected}
           />
         </aside>
