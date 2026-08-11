@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/KurtPreston/docent/apps/docentd/internal/config"
+	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/prstatus"
 )
 
@@ -422,6 +424,20 @@ func TestMostUrgentWinsButAllReasonsKept(t *testing.T) {
 	}
 	if len(lane.Reasons) < 3 {
 		t.Errorf("reasons = %v, want the agent, the failing checks, and the review request", lane.Reasons)
+	}
+}
+
+func TestCockpitAgentProvider(t *testing.T) {
+	e := &Engine{cfg: config.DaemonConfig{AI: userdata.AIConfig{Provider: "cursor"}}}
+	got := e.Cockpit(context.Background())
+	if got.AgentProvider != "cursor" {
+		t.Errorf("AgentProvider = %q, want cursor", got.AgentProvider)
+	}
+
+	e.cfg.AI.Provider = "rule-based"
+	got = e.Cockpit(context.Background())
+	if got.AgentProvider != "claude" {
+		t.Errorf("AgentProvider = %q, want claude", got.AgentProvider)
 	}
 }
 

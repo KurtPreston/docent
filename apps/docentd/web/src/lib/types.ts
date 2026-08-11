@@ -188,6 +188,8 @@ export type CockpitSource = {
 export type Cockpit = {
   generatedAt: string;
   provider?: string;
+  /** Default coding-agent CLI from ai.provider (claude or cursor). */
+  agentProvider?: string;
   sshHost?: string;
   /** How many work items exist in total, so the UI can say what it is hiding. */
   total: number;

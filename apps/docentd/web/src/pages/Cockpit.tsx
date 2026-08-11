@@ -366,6 +366,7 @@ function WindowRow({
 function LaneDetail({
   lane,
   provider,
+  defaultAgentProvider,
   inbox,
   agent,
   projects,
@@ -375,6 +376,7 @@ function LaneDetail({
 }: {
   lane: CockpitLane;
   provider: string;
+  defaultAgentProvider?: string;
   inbox: InboxItem[];
   agent?: AgentSession;
   projects: RepoProject[];
@@ -486,6 +488,7 @@ function LaneDetail({
         session={agent}
         seed={seed}
         projects={projects}
+        defaultProvider={defaultAgentProvider}
         // A lane with no branch is a ticket nobody has started; propose the
         // branch name the worktree would get so starting is one click.
         suggestBranch={branchForTicket(lane)}
@@ -1011,6 +1014,7 @@ export function Cockpit() {
             <LaneDetail
               lane={current}
               provider={data?.provider ?? ""}
+              defaultAgentProvider={data?.agentProvider}
               inbox={data?.inbox ?? []}
               agent={agentByLane.get(agentKey(current.repo, current.branch))}
               projects={projects}

@@ -64,6 +64,16 @@ const (
 	ProviderCursor Provider = "cursor"
 )
 
+// ProviderFromAI maps ai.provider config to a coding-agent provider. Only
+// "cursor" selects cursor-agent; ollama, rule-based, and everything else
+// default to Claude, matching automation agent actions.
+func ProviderFromAI(aiProvider string) Provider {
+	if strings.ToLower(strings.TrimSpace(aiProvider)) == string(ProviderCursor) {
+		return ProviderCursor
+	}
+	return ProviderClaude
+}
+
 // Mode is cursor-agent's execution mode. Claude ignores it.
 type Mode string
 

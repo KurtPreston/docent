@@ -698,3 +698,22 @@ func indexOf(hay []string, needle string) int {
 	}
 	return -1
 }
+
+func TestProviderFromAI(t *testing.T) {
+	tests := []struct {
+		in   string
+		want Provider
+	}{
+		{"cursor", ProviderCursor},
+		{"Cursor", ProviderCursor},
+		{" claude ", ProviderClaude},
+		{"ollama", ProviderClaude},
+		{"rule-based", ProviderClaude},
+		{"", ProviderClaude},
+	}
+	for _, tc := range tests {
+		if got := ProviderFromAI(tc.in); got != tc.want {
+			t.Errorf("ProviderFromAI(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

@@ -54,6 +54,15 @@ const AGENT_MODES: { value: AgentMode; label: string }[] = [
   { value: "ask", label: "ask" },
 ];
 
+const AGENT_PROVIDERS: { value: string; label: string }[] = [
+  { value: "claude", label: "Claude" },
+  { value: "cursor", label: "cursor-agent" },
+];
+
+function normalizeAgentProvider(value?: string): string {
+  return value === "cursor" ? "cursor" : "claude";
+}
+
 // Blocks coalesce the stream into something readable: both CLIs flush prose in
 // fragments, so rendering one node per event produces a column of loose words.
 type Block =
@@ -168,6 +177,8 @@ export type AgentPanelProps = {
   session?: AgentSession;
   /** Where a new session runs; the branch is resolved to a worktree. */
   start: Omit<AgentStartRequest, "prompt">;
+  /** Default agent CLI from ai.provider when no session exists yet. */
+  defaultProvider?: string;
   /** Repositories to choose from when the lane has no branch yet (a ticket
    * nobody has started). Omitted once the target is already known. */
   projects?: RepoProject[];
@@ -182,6 +193,7 @@ export type AgentPanelProps = {
 export function AgentPanel({
   session,
   start,
+  defaultProvider,
   projects,
   suggestBranch,
   seed,
@@ -206,9 +218,12 @@ export function AgentPanel({
   const [targets, setTargets] = useState<WorktreeTarget[]>([]);
   const [target, setTarget] = useState("");
   const [mode, setMode] = useState<AgentMode>("");
+  const [provider, setProvider] = useState(() =>
+    normalizeAgentProvider(session?.provider ?? start.provider ?? defaultProvider),
+  );
 
   const id = session?.id;
-  const isCursor = (session?.provider ?? start.provider ?? "") === "cursor";
+  const isCursor = normalizeAgentProvider(session?.provider ?? provider) === "cursor";
   // A lane that already knows its worktree does not ask; one that does not
   // collects the target inline rather than sending the user elsewhere.
   const needsTarget = !session && !start.branch && !start.openPath;
@@ -218,6 +233,14 @@ export function AgentPanel({
   useEffect(() => {
     setMode(session?.mode ?? "");
   }, [session?.mode, session?.id]);
+
+  useEffect(() => {
+    if (session?.provider) {
+      setProvider(normalizeAgentProvider(session.provider));
+    } else {
+      setProvider(normalizeAgentProvider(start.provider ?? defaultProvider));
+    }
+  }, [session?.id, session?.provider, start.provider, defaultProvider]);
 
   useEffect(() => {
     setRepo(start.repo ?? "");
@@ -322,6 +345,7 @@ export function AgentPanel({
           toast("provisioning the worktree…");
           await startAgent({
             ...start,
+            provider,
             repo: repo.trim() || start.repo,
             branch: branch.trim() || start.branch,
             target,
@@ -342,7 +366,7 @@ export function AgentPanel({
         setBusy(false);
       }
     },
-    [branch, busy, draft, id, isCursor, mode, onChanged, repo, start, target, targetReady],
+    [branch, busy, draft, id, isCursor, mode, onChanged, provider, repo, start, target, targetReady],
   );
 
   // promote is the escape hatch for work that needs hands: it stops the agent,
@@ -404,18 +428,43 @@ export function AgentPanel({
             <span className={"pill ag-" + (status ?? "idle")}>
               {AGENT_STATUS_LABEL[status ?? "idle"] ?? status}
             </span>
-            <span className="muted tiny">
-              {session.provider}
-              {session.mode ? " · " + session.mode : ""}
-              {session.turns ? " · " + session.turns + " turns" : ""}
-              {cost ? " · " + cost : ""}
-            </span>
-            {session.updatedAt ? (
+            <select
+              className="ag-provider"
+              value={normalizeAgentProvider(session?.provider ?? provider)}
+              disabled={!!session || running}
+              aria-label="agent provider"
+              onChange={(e) => setProvider(normalizeAgentProvider(e.target.value))}
+            >
+              {AGENT_PROVIDERS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            {session?.mode ? <span className="muted tiny">{session.mode}</span> : null}
+            {session?.turns ? <span className="muted tiny">{session.turns + " turns"}</span> : null}
+            {cost ? <span className="muted tiny">{cost}</span> : null}
+            {session?.updatedAt ? (
               <span className="muted tiny">{timeAgo(session.updatedAt)}</span>
             ) : null}
           </>
         ) : (
-          <span className="muted tiny">not started</span>
+          <>
+            <span className="muted tiny">not started</span>
+            <select
+              className="ag-provider"
+              value={provider}
+              disabled={busy}
+              aria-label="agent provider"
+              onChange={(e) => setProvider(normalizeAgentProvider(e.target.value))}
+            >
+              {AGENT_PROVIDERS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </>
         )}
         {isCursor ? (
           <div className="ag-mode" role="group" aria-label="execution mode">

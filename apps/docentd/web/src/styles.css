@@ -516,6 +516,13 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 }
 .ag-mode-btn:disabled { opacity: .45; cursor: not-allowed; }
 
+.ag-provider {
+  background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: 7px;
+  padding: 3px 6px; font: inherit; font-size: 11px;
+}
+.ag-provider:disabled { opacity: .65; cursor: not-allowed; }
+
 .ag-target { display: flex; gap: 8px; }
 .ag-target select, .ag-target input {
   flex: 1; min-width: 0; background: var(--bg-elev); color: var(--text);

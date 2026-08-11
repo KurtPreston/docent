@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KurtPreston/docent/libs/agentsession"
 	"github.com/KurtPreston/docent/libs/prstatus"
 )
 
@@ -64,7 +65,10 @@ const (
 type Cockpit struct {
 	GeneratedAt string `json:"generatedAt"`
 	Provider    string `json:"provider,omitempty"`
-	SSHHost     string `json:"sshHost,omitempty"`
+	// AgentProvider is the default coding-agent CLI (claude or cursor) from
+	// ai.provider. The cockpit agent dropdown uses this as its initial value.
+	AgentProvider string `json:"agentProvider,omitempty"`
+	SSHHost       string `json:"sshHost,omitempty"`
 	// Total is how many work items the dashboard knows about, so the UI can
 	// show what fraction the cockpit is hiding rather than pretending the rest
 	// does not exist.
@@ -184,9 +188,10 @@ type InboxItem struct {
 func (e *Engine) Cockpit(ctx context.Context) Cockpit {
 	dash := e.RefreshOnRequest(ctx)
 	out := Cockpit{
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Provider:    dash.Provider,
-		SSHHost:     dash.SSHHost,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		Provider:      dash.Provider,
+		AgentProvider: string(agentsession.ProviderFromAI(e.cfg.AI.Provider)),
+		SSHHost:       dash.SSHHost,
 		Total:       len(dash.Groups),
 		Lanes:       []CockpitLane{},
 		Queue:       []CockpitLane{},
