@@ -224,6 +224,32 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 				out = append(out, item)
 				commitTimes[ci.hash] = ci.observed
 			}
+			merges, err := collectLocalGitMergeCommits(ctx, abs, sinceISO, since, now, matcher, opts, directive.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, ci := range merges {
+				if scope == ScopeSelf && !ci.isSelf {
+					continue
+				} else if scope == ScopeInvolved && !ci.isSelf {
+					if _, ok := branchHashes[ci.hash]; !ok {
+						continue
+					}
+				}
+				if _, seen := commitTimes[ci.hash]; seen {
+					continue
+				}
+				commitDir := layout.ByBranch[ci.branch]
+				if commitDir == "" {
+					commitDir = layout.Home()
+				}
+				item := buildLocalGitCommitItem(directive.ID, repoLabel, commitDir, ci, dirs)
+				if t := localGitTicket(ci.subject, repoTicket, corrCfg); t != "" {
+					item.Fields["ticket"] = t
+				}
+				out = append(out, item)
+				commitTimes[ci.hash] = ci.observed
+			}
 		}
 
 		refOut, err := gitOutput(ctx, abs, opts, directive.ID, "reflog", "--since="+sinceISO, "--date=iso", "--pretty=format:%H%x09%gd%x09%gs")
@@ -291,7 +317,7 @@ func (c LocalGitCollector) CollectEvents(ctx context.Context, directive userdata
 			// work item's commit and reflog entities. So a row left tagged with
 			// the scanned directory re-supplies the wrong path and undoes the
 			// commit-side attribution above.
-			if b := localGitReflogBranch(gd, gs); b != "" {
+			if b := localGitReflogBranchAt(gd, gs, branch); b != "" {
 				fields["branch"] = b
 				if wt := layout.ByBranch[b]; wt != "" {
 					fields["path"] = wt
@@ -336,6 +362,70 @@ type localGitCommit struct {
 	subject  string
 	observed time.Time
 	isSelf   bool
+}
+
+// collectLocalGitMergeCommits returns merge commits in the window. Regular
+// history omits merges (--no-merges) to keep prompts readable, but a merge
+// the user just performed is often the only in-window signal that a worktree
+// was touched — e.g. pulling release/3.21.95 into release/3.23.100.
+func collectLocalGitMergeCommits(ctx context.Context, repoDir, sinceISO string, since, now time.Time, matcher localGitSelfMatcher, opts *CollectOpts, directiveID string) ([]localGitCommit, error) {
+	logOut, err := gitOutput(ctx, repoDir, opts, directiveID, "log", "--all", "--source", "--merges", "--since="+sinceISO, "--pretty=format:%H%x09%S%x09%aI%x09%an%x09%ae%x09%s")
+	if err != nil {
+		return nil, err
+	}
+	var out []localGitCommit
+	for _, line := range strings.Split(logOut, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 6)
+		if len(parts) < 6 {
+			continue
+		}
+		hash := strings.TrimSpace(parts[0])
+		ref := strings.TrimSpace(parts[1])
+		iso := strings.TrimSpace(parts[2])
+		author := strings.TrimSpace(parts[3])
+		email := strings.TrimSpace(parts[4])
+		subject := strings.TrimSpace(parts[5])
+		obs, err := time.Parse(time.RFC3339, iso)
+		if err != nil {
+			if obs, err = time.Parse("2006-01-02 15:04:05 -0700", strings.ReplaceAll(iso, "T", " ")); err != nil {
+				continue
+			}
+		}
+		if obs.Before(since) || obs.After(now) {
+			continue
+		}
+		out = append(out, localGitCommit{
+			hash:     hash,
+			ref:      ref,
+			branch:   normalizeGitRef(ref),
+			iso:      iso,
+			author:   author,
+			email:    email,
+			subject:  subject,
+			observed: obs,
+			isSelf:   matcher.Match(author, email),
+		})
+	}
+	return out, nil
+}
+
+// ReflogIsWorkAction reports whether a reflog subject records work done on a
+// branch (commit, merge, pull, reset, ...) rather than merely visiting it.
+func ReflogIsWorkAction(gs string) bool {
+	gs = strings.ToLower(strings.TrimSpace(gs))
+	if strings.HasPrefix(gs, "checkout: moving from ") {
+		return false
+	}
+	for _, prefix := range []string{"commit", "merge", "pull ", "pull:", "reset", "rebase", "cherry-pick", "am:"} {
+		if strings.HasPrefix(gs, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func collectLocalGitCommits(ctx context.Context, repoDir, sinceISO string, since, now time.Time, matcher localGitSelfMatcher, opts *CollectOpts, directiveID string) ([]localGitCommit, error) {
@@ -483,6 +573,34 @@ func normalizeGitRef(ref string) string {
 
 // localGitReflogBranch derives a branch name from reflog gd/gs fields.
 func localGitReflogBranch(gd, gs string) string {
+	return localGitReflogBranchAt(gd, gs, "")
+}
+
+// localGitReflogBranchAt is like localGitReflogBranch but, when the reflog
+// records work on HEAD in the worktree being scanned (merge, pull, commit,
+// reset, ...), falls back to that worktree's current branch. Checkout lines
+// still resolve via "moving from X to Y"; a pull/merge on release/3.23.100
+// otherwise carries no branch name and never reaches its wb: work item.
+func localGitReflogBranchAt(gd, gs, currentBranch string) string {
+	if b := localGitReflogBranchFromSelector(gd, gs); b != "" {
+		return b
+	}
+	if strings.TrimSpace(currentBranch) == "" || !ReflogIsWorkAction(gs) {
+		return ""
+	}
+	gd = strings.TrimSpace(gd)
+	ref := gd
+	if i := strings.Index(gd, "@{"); i >= 0 {
+		ref = gd[:i]
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.EqualFold(ref, "HEAD") {
+		return currentBranch
+	}
+	return ""
+}
+
+func localGitReflogBranchFromSelector(gd, gs string) string {
 	gd = strings.TrimSpace(gd)
 	gs = strings.TrimSpace(gs)
 	ref := gd

@@ -54,6 +54,23 @@ func TestRecentSelfCommitEarnsLane(t *testing.T) {
 	}
 }
 
+func TestRecentSelfCommitFromReflogEarnsLane(t *testing.T) {
+	g := DashboardGroup{
+		Key:              "wb:Chip/as_jasper_gui@release/3.23.100",
+		Repo:             "Chip/as_jasper_gui",
+		Branch:           "release/3.23.100",
+		OpenPath:         "/home/me/Code/as_jasper_gui/release-3.23.100",
+		RecentSelfCommit: true,
+	}
+	lane, inbox := laneFor(g)
+	if lane.AttentionRank >= rankNotInCockpit {
+		t.Fatalf("reflog-backed recent work did not earn a lane: %+v", lane)
+	}
+	if len(inbox) != 0 {
+		t.Errorf("unexpected inbox: %+v", inbox)
+	}
+}
+
 func TestTicketLaneRequiresJiraTier(t *testing.T) {
 	cases := []struct {
 		name  string

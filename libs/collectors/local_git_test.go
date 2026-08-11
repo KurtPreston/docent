@@ -132,6 +132,29 @@ func TestLocalGitReflogBranch(t *testing.T) {
 	}
 }
 
+func TestLocalGitReflogBranchAt(t *testing.T) {
+	got := localGitReflogBranchAt(
+		"HEAD@{2026-08-11 14:56:18 -0500}",
+		"pull origin release/3.21.95: Merge made by the 'ort' strategy.",
+		"release/3.23.100",
+	)
+	if got != "release/3.23.100" {
+		t.Errorf("pull merge reflog = %q, want release/3.23.100", got)
+	}
+	if b := localGitReflogBranchAt("HEAD@{0}", "checkout: moving from main to other", "release/3.23.100"); b != "other" {
+		t.Errorf("checkout should not use current branch fallback, got %q", b)
+	}
+}
+
+func TestReflogIsWorkAction(t *testing.T) {
+	if !ReflogIsWorkAction("pull origin release/3.21.95: Merge made by the 'ort' strategy.") {
+		t.Error("expected pull merge to be work")
+	}
+	if ReflogIsWorkAction("checkout: moving from main to feature") {
+		t.Error("checkout should not be work")
+	}
+}
+
 func TestParseGitRemoteToRepositoryKey(t *testing.T) {
 	tests := []struct {
 		raw  string

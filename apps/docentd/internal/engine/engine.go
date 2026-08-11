@@ -1399,6 +1399,8 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 			case "branch", "commit", "reflog":
 				if ent.Kind == "commit" && ent.State["is_self"] != "false" {
 					g.RecentSelfCommit = true
+				} else if ent.Kind == "reflog" && collectors.ReflogIsWorkAction(ent.State["gs"]) {
+					g.RecentSelfCommit = true
 				}
 				// Repo/branch units always have local git evidence.
 				// Legacy ticket-keyed units only count when ticket-anchored.

@@ -561,6 +561,30 @@ func TestBuildDashboardRecentSelfCommit(t *testing.T) {
 	}
 }
 
+func TestBuildDashboardRecentSelfCommitFromReflog(t *testing.T) {
+	e := newTestEngine(t)
+	wi := model.WorkItem{
+		Key:      "wb:Chip/as_jasper_gui@release/3.23.100",
+		Repo:     "Chip/as_jasper_gui",
+		Branch:   "release/3.23.100",
+		OpenPath: "/home/me/Code/as_jasper_gui/release-3.23.100",
+		Entities: []model.Entity{
+			{
+				Kind:        "reflog",
+				Coordinates: map[string]string{"repo": "Chip/as_jasper_gui", "branch": "release/3.23.100", "path": "/home/me/Code/as_jasper_gui/release-3.23.100"},
+				State: map[string]string{
+					"gs":         "pull origin release/3.21.95: Merge made by the 'ort' strategy.",
+					"observedAt": "2026-08-11T19:56:18Z",
+				},
+			},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{wi}, e.corrCfg)
+	if len(dash.Groups) != 1 || !dash.Groups[0].RecentSelfCommit {
+		t.Fatalf("expected RecentSelfCommit from merge reflog, got %+v", dash.Groups)
+	}
+}
+
 func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
 	e := newTestEngine(t)
 	wi := model.WorkItem{
