@@ -521,6 +521,46 @@ func TestBuildDashboardJiraBrowseFallback(t *testing.T) {
 	}
 }
 
+func TestBuildDashboardRecentSelfCommit(t *testing.T) {
+	e := newTestEngine(t)
+	self := model.WorkItem{
+		Key:      "wb:Chip/as_jasper_gui@release/3.23.100",
+		Repo:     "Chip/as_jasper_gui",
+		Branch:   "release/3.23.100",
+		OpenPath: "/home/me/Code/as_jasper_gui/release-3.23.100",
+		Entities: []model.Entity{
+			{
+				Kind:        "commit",
+				Coordinates: map[string]string{"repo": "Chip/as_jasper_gui", "branch": "release/3.23.100", "path": "/home/me/Code/as_jasper_gui/release-3.23.100"},
+				State:       map[string]string{"is_self": "true", "observedAt": "2026-08-11T12:00:00Z"},
+			},
+		},
+	}
+	other := model.WorkItem{
+		Key:    "wb:org/repo@feature-x",
+		Repo:   "org/repo",
+		Branch: "feature-x",
+		Entities: []model.Entity{
+			{
+				Kind:        "commit",
+				Coordinates: map[string]string{"repo": "org/repo", "branch": "feature-x"},
+				State:       map[string]string{"is_self": "false", "observedAt": "2026-08-11T12:00:00Z"},
+			},
+		},
+	}
+	dash := e.buildDashboard([]model.WorkItem{self, other}, e.corrCfg)
+	byKey := map[string]DashboardGroup{}
+	for _, g := range dash.Groups {
+		byKey[g.Key] = g
+	}
+	if !byKey[self.Key].RecentSelfCommit {
+		t.Error("expected RecentSelfCommit for self commit")
+	}
+	if byKey[other.Key].RecentSelfCommit {
+		t.Error("did not expect RecentSelfCommit for someone else's commit")
+	}
+}
+
 func TestBuildDashboardReviewRequestedBranchUnit(t *testing.T) {
 	e := newTestEngine(t)
 	wi := model.WorkItem{

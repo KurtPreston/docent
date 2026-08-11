@@ -31,10 +31,29 @@ func TestBranchEvidenceAloneIsNotActionable(t *testing.T) {
 	}
 }
 
-// A shipped ticket whose worktree is still on disk reads as Status "started"
-// with a JIRA status like "In QA" or "Done", because Status folds in local
-// branch evidence. Only the tier JIRA itself assigned may create a lane; this
-// distinction is what took the live cockpit from 88 lanes to a usable handful.
+func TestRecentSelfCommitEarnsLane(t *testing.T) {
+	g := DashboardGroup{
+		Key:              "wb:Chip/as_jasper_gui@release/3.23.100",
+		Repo:             "Chip/as_jasper_gui",
+		Branch:           "release/3.23.100",
+		OpenPath:         "/home/me/Code/as_jasper_gui/release-3.23.100",
+		Status:           statusStarted,
+		StatusRank:       rankStarted,
+		ActionRequired:   true,
+		RecentSelfCommit: true,
+	}
+	lane, inbox := laneFor(g)
+	if lane.AttentionRank >= rankNotInCockpit {
+		t.Fatalf("recent self commit did not earn a lane: %+v", lane)
+	}
+	if lane.Attention != AttentionInProgress {
+		t.Errorf("attention = %q, want %q", lane.Attention, AttentionInProgress)
+	}
+	if len(inbox) != 0 {
+		t.Errorf("recent self commit produced inbox items: %+v", inbox)
+	}
+}
+
 func TestTicketLaneRequiresJiraTier(t *testing.T) {
 	cases := []struct {
 		name  string

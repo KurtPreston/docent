@@ -457,6 +457,14 @@ func laneFor(g DashboardGroup) (CockpitLane, []InboxItem) {
 		}
 	}
 
+	// A checkout with recent commits of the user's own is live work even when
+	// there is no open window, PR, or JIRA ticket pointing at it — the case a
+	// release branch in ~/Code/org/repo/release-x.y.z covers.
+	if g.RecentSelfCommit {
+		promote(AttentionInProgress, rankInProgress)
+		lane.Reasons = append(lane.Reasons, "recent local commits")
+	}
+
 	// A ticket only earns a lane on its own when JIRA itself says it is live and
 	// mine, which is what the user's own tier JQL encodes. Group.Status is not
 	// good enough here: it also fires on local branch evidence, which is how a

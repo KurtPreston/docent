@@ -76,7 +76,12 @@ type DashboardGroup struct {
 	Status         string             `json:"status,omitempty"`
 	StatusRank     int                `json:"statusRank"`
 	ActionRequired bool               `json:"actionRequired"`
-	Sessions       []DashboardSession `json:"sessions"`
+	// RecentSelfCommit is true when a local-git commit by the user sits in the
+	// collector lookback window. Unlike BranchEvidence, which fires on any
+	// checkout or reachable branch, this is what lets the cockpit surface a
+	// folder the user actually worked in today.
+	RecentSelfCommit bool               `json:"recentSelfCommit,omitempty"`
+	Sessions         []DashboardSession `json:"sessions"`
 	PRs            []DashboardPR      `json:"prs"`
 	Tickets        []DashboardTicket  `json:"tickets,omitempty"`
 }
@@ -1392,6 +1397,9 @@ func (e *Engine) buildDashboard(workItems []model.WorkItem, corrCfg correlation.
 					}
 				}
 			case "branch", "commit", "reflog":
+				if ent.Kind == "commit" && ent.State["is_self"] != "false" {
+					g.RecentSelfCommit = true
+				}
 				// Repo/branch units always have local git evidence.
 				// Legacy ticket-keyed units only count when ticket-anchored.
 				if strings.HasPrefix(wi.Key, "wb:") {
