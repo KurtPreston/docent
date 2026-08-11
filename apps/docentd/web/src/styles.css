@@ -541,17 +541,32 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
   white-space: pre-wrap; font-size: 12.5px; color: var(--text);
   border-left: 2px solid var(--accent); padding-left: 8px;
 }
-.ag-text { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; }
+.ag-text { font-size: 12.5px; line-height: 1.5; }
+.ag-text :first-child, .ag-plan :first-child { margin-top: 0; }
+.ag-text :last-child, .ag-plan :last-child { margin-bottom: 0; }
+.ag-text pre, .ag-plan pre {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 10px; overflow-x: auto;
+}
+.ag-text code, .ag-plan code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  background: var(--bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.ag-text p + p, .ag-plan p + p { margin-top: 0.65em; }
+.ag-text ul, .ag-text ol, .ag-plan ul, .ag-plan ol {
+  margin: 0.45em 0; padding-left: 1.35em;
+}
+.ag-text h1, .ag-text h2, .ag-text h3, .ag-text h4,
+.ag-plan h1, .ag-plan h2, .ag-plan h3, .ag-plan h4 {
+  margin: 0.85em 0 0.35em; font-size: 1em; font-weight: 620;
+}
 .ag-plan {
   font-size: 12.5px; line-height: 1.5;
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
   padding-left: 10px;
-}
-.ag-plan :first-child { margin-top: 0; }
-.ag-plan :last-child { margin-bottom: 0; }
-.ag-plan pre {
-  background: var(--bg); border: 1px solid var(--border);
-  border-radius: 7px; padding: 8px 10px; overflow-x: auto;
 }
 .ag-thinking { color: var(--text-faint); font-size: 11.5px; }
 .ag-thinking summary { cursor: pointer; }

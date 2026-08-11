@@ -114,12 +114,20 @@ function reduce(blocks: Block[], ev: AgentEvent): Block[] {
   }
 }
 
+function AgentMarkdown({ text, className }: { text: string; className: string }) {
+  return (
+    <div className={className}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
 function TranscriptBlock({ block }: { block: Block }) {
   switch (block.kind) {
     case "prompt":
       return <div className="ag-prompt">{block.text}</div>;
     case "text":
-      return <div className="ag-text">{block.text}</div>;
+      return <AgentMarkdown text={block.text} className="ag-text" />;
     case "thinking":
       return (
         <details className="ag-thinking">
@@ -128,11 +136,7 @@ function TranscriptBlock({ block }: { block: Block }) {
         </details>
       );
     case "plan":
-      return (
-        <div className="ag-plan">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
-        </div>
-      );
+      return <AgentMarkdown text={block.text} className="ag-plan" />;
     case "tool":
       return (
         <div className="ag-tool">
