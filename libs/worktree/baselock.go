@@ -5,9 +5,10 @@ import (
 	"sync"
 )
 
-// baseLocks serializes bare-clone provisioning for a project root. Agent runs
-// lock per repo+branch, but the shared .base clone is per repository, so two
-// branches starting at once would both pass isBareRepo and race git clone.
+// baseLocks serializes provisioning against a project root's shared bare
+// clone, keyed by that root. Agent runs lock per repo+branch, but .base is per
+// repository, so without this two branches starting at once would race each
+// other inside git. See provision.
 var baseLocks = &keyedMutex{}
 
 // keyedMutex is a map of independent, on-demand mutexes identified by an

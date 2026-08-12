@@ -124,16 +124,12 @@ func Resolve(ctx context.Context, req Request) (Result, error) {
 
 	root := filepath.Join(stateRoot(req.StateRoot), projectsDir, SanitizePath(repo))
 	local, hasLocal := DeveloperProject(req.OpenPath, req.Roots, repo)
-	base, err := ensureBase(ctx, root, repo, local, hasLocal, req.RemoteURL)
+	base, dir, created, err := provision(ctx, root, repo, branch, req, local, hasLocal)
 	if err != nil {
 		return Result{}, err
 	}
 
 	res := Result{Project: root, Owned: true}
-	dir, created, err := ensureWorktree(ctx, base, root, branch, req.BaseRef)
-	if err != nil {
-		return Result{}, err
-	}
 	res.Dir, res.Created = dir, created
 	if created {
 		res.SetupErr = RunHook(ctx, HookRequest{
@@ -172,22 +168,40 @@ func stateRoot(override string) string {
 	return docentconfig.StateDir()
 }
 
-// ensureBase returns docent's bare repository for repo, cloning it on first use.
-func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal bool, remoteURL string) (string, error) {
-	base := filepath.Join(root, baseDirName)
-	if isBareRepo(base) {
-		return reconcileLocalRemote(ctx, base, local, hasLocal)
-	}
-
-	// Agent runs lock per branch, but .base is shared across branches of the
-	// same repository. Without this, two first-time resolves racing would both
-	// see no bare repo and one would fail with "destination already exists".
+// provision makes docent's clone and the branch's working directory, one caller
+// at a time per repository.
+//
+// Everything here writes to the one .base every branch of a repository shares,
+// and agent runs only lock per branch, so two branches starting at once arrive
+// together. Nothing underneath tolerates that: a first-time clone races another
+// and loses with "destination already exists", while the config writes -- the
+// local remote, and the upstream that `worktree add --track` records -- race
+// git's config lock, which is held exclusively and never waited on, so the
+// loser dies with "could not lock config file config: File exists".
+//
+// The setup hook stays outside, being per-directory and slow.
+func provision(ctx context.Context, root, repo, branch string, req Request, local Project, hasLocal bool) (base, dir string, created bool, err error) {
 	release, err := baseLocks.acquire(ctx, root)
 	if err != nil {
-		return "", fmt.Errorf("worktree: waiting to provision %s: %w", repo, err)
+		return "", "", false, fmt.Errorf("worktree: waiting to provision %s: %w", repo, err)
 	}
 	defer release()
 
+	base, err = ensureBase(ctx, root, repo, local, hasLocal, req.RemoteURL)
+	if err != nil {
+		return "", "", false, err
+	}
+	dir, created, err = ensureWorktree(ctx, base, root, branch, req.BaseRef)
+	if err != nil {
+		return "", "", false, err
+	}
+	return base, dir, created, nil
+}
+
+// ensureBase returns docent's bare repository for repo, cloning it on first use.
+// Callers hold the repository's provisioning lock.
+func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal bool, remoteURL string) (string, error) {
+	base := filepath.Join(root, baseDirName)
 	if isBareRepo(base) {
 		return reconcileLocalRemote(ctx, base, local, hasLocal)
 	}
@@ -314,11 +328,26 @@ const localRemote = "local"
 // not it already exists. Writing the config keys directly rather than choosing
 // between `remote add` and `remote set-url` makes it idempotent.
 func setRemote(ctx context.Context, base, name, url string) error {
-	if err := gitRun(ctx, base, gitTimeout, "config", "remote."+name+".url", url); err != nil {
+	if err := setConfig(ctx, base, "remote."+name+".url", url); err != nil {
 		return err
 	}
 	refspec := fmt.Sprintf("+refs/heads/*:refs/remotes/%s/*", name)
-	return gitRun(ctx, base, gitTimeout, "config", "remote."+name+".fetch", refspec)
+	return setConfig(ctx, base, "remote."+name+".fetch", refspec)
+}
+
+// setConfig writes a config key unless it already holds want.
+//
+// The local remote is reconciled on every resolve, so by far the most common
+// call is one that would rewrite the value it just read. Skipping it keeps the
+// steady state off git's config lock, which a writer takes exclusively and
+// without waiting: anything else writing that instant dies with "could not lock
+// config file config: File exists" rather than queueing behind it.
+func setConfig(ctx context.Context, dir, key, want string) error {
+	if out, err := gitOutput(ctx, dir, gitTimeout, "config", "--get", key); err == nil &&
+		strings.TrimSpace(out) == want {
+		return nil
+	}
+	return gitRun(ctx, dir, gitTimeout, "config", key, want)
 }
 
 // cloneURL decides where docent's copy comes from.

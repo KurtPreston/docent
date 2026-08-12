@@ -488,6 +488,55 @@ func TestResolveConcurrentBranchesShareOneBase(t *testing.T) {
 	}
 }
 
+// The same repository resolved on several branches at once, with .base already
+// cloned. Every one of those resolves reconciles the local remote, and git's
+// config lock is not a queue -- without a repo-level lock around it, all but one
+// writer dies with "could not lock config file".
+func TestResolveConcurrentBranchesOnAnExistingBase(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	state := t.TempDir()
+
+	// Cloned before the developer has a copy, so the concurrent resolves below
+	// all have a local remote to actually write rather than one to read and
+	// leave alone.
+	if _, err := Resolve(context.Background(), Request{
+		Repo: "Chip/salsa", Branch: "feature", RemoteURL: remote,
+		Roots: []string{code}, StateRoot: state,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	local := f.clone(code, "salsa", remote)
+
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := Resolve(context.Background(), Request{
+				Repo: "Chip/salsa", Branch: fmt.Sprintf("backport-%d", i),
+				Roots: []string{code}, StateRoot: state,
+			})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := filepath.Join(state, "projects", "Chip-salsa", ".base")
+	if got := gitConfig(base)["remote.local.url"]; got != filepath.Join(local, ".git") {
+		t.Errorf("remote.local.url = %q, want the developer's git dir", got)
+	}
+}
+
 func TestResolveRequiresRepoAndBranch(t *testing.T) {
 	for name, req := range map[string]Request{
 		"no repo":   {Branch: "feature"},
