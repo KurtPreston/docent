@@ -378,3 +378,14 @@ func AttachmentDirs(atts []Attachment) []string {
 	}
 	return out
 }
+
+func addDirArgs(dirs []string) []string {
+	var args []string
+	for _, d := range dirs {
+		if strings.TrimSpace(d) == "" {
+			continue
+		}
+		args = append(args, "--add-dir", d)
+	}
+	return args
+}

@@ -108,6 +108,7 @@ func cursorArgs(req TurnRequest) []string {
 	if req.Mode != ModeAgent {
 		args = append(args, "--mode", string(req.Mode))
 	}
+	args = append(args, addDirArgs(AttachmentDirs(req.Attachments))...)
 	return args
 }
 

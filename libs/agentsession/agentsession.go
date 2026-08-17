@@ -137,11 +137,12 @@ const (
 
 // Event is one normalized thing that happened during a turn.
 type Event struct {
-	Kind      EventKind `json:"kind"`
-	Text      string    `json:"text,omitempty"`
-	Tool      string    `json:"tool,omitempty"`
-	SessionID string    `json:"sessionId,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Kind        EventKind    `json:"kind"`
+	Text        string       `json:"text,omitempty"`
+	Tool        string       `json:"tool,omitempty"`
+	SessionID   string       `json:"sessionId,omitempty"`
+	Error       string       `json:"error,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 	// Result is set only on KindDone.
 	Result *TurnResult `json:"result,omitempty"`
 	At     time.Time   `json:"at"`
@@ -166,12 +167,16 @@ type TurnRequest struct {
 	// SessionID is required. For Claude it is caller-minted; for Cursor it comes
 	// from NewSession.
 	SessionID string
-	// Prompt is the user message. It is written to the child's stdin.
+	// Prompt is the user message written to the child's stdin. Callers normally
+	// set this to PromptWithAttachments(userText, Attachments).
 	Prompt string
 	// Dir is the working directory, i.e. the worktree the agent may edit. It is
 	// required: an agent run in an unexpected directory is the one failure mode
 	// with real consequences, so this is never defaulted to the daemon's cwd.
 	Dir string
+	// Attachments are files the user included with the prompt. They are passed
+	// to the CLI as --add-dir grants plus absolute paths in the stdin prompt.
+	Attachments []Attachment
 	// First marks the opening turn of a session. Claude needs the distinction
 	// (--session-id vs --resume); Cursor does not and ignores it.
 	First bool

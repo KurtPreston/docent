@@ -95,6 +95,7 @@ func (c Claude) Turn(ctx context.Context, req TurnRequest, emit func(Event)) (Tu
 	if m := strings.TrimSpace(req.Model); m != "" {
 		args = append(args, "--model", m)
 	}
+	args = append(args, addDirArgs(AttachmentDirs(req.Attachments))...)
 	// --allowedTools is variadic, so it goes last among the flags and the prompt
 	// travels on stdin. Any flag after it would be eaten as a tool name.
 	if len(req.AllowedTools) > 0 {

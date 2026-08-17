@@ -90,6 +90,49 @@ func TestAttachmentDirs(t *testing.T) {
 	}
 }
 
+func TestCursorArgs_addDir(t *testing.T) {
+	attDir := "/state/sess/attachments"
+	args := cursorArgs(TurnRequest{
+		SessionID: "chat-1",
+		Attachments: []Attachment{{
+			Name: "shot.png",
+			Path: attDir + "/shot.png",
+		}},
+	})
+	if !containsSeq(args, "--add-dir", attDir) {
+		t.Fatalf("args: %v", args)
+	}
+	// --add-dir must precede any future variadic tail flags.
+	if idx := argIndex(args, "--add-dir"); idx < 0 {
+		t.Fatal("--add-dir missing")
+	}
+}
+
+func containsSeq(args []string, want ...string) bool {
+	for i := 0; i+len(want) <= len(args); i++ {
+		ok := true
+		for j, w := range want {
+			if args[i+j] != w {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func argIndex(args []string, s string) int {
+	for i, a := range args {
+		if a == s {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestAttachmentStore_openSessionAttachment(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewAttachmentStore(root)

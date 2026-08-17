@@ -123,6 +123,8 @@ type StartRequest struct {
 	Target string
 	// Prompt, when set, is run as the opening turn.
 	Prompt string
+	// Attachments are staged files to include with the opening turn.
+	Attachments []Attachment
 	// Color is the lane color, normally derived from the branch name.
 	Color string
 	// Force starts even when ForeignAgent says someone else is working in the
@@ -238,7 +240,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 	// The opening turn inherits Force: having already accepted the conflict and
 	// created the session, refusing its first turn would leave exactly the
 	// idle-looking lane the check above exists to prevent.
-	if err := m.turn(id, req.Prompt, req.Force); err != nil {
+	if err := m.turn(id, req.Prompt, req.Force, req.Attachments...); err != nil {
 		return sess, err
 	}
 	return m.Store.Get(id)
@@ -247,16 +249,16 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 // Turn starts a turn in the background and returns once it is running, so an
 // HTTP caller is not held for the minutes a turn takes. Progress arrives through
 // Subscribe and is persisted regardless of whether anyone is listening.
-func (m *Manager) Turn(id, prompt string) error {
-	return m.turn(id, prompt, false)
+func (m *Manager) Turn(id, prompt string, atts ...Attachment) error {
+	return m.turn(id, prompt, false, atts...)
 }
 
 // TurnForce is Turn with the foreign-agent check skipped, for a user who has
 // been shown what else is running there and asked for it anyway. docent's own
 // in-flight turns are still refused: that conflict is certain rather than
 // inferred, and there is nothing to weigh.
-func (m *Manager) TurnForce(id, prompt string) error {
-	return m.turn(id, prompt, true)
+func (m *Manager) TurnForce(id, prompt string, atts ...Attachment) error {
+	return m.turn(id, prompt, true, atts...)
 }
 
 // SetMode updates a session's cursor-agent execution mode. Refused while a turn
@@ -277,9 +279,9 @@ func (m *Manager) SetMode(id string, mode Mode) (Session, error) {
 	})
 }
 
-func (m *Manager) turn(id, prompt string, force bool) error {
+func (m *Manager) turn(id, prompt string, force bool, atts ...Attachment) error {
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	if prompt == "" && len(atts) == 0 {
 		return errors.New("agentsession: a turn needs a prompt")
 	}
 	sess, err := m.Store.Get(id)
@@ -334,26 +336,28 @@ func (m *Manager) turn(id, prompt string, force bool) error {
 	}
 	// The prompt is part of the transcript: without it the record shows an agent
 	// acting for no visible reason.
-	m.record(id, Event{Kind: KindPrompt, Text: prompt, SessionID: id, At: m.now()})
+	m.record(id, Event{Kind: KindPrompt, Text: prompt, Attachments: atts, SessionID: id, At: m.now()})
 	// Paired with the one finish writes, so a subscriber tracks the lane's state
 	// from the stream alone and never has to poll to notice a turn began.
 	m.record(id, Event{Kind: KindStatus, Text: string(StatusRunning), SessionID: id, At: m.now()})
 
-	go m.runTurn(ctx, lt, runner, sess, prompt)
+	go m.runTurn(ctx, lt, runner, sess, prompt, atts)
 	return nil
 }
 
-func (m *Manager) runTurn(ctx context.Context, lt *liveTurn, runner Runner, sess Session, prompt string) {
+func (m *Manager) runTurn(ctx context.Context, lt *liveTurn, runner Runner, sess Session, prompt string, atts []Attachment) {
 	// Ordered so that by the time done closes, nothing will write again: release
 	// first (freeing the worktree), then signal completion.
 	defer close(lt.done)
 	defer lt.cancel()
 	defer m.release(sess.ID)
 
+	stdinPrompt := PromptWithAttachments(prompt, atts)
 	res, err := runner.Turn(ctx, TurnRequest{
 		SessionID: sess.ID,
-		Prompt:    prompt,
+		Prompt:    stdinPrompt,
 		Dir:       sess.Dir,
+		Attachments: atts,
 		// Claude distinguishes opening a session from resuming one, and the turn
 		// count is the only reliable record of which this is: the process that
 		// ran the first turn is long gone.
