@@ -389,11 +389,14 @@ func (m *Manager) runTurn(ctx context.Context, lt *liveTurn, runner Runner, sess
 		m.record(sess.ID, ev)
 	})
 
-	// Before the terminal switch, so a stopped turn is covered too: a
-	// cancellation's partial edits are exactly what must not be stranded. Also
-	// before the deferred release, so the worktree is still docent's while the
-	// commit is written.
+	// Before releasing the worktree slot, so docent's own tree is still the one
+	// being committed at the turn boundary.
 	m.afterTurn(sess, &res, err)
+
+	// Status idle must not be visible while the worktree is still reserved in
+	// live: a subscriber (or the next Turn) that sees idle would otherwise race
+	// the deferred release and get ErrBusy.
+	m.release(sess.ID)
 
 	switch {
 	case err != nil && ctx.Err() != nil:
