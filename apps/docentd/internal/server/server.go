@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sessions", s.requireAuth(s.sessionsList))
 	mux.HandleFunc("/api/sessions/events", s.requireAuth(s.sessionEvents))
 	mux.HandleFunc("/api/agents", s.requireAuth(s.agentsAPI))
+	mux.HandleFunc("/api/agents/attachments", s.requireAuth(s.agentAttachmentUpload))
 	mux.HandleFunc("/api/agents/", s.requireAuth(s.agentsSub))
 	mux.HandleFunc("/api/projects", s.requireAuth(s.projectsAPI))
 	mux.HandleFunc("/api/worktree-targets", s.requireAuth(s.worktreeTargetsAPI))

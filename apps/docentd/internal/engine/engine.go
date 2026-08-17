@@ -346,6 +346,11 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		log.Printf("agent sessions unavailable: %v", err)
 	} else {
 		e.agents = mgr
+		if attStore, err := agentsession.NewAttachmentStore(mgr.Store.Root()); err == nil {
+			if err := attStore.SweepStaging(0); err != nil {
+				log.Printf("agent attachments: sweep staging: %v", err)
+			}
+		}
 	}
 	if len(cfg.Automations) > 0 {
 		e.automations = automation.NewDispatcher(cfg.Automations)
