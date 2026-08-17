@@ -241,6 +241,20 @@ export type AgentSession = {
   updatedAt: string;
 };
 
+export type AgentAttachment = {
+  name: string;
+  path?: string;
+  contentType?: string;
+  size?: number;
+};
+
+export type StagedAttachment = {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+};
+
 export type AgentEventKind =
   | "prompt"
   | "started"
@@ -260,6 +274,7 @@ export type AgentEvent = {
   tool?: string;
   sessionId?: string;
   error?: string;
+  attachments?: AgentAttachment[];
   result?: AgentTurnResult;
   at: string;
 };
@@ -283,7 +298,8 @@ export type AgentStartRequest = {
   target?: string;
   baseRef?: string;
   openPath?: string;
-  prompt: string;
+  prompt?: string;
+  attachmentIds?: string[];
   /** Proceed even though another agent appears to be working in the worktree. */
   force?: boolean;
 };

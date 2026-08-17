@@ -584,6 +584,74 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
   border-radius: 8px; padding: 6px 8px;
 }
 
+.ag-compose-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ag-compose-wrap.dragging::after {
+  content: "Drop files to attach";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 1;
+}
+.ag-compose-attachments,
+.ag-prompt-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ag-attach-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  padding: 4px 24px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+.ag-attach-chip.error { border-color: var(--red); }
+.ag-attach-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.ag-attach-chip-name {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.ag-attach-status { display: block; }
+.ag-attach-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.ag-attach-remove:hover { color: var(--text); }
+.ag-attach-remove:disabled { opacity: .4; cursor: not-allowed; }
+.ag-attach-btn { flex: 0 0 auto; align-self: flex-end; }
 .ag-compose { display: flex; gap: 8px; align-items: flex-end; }
 .ag-compose textarea {
   flex: 1; resize: vertical; background: var(--bg-elev); color: var(--text);

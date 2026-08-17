@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   AgentConflictError,
+  agentAttachmentUrl,
   deleteAgent,
   fetchWorktreeTargets,
   promoteAgent,
@@ -11,11 +12,14 @@ import {
   startAgent,
   stopAgent,
   streamAgent,
+  uploadAgentAttachment,
 } from "../lib/api";
+import { docentFetch } from "../lib/auth";
 import { openWSMPath } from "../lib/sessions";
 import { errMsg, timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
 import type {
+  AgentAttachment,
   AgentEvent,
   AgentMode,
   AgentSession,
@@ -63,10 +67,56 @@ function normalizeAgentProvider(value?: string): string {
   return value === "cursor" ? "cursor" : "claude";
 }
 
+type PendingAttachment = {
+  key: string;
+  id?: string;
+  name: string;
+  contentType: string;
+  size: number;
+  previewUrl?: string;
+  uploading: boolean;
+  error?: string;
+};
+
+function pasteFileName(file: File): string {
+  const trimmed = file.name.trim();
+  if (trimmed && trimmed !== "image.png" && trimmed !== "blob") return trimmed;
+  const ext =
+    file.type === "image/jpeg"
+      ? "jpg"
+      : file.type === "image/webp"
+        ? "webp"
+        : file.type === "image/gif"
+          ? "gif"
+          : "png";
+  return `pasted-${Date.now()}.${ext}`;
+}
+
+function withFilename(file: File, name: string): File {
+  if (file.name === name) return file;
+  return new File([file], name, { type: file.type || "application/octet-stream" });
+}
+
+function filesFromClipboard(e: React.ClipboardEvent): File[] {
+  const out: File[] = [];
+  for (const item of Array.from(e.clipboardData?.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file) out.push(withFilename(file, pasteFileName(file)));
+  }
+  return out;
+}
+
+function filesFromDataTransfer(dt: DataTransfer | null): File[] {
+  if (!dt?.types.includes("Files")) return [];
+  return Array.from(dt.files);
+}
+
 // Blocks coalesce the stream into something readable: both CLIs flush prose in
 // fragments, so rendering one node per event produces a column of loose words.
 type Block =
-  | { kind: "prompt" | "text" | "thinking" | "plan"; text: string }
+  | { kind: "prompt"; text: string; attachments?: AgentAttachment[] }
+  | { kind: "text" | "thinking" | "plan"; text: string }
   | { kind: "tool"; tool: string; text: string }
   | { kind: "note"; text: string; error?: boolean };
 
@@ -80,7 +130,7 @@ function reduce(blocks: Block[], ev: AgentEvent): Block[] {
   };
   switch (ev.kind) {
     case "prompt":
-      return [...blocks, { kind: "prompt", text: ev.text ?? "" }];
+      return [...blocks, { kind: "prompt", text: ev.text ?? "", attachments: ev.attachments }];
     case "text":
       return append("text", ev.text ?? "");
     case "thinking":
@@ -122,10 +172,108 @@ function AgentMarkdown({ text, className }: { text: string; className: string })
   );
 }
 
-function TranscriptBlock({ block }: { block: Block }) {
+function AttachmentThumbnail({
+  sessionId,
+  name,
+  contentType,
+}: {
+  sessionId: string;
+  name: string;
+  contentType?: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    let objectUrl: string | null = null;
+    void (async () => {
+      try {
+        const r = await docentFetch(agentAttachmentUrl(sessionId, name));
+        if (!r.ok || !live) return;
+        const blob = await r.blob();
+        if (!live) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      } catch {
+        /* thumbnail is optional */
+      }
+    })();
+    return () => {
+      live = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [sessionId, name]);
+  if (url && (contentType?.startsWith("image/") ?? true)) {
+    return <img className="ag-attach-thumb" src={url} alt={name} />;
+  }
+  return <span className="ag-attach-chip-name">{name}</span>;
+}
+
+function PromptAttachments({
+  sessionId,
+  attachments,
+}: {
+  sessionId?: string;
+  attachments?: AgentAttachment[];
+}) {
+  if (!attachments?.length) return null;
+  return (
+    <div className="ag-prompt-attachments">
+      {attachments.map((a) => (
+        <div key={a.name} className="ag-attach-chip">
+          {sessionId ? (
+            <AttachmentThumbnail sessionId={sessionId} name={a.name} contentType={a.contentType} />
+          ) : (
+            <span className="ag-attach-chip-name">{a.name}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComposeAttachments({
+  items,
+  onRemove,
+}: {
+  items: PendingAttachment[];
+  onRemove: (key: string) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="ag-compose-attachments">
+      {items.map((a) => (
+        <div key={a.key} className={"ag-attach-chip" + (a.error ? " error" : "")}>
+          {a.previewUrl && a.contentType.startsWith("image/") ? (
+            <img className="ag-attach-thumb" src={a.previewUrl} alt={a.name} />
+          ) : (
+            <span className="ag-attach-chip-name">{a.name}</span>
+          )}
+          {a.uploading ? <span className="ag-attach-status muted tiny">uploading…</span> : null}
+          {a.error ? <span className="ag-attach-status error tiny">{a.error}</span> : null}
+          <button
+            type="button"
+            className="ag-attach-remove"
+            aria-label={"Remove " + a.name}
+            disabled={a.uploading}
+            onClick={() => onRemove(a.key)}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TranscriptBlock({ block, sessionId }: { block: Block; sessionId?: string }) {
   switch (block.kind) {
     case "prompt":
-      return <div className="ag-prompt">{block.text}</div>;
+      return (
+        <div className="ag-prompt">
+          {block.text ? <div>{block.text}</div> : null}
+          <PromptAttachments sessionId={sessionId} attachments={block.attachments} />
+        </div>
+      );
     case "text":
       return <AgentMarkdown text={block.text} className="ag-text" />;
     case "thinking":
@@ -149,7 +297,15 @@ function TranscriptBlock({ block }: { block: Block }) {
   }
 }
 
-function Transcript({ blocks, busy }: { blocks: Block[]; busy: boolean }) {
+function Transcript({
+  blocks,
+  busy,
+  sessionId,
+}: {
+  blocks: Block[];
+  busy: boolean;
+  sessionId?: string;
+}) {
   const box = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
 
@@ -170,7 +326,7 @@ function Transcript({ blocks, busy }: { blocks: Block[]; busy: boolean }) {
       {blocks.length === 0 ? (
         <div className="muted small">{busy ? "Starting…" : "No transcript yet."}</div>
       ) : (
-        blocks.map((b, i) => <TranscriptBlock key={i} block={b} />)
+        blocks.map((b, i) => <TranscriptBlock key={i} block={b} sessionId={sessionId} />)
       )}
     </div>
   );
@@ -205,7 +361,13 @@ export function AgentPanel({
 }: AgentPanelProps) {
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const dragDepth = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   // Only used when the lane has no worktree yet: the agent needs a repository
   // and a branch before it has anywhere to run.
   const [repo, setRepo] = useState(start.repo ?? "");
@@ -331,18 +493,92 @@ export function AgentPanel({
 
   const targetReady = !needsTarget || (repo.trim() !== "" && branch.trim() !== "");
 
+  const revokePreview = useCallback((item: PendingAttachment) => {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+  }, []);
+
+  useEffect(
+    () => () => {
+      attachmentsRef.current.forEach(revokePreview);
+    },
+    [revokePreview],
+  );
+
+  const removeAttachment = useCallback(
+    (key: string) => {
+      setAttachments((prev) => {
+        const item = prev.find((a) => a.key === key);
+        if (item) revokePreview(item);
+        return prev.filter((a) => a.key !== key);
+      });
+    },
+    [revokePreview],
+  );
+
+  const addFiles = useCallback(async (files: File[]) => {
+    for (const raw of files) {
+      const file = withFilename(raw, pasteFileName(raw));
+      const key = crypto.randomUUID();
+      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+      setAttachments((prev) => [
+        ...prev,
+        {
+          key,
+          name: file.name,
+          contentType: file.type || "application/octet-stream",
+          size: file.size,
+          previewUrl,
+          uploading: true,
+        },
+      ]);
+      try {
+        const staged = await uploadAgentAttachment(file);
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.key === key
+              ? { ...a, id: staged.id, name: staged.name, contentType: staged.contentType, uploading: false }
+              : a,
+          ),
+        );
+      } catch (e) {
+        setAttachments((prev) =>
+          prev.map((a) => (a.key === key ? { ...a, uploading: false, error: errMsg(e) } : a)),
+        );
+      }
+    }
+  }, []);
+
+  const attachmentIds = useMemo(
+    () => attachments.filter((a) => a.id && !a.error).map((a) => a.id as string),
+    [attachments],
+  );
+  const attachmentsUploading = attachments.some((a) => a.uploading);
+  const canSend =
+    targetReady &&
+    !busy &&
+    !running &&
+    !attachmentsUploading &&
+    (draft.trim() !== "" || attachmentIds.length > 0);
+
+  const clearAttachments = useCallback(() => {
+    setAttachments((prev) => {
+      prev.forEach(revokePreview);
+      return [];
+    });
+  }, [revokePreview]);
+
   // force carries the user's answer to the conflict note below. It is deliberately
   // not sticky: each send asks again, because whether someone else is editing the
   // worktree is a fact about right now.
   const send = useCallback(
     async (force = false) => {
       const prompt = draft.trim();
-      if (!prompt || busy || !targetReady) return;
+      if ((!prompt && attachmentIds.length === 0) || busy || !targetReady || attachmentsUploading) return;
       setBusy(true);
       setConflict("");
       try {
         if (id) {
-          await sendAgentTurn(id, prompt, force);
+          await sendAgentTurn(id, prompt, force, attachmentIds);
         } else {
           // Creating the worktree fetches from the remote, so this can take a
           // while; say so rather than leaving a disabled button.
@@ -355,11 +591,13 @@ export function AgentPanel({
             target,
             mode: isCursor ? mode : undefined,
             prompt,
+            attachmentIds,
             force,
           });
           onChanged();
         }
         setDraft("");
+        clearAttachments();
       } catch (e) {
         // A conflict is shown in place rather than as a toast: it needs an
         // answer, the draft is still sitting there, and a message that vanishes
@@ -370,7 +608,23 @@ export function AgentPanel({
         setBusy(false);
       }
     },
-    [branch, busy, draft, id, isCursor, mode, onChanged, provider, repo, start, target, targetReady],
+    [
+      attachmentIds,
+      attachmentsUploading,
+      branch,
+      busy,
+      clearAttachments,
+      draft,
+      id,
+      isCursor,
+      mode,
+      onChanged,
+      provider,
+      repo,
+      start,
+      target,
+      targetReady,
+    ],
   );
 
   // promote is the escape hatch for work that needs hands: it stops the agent,
@@ -402,6 +656,44 @@ export function AgentPanel({
     },
     [onChanged],
   );
+
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = filesFromClipboard(e);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addFiles(files);
+  };
+
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = filesFromDataTransfer(e.dataTransfer);
+    if (files.length) void addFiles(files);
+  };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter sends, Shift+Enter breaks the line: the convention every chat box
@@ -557,7 +849,7 @@ export function AgentPanel({
       {/* No session means nothing to transcribe, and an empty bordered box on
           every lane that has never run an agent is noise on the surface meant to
           be glanced at. It appears the moment a session does. */}
-      {session || busy ? <Transcript blocks={blocks} busy={busy} /> : null}
+      {session || busy ? <Transcript blocks={blocks} busy={busy} sessionId={id} /> : null}
 
       {conflict ? (
         <div className="ag-conflict">
@@ -572,29 +864,60 @@ export function AgentPanel({
         </div>
       ) : null}
 
-      <div className="ag-compose">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={3}
-          placeholder={
-            session
-              ? running
-                ? "One turn at a time — wait for this one to finish."
-                : "Reply to the agent…"
-              : "Describe the work. A worktree is created for the branch."
-          }
-          disabled={busy || running}
-        />
-        <button
-          type="button"
-          className="mini-btn primary"
-          onClick={() => void send()}
-          disabled={busy || running || !targetReady || draft.trim() === ""}
-        >
-          {session ? "send" : "start agent"}
-        </button>
+      <div
+        className={"ag-compose-wrap" + (dragging ? " dragging" : "")}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onPaste={onPaste}
+      >
+        <ComposeAttachments items={attachments} onRemove={removeAttachment} />
+        <div className="ag-compose">
+          <button
+            type="button"
+            className="mini-btn ag-attach-btn"
+            title="Attach a file"
+            aria-label="Attach a file"
+            disabled={busy || running}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            📎
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              const list = e.target.files;
+              if (list?.length) void addFiles(Array.from(list));
+              e.target.value = "";
+            }}
+          />
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={3}
+            placeholder={
+              session
+                ? running
+                  ? "One turn at a time — wait for this one to finish."
+                  : "Reply to the agent…"
+                : "Describe the work. A worktree is created for the branch."
+            }
+            disabled={busy || running}
+          />
+          <button
+            type="button"
+            className="mini-btn primary"
+            onClick={() => void send()}
+            disabled={!canSend}
+          >
+            {session ? "send" : "start agent"}
+          </button>
+        </div>
       </div>
     </section>
   );

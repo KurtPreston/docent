@@ -22,6 +22,7 @@ import type {
   AgentStartRequest,
   AgentMode,
   RepoProject,
+  StagedAttachment,
   WorktreeTarget,
 } from "./types";
 
@@ -206,8 +207,36 @@ export async function startAgent(req: AgentStartRequest): Promise<AgentSession> 
   return d.session;
 }
 
-export const sendAgentTurn = (id: string, prompt: string, force = false): Promise<unknown> =>
-  agentPost(`/api/agents/${encodeURIComponent(id)}/turn`, { prompt, force });
+export async function uploadAgentAttachment(file: File): Promise<StagedAttachment> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const r = await docentFetch("/api/agents/attachments", { method: "POST", body: form });
+  const d = (await r.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+    attachment?: StagedAttachment;
+  };
+  if (!r.ok || !d.ok || !d.attachment) throw new Error(d.error ?? "HTTP " + r.status);
+  return d.attachment;
+}
+
+/** URL for a session attachment served by docentd (thumbnails in the transcript). */
+export function agentAttachmentUrl(sessionId: string, name: string): string {
+  return (
+    "/api/agents/" +
+    encodeURIComponent(sessionId) +
+    "/attachments/" +
+    encodeURIComponent(name)
+  );
+}
+
+export const sendAgentTurn = (
+  id: string,
+  prompt: string,
+  force = false,
+  attachmentIds: string[] = [],
+): Promise<unknown> =>
+  agentPost(`/api/agents/${encodeURIComponent(id)}/turn`, { prompt, force, attachmentIds });
 
 export async function setAgentMode(id: string, mode: AgentMode): Promise<AgentSession> {
   const d = await agentPatch<{ session: AgentSession }>(`/api/agents/${encodeURIComponent(id)}`, { mode });
