@@ -123,8 +123,9 @@ type StartRequest struct {
 	Target string
 	// Prompt, when set, is run as the opening turn.
 	Prompt string
-	// Attachments are staged files to include with the opening turn.
-	Attachments []Attachment
+	// StagedAttachmentIDs are upload ids to promote into this session before the
+	// opening turn runs.
+	StagedAttachmentIDs []string
 	// Color is the lane color, normally derived from the branch name.
 	Color string
 	// Force starts even when ForeignAgent says someone else is working in the
@@ -234,16 +235,31 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Session, error) 
 	if err := m.Store.Save(sess); err != nil {
 		return Session{}, err
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
+	atts, err := m.promoteAttachments(id, req.StagedAttachmentIDs)
+	if err != nil {
+		return sess, err
+	}
+	if strings.TrimSpace(req.Prompt) == "" && len(atts) == 0 {
 		return sess, nil
 	}
 	// The opening turn inherits Force: having already accepted the conflict and
 	// created the session, refusing its first turn would leave exactly the
 	// idle-looking lane the check above exists to prevent.
-	if err := m.turn(id, req.Prompt, req.Force, req.Attachments...); err != nil {
+	if err := m.turn(id, req.Prompt, req.Force, atts...); err != nil {
 		return sess, err
 	}
 	return m.Store.Get(id)
+}
+
+func (m *Manager) promoteAttachments(sessionID string, stagedIDs []string) ([]Attachment, error) {
+	if len(stagedIDs) == 0 {
+		return nil, nil
+	}
+	store, err := NewAttachmentStore(m.Store.Root())
+	if err != nil {
+		return nil, err
+	}
+	return store.Promote(sessionID, stagedIDs)
 }
 
 // Turn starts a turn in the background and returns once it is running, so an

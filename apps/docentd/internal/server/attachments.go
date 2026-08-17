@@ -20,6 +20,17 @@ func (s *Server) attachmentStore() (*agentsession.AttachmentStore, error) {
 	return agentsession.NewAttachmentStore(s.agents.Store.Root())
 }
 
+func (s *Server) promoteTurnAttachments(sessionID string, stagedIDs []string) ([]agentsession.Attachment, error) {
+	if len(stagedIDs) == 0 {
+		return nil, nil
+	}
+	store, err := s.attachmentStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.Promote(sessionID, stagedIDs)
+}
+
 // agentAttachmentUpload handles POST /api/agents/attachments.
 func (s *Server) agentAttachmentUpload(w http.ResponseWriter, r *http.Request) {
 	if s.agents == nil {

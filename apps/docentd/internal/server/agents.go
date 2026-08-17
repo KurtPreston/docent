@@ -28,14 +28,17 @@ type agentStartRequest struct {
 	BaseRef  string `json:"baseRef"`
 	OpenPath string `json:"openPath"`
 	Prompt   string `json:"prompt"`
+	// AttachmentIDs are staged upload ids to include with the opening turn.
+	AttachmentIDs []string `json:"attachmentIds"`
 	// Force proceeds even when another agent appears to be working in the
 	// worktree. It is the client's way of saying the user saw the warning.
 	Force bool `json:"force"`
 }
 
 type agentTurnRequest struct {
-	Prompt string `json:"prompt"`
-	Force  bool   `json:"force"`
+	Prompt        string   `json:"prompt"`
+	AttachmentIDs []string `json:"attachmentIds"`
+	Force         bool     `json:"force"`
 }
 
 type agentPatchRequest struct {
@@ -98,18 +101,19 @@ func (s *Server) agentStart(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	sess, err := s.agents.Start(ctx, agentsession.StartRequest{
-		Provider: provider,
-		Model:    strings.TrimSpace(req.Model),
-		Mode:     mode,
-		Title:    strings.TrimSpace(req.Title),
-		Repo:     strings.TrimSpace(req.Repo),
-		Branch:   branch,
-		Dir:      strings.TrimSpace(req.Dir),
-		Target:   strings.TrimSpace(req.Target),
-		BaseRef:  strings.TrimSpace(req.BaseRef),
-		OpenPath: strings.TrimSpace(req.OpenPath),
-		Prompt:   req.Prompt,
-		Force:    req.Force,
+		Provider:            provider,
+		Model:               strings.TrimSpace(req.Model),
+		Mode:                mode,
+		Title:               strings.TrimSpace(req.Title),
+		Repo:                strings.TrimSpace(req.Repo),
+		Branch:              branch,
+		Dir:                 strings.TrimSpace(req.Dir),
+		Target:              strings.TrimSpace(req.Target),
+		BaseRef:             strings.TrimSpace(req.BaseRef),
+		OpenPath:            strings.TrimSpace(req.OpenPath),
+		Prompt:              req.Prompt,
+		StagedAttachmentIDs: req.AttachmentIDs,
+		Force:               req.Force,
 		// The lane's color is derived from the branch name, so a cockpit lane and
 		// the editor title bar for the same branch agree.
 		Color: model.ColorForName(branch),
@@ -216,6 +220,15 @@ func (s *Server) agentsSub(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "session id required"})
 		return
 	}
+	if strings.HasPrefix(action, "attachments/") {
+		name := strings.TrimPrefix(action, "attachments/")
+		if name == "" || strings.Contains(name, "/") {
+			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such endpoint"})
+			return
+		}
+		s.agentAttachmentServe(w, r, id, name)
+		return
+	}
 	if strings.Contains(action, "/") {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such endpoint"})
 		return
@@ -262,7 +275,12 @@ func (s *Server) agentsSub(w http.ResponseWriter, r *http.Request) {
 		if req.Force {
 			turn = s.agents.TurnForce
 		}
-		if err := turn(id, req.Prompt); err != nil {
+		atts, err := s.promoteTurnAttachments(id, req.AttachmentIDs)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		if err := turn(id, req.Prompt, atts...); err != nil {
 			writeAgentError(w, err)
 			return
 		}
