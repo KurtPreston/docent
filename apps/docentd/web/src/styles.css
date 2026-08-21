@@ -365,8 +365,11 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 }
 .rail-filter input:focus { outline: none; border-color: var(--accent); }
 /* No bottom padding: the agent's compose box sticks to the bottom of this
-   scroller, and padding under it would leave a strip for content to show in. */
-.pane { padding: 18px 22px 0; }
+   scroller, and padding under it would leave a strip for content to show in.
+   The detail is stretched to the pane's full height so the agent panel has
+   somewhere to grow into on a lane whose transcript is only a few lines. */
+.pane { display: flex; flex-direction: column; padding: 18px 22px 0; }
+.pane > * { flex: 1 0 auto; }
 .inbox { border-left: 1px solid var(--border); padding: 10px; }
 .empty.small { padding: 20px 10px; font-size: 12.5px; }
 
@@ -419,7 +422,10 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
 .pill.st-working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .pill.st-idle, .pill.st-closed { color: var(--text-faint); }
 
-.lane-detail { border-left: 4px solid var(--g-color, var(--border)); padding-left: 16px; }
+.lane-detail {
+  border-left: 4px solid var(--g-color, var(--border)); padding-left: 16px;
+  display: flex; flex-direction: column;
+}
 .detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .detail-head h2 { margin: 0; font-size: 17px; }
 .swatch.big { width: 20px; height: 20px; border-radius: 6px; }
@@ -490,13 +496,15 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 .queue-item .who { margin-left: auto; padding-left: 6px; color: var(--text-faint); white-space: nowrap; }
 
 /* --- Agent panel -----------------------------------------------------------
-   The lane's hosted agent: a transcript that scrolls on its own and a compose
-   box pinned under it, so a long run never pushes the input off the screen. */
+   The lane's hosted agent: a transcript filling the pane with a compose box
+   pinned to the bottom of it, so a long run never pushes the input off the
+   screen and a short one never strands it halfway up. */
 .agent-panel { display: flex; flex-direction: column; gap: 8px; }
-/* The panel is the last thing in the lane detail and ends in a sticky compose
-   box, which cannot stick past its own section; a trailing margin would leave a
-   gap under the input at the bottom of the scroll. */
-.lane-detail .agent-panel { margin-bottom: 0; }
+/* The panel is the last thing in the lane detail and claims whatever height is
+   left over. Its trailing margin goes: it ends in a sticky compose box, which
+   cannot stick past its own section, so the margin would only leave a gap under
+   the input at the bottom of the scroll. */
+.lane-detail .agent-panel { flex: 1 0 auto; margin-bottom: 0; }
 .ag-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ag-head h3 {
   font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
@@ -539,8 +547,14 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 /* The transcript grows with the run and rides the pane's scrollbar rather than
    opening a second one inside it; the compose box below stays reachable by
    sticking to the bottom of that same scroller. Each turn carries its own card,
-   so a box around the column too would only nest borders. */
+   so a box around the column too would only nest borders.
+
+   It also takes the panel's spare height (grow, but never shrink below the
+   run): sticky only ever lifts the compose box into view, so without something
+   above it to fill the pane a short transcript leaves the input stranded
+   halfway up. */
 .ag-transcript {
+  flex: 1 0 auto;
   display: flex; flex-direction: column; gap: 10px;
 }
 /* Both halves of the conversation are cards, sided and colored apart so a
