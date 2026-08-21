@@ -297,6 +297,16 @@ function TranscriptBlock({ block, sessionId }: { block: Block; sessionId?: strin
   }
 }
 
+// The transcript grows freely and is scrolled by the pane around it, so tailing
+// has to drive that ancestor rather than the transcript's own box.
+function scroller(el: HTMLElement | null): HTMLElement | null {
+  for (let p = el?.parentElement ?? null; p; p = p.parentElement) {
+    const overflow = getComputedStyle(p).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return p;
+  }
+  return null;
+}
+
 function Transcript({
   blocks,
   busy,
@@ -311,18 +321,29 @@ function Transcript({
 
   // Follow the tail only while the user is already at the bottom; scrolling up
   // to read something during a long run should not be yanked back.
-  const onScroll = () => {
-    const el = box.current;
-    if (!el) return;
-    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  };
   useEffect(() => {
-    const el = box.current;
+    const el = scroller(box.current);
+    if (!el) return;
+    const onScroll = () => {
+      pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // A different lane arrives with the previous one's scroll position and pin
+  // state, neither of which says anything about this transcript.
+  useEffect(() => {
+    pinned.current = true;
+  }, [sessionId]);
+
+  useEffect(() => {
+    const el = scroller(box.current);
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [blocks]);
 
   return (
-    <div className="ag-transcript" ref={box} onScroll={onScroll}>
+    <div className="ag-transcript" ref={box}>
       {blocks.length === 0 ? (
         <div className="muted small">{busy ? "Starting…" : "No transcript yet."}</div>
       ) : (

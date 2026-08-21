@@ -340,10 +340,10 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
    inbox. Sized to be left open all day as its own app window, so the whole
    grid fits the viewport and each column scrolls independently rather than the
    page growing. */
-.cockpit { padding: 0; height: calc(100vh - 55px); overflow: hidden; }
+.cockpit { padding: 0; height: calc(100vh - 55px); overflow: hidden; display: flex; flex-direction: column; }
 .cockpit-grid {
   display: grid; grid-template-columns: 300px minmax(0, 1fr) 360px;
-  height: 100%; overflow: hidden;
+  flex: 1; min-height: 0; overflow: hidden;
 }
 @media (max-width: 1200px) {
   .cockpit-grid { grid-template-columns: 260px minmax(0, 1fr); }
@@ -364,7 +364,9 @@ td.summary-col { color: var(--text-dim); max-width: 22rem; overflow: hidden; tex
   font: inherit; font-size: 12px;
 }
 .rail-filter input:focus { outline: none; border-color: var(--accent); }
-.pane { padding: 18px 22px; }
+/* No bottom padding: the agent's compose box sticks to the bottom of this
+   scroller, and padding under it would leave a strip for content to show in. */
+.pane { padding: 18px 22px 0; }
 .inbox { border-left: 1px solid var(--border); padding: 10px; }
 .empty.small { padding: 20px 10px; font-size: 12.5px; }
 
@@ -491,6 +493,10 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
    The lane's hosted agent: a transcript that scrolls on its own and a compose
    box pinned under it, so a long run never pushes the input off the screen. */
 .agent-panel { display: flex; flex-direction: column; gap: 8px; }
+/* The panel is the last thing in the lane detail and ends in a sticky compose
+   box, which cannot stick past its own section; a trailing margin would leave a
+   gap under the input at the bottom of the scroll. */
+.lane-detail .agent-panel { margin-bottom: 0; }
 .ag-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ag-head h3 {
   font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
@@ -530,8 +536,11 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
   font: inherit; font-size: 12px;
 }
 
+/* The transcript grows with the run and rides the pane's scrollbar rather than
+   opening a second one inside it; the compose box below stays reachable by
+   sticking to the bottom of that same scroller. */
 .ag-transcript {
-  max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--bg-elev); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 12px;
 }
@@ -585,10 +594,19 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 }
 
 .ag-compose-wrap {
-  position: relative;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Opaque and padded so the transcript scrolls under the input instead of
+     through it. The negative margin swallows .agent-panel's flex gap, which
+     would otherwise leave a transparent strip above the input for a clipped
+     line of transcript to show in. */
+  background: var(--bg);
+  margin-top: -8px;
+  padding: 8px 0 14px;
 }
 .ag-compose-wrap.dragging::after {
   content: "Drop files to attach";
