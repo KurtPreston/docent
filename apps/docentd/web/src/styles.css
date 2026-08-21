@@ -538,19 +538,36 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
 
 /* The transcript grows with the run and rides the pane's scrollbar rather than
    opening a second one inside it; the compose box below stays reachable by
-   sticking to the bottom of that same scroller. */
+   sticking to the bottom of that same scroller. Each turn carries its own card,
+   so a box around the column too would only nest borders. */
 .ag-transcript {
-  display: flex; flex-direction: column; gap: 8px;
-  background: var(--bg-elev); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 10px;
 }
-/* The prompt is indented and accented so the conversation's turns are
-   distinguishable at a glance while scrolling past tool noise. */
+/* Both halves of the conversation are cards, sided and colored apart so a
+   glance down the column tells you who said what: yours sits right and wears
+   the accent, the agent's sits left and stays neutral. Tool calls, thinking and
+   notes stay as bare rows, indented to the card's text, so the turns they sit
+   between remain the thing the eye lands on. */
 .ag-prompt {
-  white-space: pre-wrap; font-size: 12.5px; color: var(--text);
-  border-left: 2px solid var(--accent); padding-left: 8px;
+  align-self: flex-end; max-width: 85%;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 12.5px; color: var(--text);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-elev));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 10px; padding: 8px 11px;
 }
-.ag-text { font-size: 12.5px; line-height: 1.5; }
+.ag-prompt > * + * { margin-top: 6px; }
+.ag-text {
+  align-self: flex-start; max-width: 92%;
+  font-size: 12.5px; line-height: 1.5;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in srgb, var(--green) 55%, var(--border));
+  border-radius: 10px; padding: 8px 11px;
+}
+/* Agents cite paths and URLs constantly, and one longer than the card breaks
+   out of it. Fenced code is exempt (it is `white-space: pre`) and keeps
+   scrolling sideways instead of wrapping. */
+.ag-text, .ag-plan { overflow-wrap: anywhere; }
 .ag-text :first-child, .ag-plan :first-child { margin-top: 0; }
 .ag-text :last-child, .ag-plan :last-child { margin-bottom: 0; }
 .ag-text pre, .ag-plan pre {
@@ -573,10 +590,13 @@ button.detail-row.clickable:hover .name { color: var(--accent); }
   margin: 0.85em 0 0.35em; font-size: 1em; font-weight: 620;
 }
 .ag-plan {
+  align-self: flex-start; max-width: 92%;
   font-size: 12.5px; line-height: 1.5;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  padding-left: 10px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  border-radius: 10px; padding: 8px 11px;
 }
+.ag-thinking, .ag-tool, .ag-note { align-self: flex-start; max-width: 92%; padding-left: 14px; }
 .ag-thinking { color: var(--text-faint); font-size: 11.5px; }
 .ag-thinking summary { cursor: pointer; }
 .ag-thinking div { white-space: pre-wrap; padding: 4px 0 0 10px; }
