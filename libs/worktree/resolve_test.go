@@ -222,6 +222,157 @@ func TestResolveRebuildsABrokenWorktree(t *testing.T) {
 	}
 }
 
+// excludeInRepo makes a pattern ignored in every worktree of dir's repository.
+// The real thing is a committed .gitignore, but that only holds on the branches
+// carrying it, and what these tests need is a tree that is clean on both sides
+// of a checkout.
+func excludeInRepo(t *testing.T, dir, pattern string) {
+	t.Helper()
+	out, err := gitOutput(context.Background(), dir, gitTimeout, "rev-parse", "--git-common-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := strings.TrimSpace(out)
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	path := filepath.Join(common, "info", "exclude")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(pattern+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An agent gets a shell, and checking another branch out in its worktree is a
+// legitimate thing for one to do -- comparing against the base branch,
+// reproducing a failure on it. Coming back afterwards is not something docent
+// can require, and a worktree left elsewhere is not a bad checkout but no
+// checkout at all: git refuses to add one at an occupied path, so the branch
+// stops being provisionable entirely.
+func TestResolveSwitchesADriftedWorktreeBack(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	f.clone(code, "salsa", remote)
+	state := t.TempDir()
+
+	req := Request{Repo: "Chip/salsa", Branch: "feature", Roots: []string{code}, StateRoot: state}
+	first, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, first.Dir, "commit", "--allow-empty", "-q", "-m", "turn 1")
+	// The expensive half of one of these directories is what git does not
+	// track: installed dependencies a rebuild would have to fetch again.
+	excludeInRepo(t, first.Dir, "node_modules")
+	deps := filepath.Join(first.Dir, "node_modules", "left-pad")
+	if err := os.MkdirAll(deps, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, first.Dir, "checkout", "-q", "-b", "release-next", "origin/main")
+
+	second, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Resolve did not heal a drifted worktree: %v", err)
+	}
+	if second.Dir != first.Dir {
+		t.Errorf("second resolve = %q, want %q", second.Dir, first.Dir)
+	}
+	if got := currentBranch(t, second.Dir); got != "feature" {
+		t.Errorf("worktree is on %q, want feature", got)
+	}
+	if got := headSubject(t, second.Dir); got != "turn 1" {
+		t.Errorf("HEAD = %q; the earlier turn's commit was lost", got)
+	}
+	if second.Created {
+		t.Error("Created = true; the directory was switched, not made, and setup must not re-run")
+	}
+	if _, err := os.Stat(deps); err != nil {
+		t.Errorf("installed dependencies were discarded to correct a ref: %v", err)
+	}
+	if second.Note == "" {
+		t.Error("no note; a directory repaired silently is one nobody can explain later")
+	}
+}
+
+// A detached HEAD is the same drift by another route -- a checkout of a
+// remote-tracking ref rather than a branch -- and reaches the same dead end,
+// since git files no branch for it and the by-branch lookup misses.
+func TestResolveSwitchesADetachedWorktreeBack(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	f.clone(code, "salsa", remote)
+	state := t.TempDir()
+
+	req := Request{Repo: "Chip/salsa", Branch: "feature", Roots: []string{code}, StateRoot: state}
+	first, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, first.Dir, "commit", "--allow-empty", "-q", "-m", "turn 1")
+	gitAt(t, first.Dir, "checkout", "-q", "--detach", "origin/main")
+
+	second, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Resolve did not heal a detached worktree: %v", err)
+	}
+	if got := currentBranch(t, second.Dir); got != "feature" {
+		t.Errorf("worktree is on %q, want feature", got)
+	}
+	if second.Created {
+		t.Error("Created = true for a directory that already existed")
+	}
+	if !strings.Contains(second.Note, "detached") {
+		t.Errorf("note = %q; after the switch the note is the only record of where HEAD was", second.Note)
+	}
+}
+
+// Uncommitted edits in a drifted tree belong to whatever branch is checked out,
+// not to the one being provisioned, and git carries them across only until they
+// conflict. A clean rebuild is at least a state somebody can reason about.
+func TestResolveRebuildsADirtyDriftedWorktree(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	f.clone(code, "salsa", remote)
+	state := t.TempDir()
+
+	req := Request{Repo: "Chip/salsa", Branch: "feature", Roots: []string{code}, StateRoot: state}
+	first, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, first.Dir, "commit", "--allow-empty", "-q", "-m", "turn 1")
+	gitAt(t, first.Dir, "checkout", "-q", "-b", "release-next", "origin/main")
+	debris := filepath.Join(first.Dir, "half-finished.txt")
+	if err := os.WriteFile(debris, []byte("work on the wrong branch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Resolve did not rebuild a dirty drifted worktree: %v", err)
+	}
+	if got := currentBranch(t, second.Dir); got != "feature" {
+		t.Errorf("worktree is on %q, want feature", got)
+	}
+	if got := headSubject(t, second.Dir); got != "turn 1" {
+		t.Errorf("HEAD = %q; the branch's own commits are in the base and must survive a rebuild", got)
+	}
+	if !second.Created {
+		t.Error("Created = false; the directory was rebuilt and setup should have run")
+	}
+	if _, err := os.Stat(debris); err == nil {
+		t.Error("the other branch's uncommitted work survived into the rebuilt tree")
+	}
+}
+
 // A branch that exists only on the remote must be tracked, not forked: a later
 // push has to be a fast-forward rather than a surprise.
 func TestResolveTracksARemoteBranch(t *testing.T) {

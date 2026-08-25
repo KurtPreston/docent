@@ -87,6 +87,10 @@ type Result struct {
 	// with failed setup is still a checkout, and stranding it is worse than
 	// reporting it.
 	SetupErr error
+	// Note explains anything docent did to the directory beyond provisioning it
+	// -- a worktree found on the wrong branch and put back on the right one.
+	// Empty when there was nothing to say, which is the usual case.
+	Note string
 }
 
 // Resolve provisions a branch's worktree in docent's own tree, cloning the
@@ -124,12 +128,12 @@ func Resolve(ctx context.Context, req Request) (Result, error) {
 
 	root := filepath.Join(stateRoot(req.StateRoot), projectsDir, SanitizePath(repo))
 	local, hasLocal := DeveloperProject(req.OpenPath, req.Roots, repo)
-	base, dir, created, err := provision(ctx, root, repo, branch, req, local, hasLocal)
+	base, dir, created, note, err := provision(ctx, root, repo, branch, req, local, hasLocal)
 	if err != nil {
 		return Result{}, err
 	}
 
-	res := Result{Project: root, Owned: true}
+	res := Result{Project: root, Owned: true, Note: note}
 	res.Dir, res.Created = dir, created
 	if created {
 		res.SetupErr = RunHook(ctx, HookRequest{
@@ -180,22 +184,22 @@ func stateRoot(override string) string {
 // loser dies with "could not lock config file config: File exists".
 //
 // The setup hook stays outside, being per-directory and slow.
-func provision(ctx context.Context, root, repo, branch string, req Request, local Project, hasLocal bool) (base, dir string, created bool, err error) {
+func provision(ctx context.Context, root, repo, branch string, req Request, local Project, hasLocal bool) (base, dir string, created bool, note string, err error) {
 	release, err := baseLocks.acquire(ctx, root)
 	if err != nil {
-		return "", "", false, fmt.Errorf("worktree: waiting to provision %s: %w", repo, err)
+		return "", "", false, "", fmt.Errorf("worktree: waiting to provision %s: %w", repo, err)
 	}
 	defer release()
 
 	base, err = ensureBase(ctx, root, repo, local, hasLocal, req.RemoteURL)
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, "", err
 	}
-	dir, created, err = ensureWorktree(ctx, base, root, branch, req.BaseRef)
+	dir, created, note, err = ensureWorktree(ctx, base, root, branch, req.BaseRef)
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, "", err
 	}
-	return base, dir, created, nil
+	return base, dir, created, note, nil
 }
 
 // ensureBase returns docent's bare repository for repo, cloning it on first use.
@@ -379,36 +383,115 @@ func cloneURL(repo string, local Project, hasLocal bool, override string) (strin
 }
 
 // ensureWorktree returns branch's directory under root, creating it if needed.
-func ensureWorktree(ctx context.Context, base, root, branch, baseRef string) (dir string, created bool, err error) {
+func ensureWorktree(ctx context.Context, base, root, branch, baseRef string) (dir string, created bool, note string, err error) {
 	layout, err := List(ctx, base)
 	if err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 	if existing, ok := layout.ByBranch[branch]; ok {
 		if isWorktreeOf(ctx, existing, base) {
 			// Returned as it stands, with its working state neither inspected
 			// nor altered. Sessions resume across turns, so resetting a reused
 			// worktree would discard the previous turn's work.
-			return existing, false, nil
+			return existing, false, "", nil
 		}
 		// git still lists a directory that is gone or no longer a checkout --
 		// deleted by hand, or a clone interrupted midway. Only docent's own tree
 		// reaches this code, so healing it is safe in a way it would never be in
 		// the developer's project.
 		if err := gitRun(ctx, base, gitTimeout, "worktree", "prune"); err != nil {
-			return "", false, err
+			return "", false, "", err
 		}
 		os.RemoveAll(existing)
 	}
 
 	dir = filepath.Join(root, SanitizePath(branch))
-	if _, statErr := os.Stat(dir); statErr == nil && !isWorktreeOf(ctx, dir, base) {
+	switch _, statErr := os.Stat(dir); {
+	case statErr != nil:
+		// Nothing in the way; the add below makes it.
+	case !isWorktreeOf(ctx, dir, base):
 		os.RemoveAll(dir)
+	default:
+		// The lookup above found no worktree holding this branch, yet the
+		// directory one would live in is a live worktree: whatever is checked
+		// out in there is something else.
+		return healDrift(ctx, base, dir, branch, baseRef)
 	}
 	if err := addWorktree(ctx, base, dir, branch, baseRef); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
-	return dir, true, nil
+	return dir, true, "", nil
+}
+
+// healDrift puts a worktree that wandered off its branch back onto it.
+//
+// Only one thing moves HEAD in here: an agent, which gets a shell and for which
+// checking out another branch is a legitimate thing to do -- comparing against
+// the base branch, reproducing a failure on it. Coming back afterwards is not
+// something docent can require, so it absorbs the drift instead. Left
+// unhandled it is not a bad checkout but no checkout at all: git refuses to add
+// a worktree at an occupied path, and the branch becomes unprovisionable.
+//
+// Switching in place is the first answer because of what these directories
+// carry. The tracked files are the cheap part; the ignored ones -- an installed
+// node_modules, a build cache -- are what make a tree usable, and are not in
+// git to be restored. Discarding gigabytes of them to correct a ref is the more
+// expensive mistake.
+//
+// The rebuild is for when switching would lose something instead. Uncommitted
+// edits sitting in a drifted tree belong to whichever branch is checked out,
+// not to this one, and git carries them across only until they conflict; a
+// clean rebuild is at least a state somebody can reason about.
+func healDrift(ctx context.Context, base, dir, branch, baseRef string) (string, bool, string, error) {
+	was := headDescription(ctx, dir)
+	dirty, err := IsDirty(ctx, dir)
+	if err == nil && !dirty {
+		if _, switchErr := switchTo(ctx, dir, branch, baseRef); switchErr == nil {
+			return dir, false, fmt.Sprintf("%s was on %s; switched it back to %s",
+				Display(dir), was, branch), nil
+		}
+	}
+	if err := removeWorktree(ctx, base, dir); err != nil {
+		return "", false, "", err
+	}
+	if err := addWorktree(ctx, base, dir, branch, baseRef); err != nil {
+		return "", false, "", err
+	}
+	return dir, true, fmt.Sprintf("%s was on %s and could not be switched back; rebuilt it on %s",
+		Display(dir), was, branch), nil
+}
+
+// headDescription names what a worktree has checked out, for a message.
+//
+// The commit is worth naming for a detached HEAD, because after the switch the
+// reflog is the only place it is written down.
+func headDescription(ctx context.Context, dir string) string {
+	if out, err := gitOutput(ctx, dir, gitTimeout, "symbolic-ref", "--short", "--quiet", "HEAD"); err == nil {
+		if name := strings.TrimSpace(out); name != "" {
+			return name
+		}
+	}
+	out, err := gitOutput(ctx, dir, gitTimeout, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "an unreadable HEAD"
+	}
+	return "a detached HEAD at " + strings.TrimSpace(out)
+}
+
+// removeWorktree unregisters a worktree and deletes its directory.
+//
+// --force because the tree is being discarded deliberately, and git otherwise
+// refuses over the very state that made the rebuild necessary. The manual
+// removal is the fallback for a worktree git will not let go of, where leaving
+// the directory in place would only fail the add that follows.
+func removeWorktree(ctx context.Context, base, dir string) error {
+	if err := gitRun(ctx, base, gitTimeout, "worktree", "remove", "--force", dir); err == nil {
+		return nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("worktree: %w", err)
+	}
+	return gitRun(ctx, base, gitTimeout, "worktree", "prune")
 }
 
 // isWorktreeOf reports whether dir is a live worktree of the repository at base.
@@ -458,6 +541,20 @@ func addWorktree(ctx context.Context, base, dir, branch, baseRef string) error {
 		return err
 	}
 	return gitRun(ctx, base, gitTimeout, "worktree", "add", "--quiet", "-b", branch, dir, start)
+}
+
+// switchTo checks branch out in a working tree that already exists, reporting
+// whether the branch had to be created.
+//
+// The same ladder addWorktree walks, so a directory switched onto a branch and
+// one created for it land on the same commit: an existing local branch is
+// continued, a remote-only one is tracked so a later push fast-forwards, and a
+// branch that exists nowhere comes off the ref the caller asked for.
+func switchTo(ctx context.Context, dir, branch, baseRef string) (created bool, err error) {
+	if hasRef(ctx, dir, "refs/heads/"+branch) {
+		return false, gitRun(ctx, dir, gitTimeout, "checkout", "--quiet", branch)
+	}
+	return true, checkoutNewBranch(ctx, dir, branch, baseRef)
 }
 
 // startPoint resolves what a brand-new branch is based on: the caller's ref when

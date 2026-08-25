@@ -116,16 +116,9 @@ func checkoutInPlace(ctx context.Context, p Project, branch string, req Request)
 	if out, err := gitOutput(ctx, p.Dir, gitTimeout, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 		was = strings.TrimSpace(out)
 	}
-	created := false
-	if hasRef(ctx, p.Dir, "refs/heads/"+branch) {
-		if err := gitRun(ctx, p.Dir, gitTimeout, "checkout", "--quiet", branch); err != nil {
-			return Result{}, err
-		}
-	} else {
-		if err := checkoutNewBranch(ctx, p.Dir, branch, req.BaseRef); err != nil {
-			return Result{}, err
-		}
-		created = true
+	created, err := switchTo(ctx, p.Dir, branch, req.BaseRef)
+	if err != nil {
+		return Result{}, err
 	}
 
 	res := Result{Dir: p.Dir, Project: p.Dir, PreviousBranch: was}

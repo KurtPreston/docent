@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -61,6 +62,10 @@ type WorkdirResult struct {
 	PreviousBranch string
 	// SetupErr is the setup hook's failure, if it had one. Not fatal.
 	SetupErr error
+	// Note explains anything provisioning had to repair on the way. Logged
+	// rather than returned to a caller who could act on it, since by the time
+	// it is set the repair has already been made.
+	Note string
 }
 
 // ProvisionWorkdir resolves the working directory for an agent job.
@@ -133,11 +138,18 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 	if err != nil {
 		return WorkdirResult{}, err
 	}
+	if res.Note != "" {
+		// Logged here rather than by each caller: a directory repaired on the
+		// way to an agent run is invisible otherwise, and the run that provoked
+		// it succeeds, so nothing else would ever mention it.
+		log.Printf("workdir: %s", res.Note)
+	}
 	return WorkdirResult{
 		Path:           res.Dir,
 		ProjectDir:     res.Project,
 		Owned:          res.Owned,
 		PreviousBranch: res.PreviousBranch,
 		SetupErr:       res.SetupErr,
+		Note:           res.Note,
 	}, nil
 }
