@@ -342,6 +342,38 @@ func TestBuildWorkItems_orphanTicketStaysStandalone(t *testing.T) {
 	}
 }
 
+// TestBuildWorkItems_ticketUnitCarriesPRToBranch reproduces a closed PR
+// disappearing from the standup: an events-side authored_pr has no head
+// branch, so it groups by its ticket rather than onto the local branch unit.
+// Once the same ticket also produces a JIRA update, the ticket unit is folded
+// into the branch unit and deleted — and the PR has to travel with it.
+func TestBuildWorkItems_ticketUnitCarriesPRToBranch(t *testing.T) {
+	cfg := Config{AllowGeneric: true}
+	entities := []model.Entity{
+		{ID: "pr:7835", Kind: "authored_pr", Title: "[SALSA-1] Make the mock scriptable", URL: "https://git/pull/7835",
+			Coordinates: map[string]string{"repo": "org/repo", "ticket": "SALSA-1"},
+			State:       map[string]string{"state": "closed", "closed_at": "2026-06-01T20:00:00Z"}},
+		{ID: "jira:SALSA-1", Kind: "issue_activity", Title: "SALSA-1 Make the mock scriptable", URL: "https://jira/SALSA-1",
+			Coordinates: map[string]string{"ticket": "SALSA-1"}, State: map[string]string{"status": "Done"}},
+		{ID: "commit:1", Kind: "commit", Title: "[SALSA-1] port change",
+			Coordinates: map[string]string{"repo": "org/repo", "branch": "salsa-1-mock", "ticket": "SALSA-1"},
+			State:       map[string]string{"observedAt": "2026-06-01T12:00:00Z"}},
+	}
+	items := BuildWorkItems(entities, cfg)
+	if len(items) != 1 {
+		t.Fatalf("got %d work items, want 1 branch unit: %+v", len(items), items)
+	}
+	var gotPR bool
+	for _, ent := range items[0].Entities {
+		if ent.ID == "pr:7835" {
+			gotPR = true
+		}
+	}
+	if !gotPR {
+		t.Errorf("branch unit lost the closed PR: %+v", items[0].Entities)
+	}
+}
+
 func TestBuildWorkItems_multipleBranchesShareTicket(t *testing.T) {
 	cfg := Config{AllowGeneric: true}
 	entities := []model.Entity{

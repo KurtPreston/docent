@@ -562,10 +562,16 @@ func isJiraEntity(ent model.Entity) bool {
 	return false
 }
 
-// attachTicketsToBranchUnits moves JIRA entities from standalone ticket-keyed
-// work items onto repo/branch units that reference the same ticket key.
+// attachTicketsToBranchUnits moves standalone ticket-keyed work items onto the
+// repo/branch units that reference the same ticket key. A ticket unit needs a
+// JIRA entity to be eligible, but everything it holds moves across, because
+// the unit is deleted afterwards and anything left behind is lost. That
+// matters for entities the collector could not anchor to a branch: an
+// events-side authored_pr carries no head branch, so a PR merged or closed
+// yesterday groups by its ticket and would otherwise vanish the moment the
+// same ticket also produced a JIRA update.
 func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]string, cfg Config, prTicket map[string]model.TicketRef) {
-	// ticket key -> jira entities collected from ticket-keyed work items
+	// ticket key -> every entity collected from ticket-keyed work items
 	ticketEntities := map[string][]model.Entity{}
 	var ticketKeys []string
 
@@ -577,16 +583,17 @@ func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]stri
 		if t == "" || !looksLikeTicketKey(t, cfg) {
 			continue
 		}
-		var jira []model.Entity
+		hasJira := false
 		for _, ent := range wi.Entities {
 			if isJiraEntity(ent) {
-				jira = append(jira, ent)
+				hasJira = true
+				break
 			}
 		}
-		if len(jira) == 0 {
+		if !hasJira {
 			continue
 		}
-		ticketEntities[t] = append(ticketEntities[t], jira...)
+		ticketEntities[t] = append(ticketEntities[t], wi.Entities...)
 		ticketKeys = append(ticketKeys, t)
 	}
 
@@ -606,9 +613,10 @@ func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]stri
 		}
 	}
 
-	// Attach jira entities to branch units that reference each ticket.
+	// Attach the ticket units' entities to branch units that reference each
+	// ticket.
 	for t := range referenced {
-		jira, ok := ticketEntities[t]
+		moved, ok := ticketEntities[t]
 		if !ok {
 			continue
 		}
@@ -621,7 +629,7 @@ func attachTicketsToBranchUnits(groups map[string]*model.WorkItem, order *[]stri
 			if !containsString(keys, t) {
 				continue
 			}
-			for _, ent := range jira {
+			for _, ent := range moved {
 				if !entityPresent(wi.Entities, ent.ID) {
 					wi.Entities = append(wi.Entities, ent)
 				}
