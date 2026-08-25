@@ -466,10 +466,8 @@ func healDrift(ctx context.Context, base, dir, branch, baseRef string) (string, 
 // The commit is worth naming for a detached HEAD, because after the switch the
 // reflog is the only place it is written down.
 func headDescription(ctx context.Context, dir string) string {
-	if out, err := gitOutput(ctx, dir, gitTimeout, "symbolic-ref", "--short", "--quiet", "HEAD"); err == nil {
-		if name := strings.TrimSpace(out); name != "" {
-			return name
-		}
+	if name, err := CheckedOutBranch(ctx, dir); err == nil && name != "" {
+		return name
 	}
 	out, err := gitOutput(ctx, dir, gitTimeout, "rev-parse", "--short", "HEAD")
 	if err != nil {

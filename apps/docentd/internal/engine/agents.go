@@ -101,7 +101,21 @@ func syncBeforeTurn(ctx context.Context, sess agentsession.Session, _ bool) erro
 // left uncommitted in it is invisible to every git command they run. This is the
 // step that makes the open button and the divergence check above mean anything:
 // both compare committed tips.
+//
+// The snapshot lands on whatever the agent left checked out, which is not always
+// the session's branch: one that checks another out mid-turn and does not come
+// back sends it there instead. Committing anyway is still right -- the work
+// exists, and leaving it uncommitted is what gets it deleted when provisioning
+// next finds a dirty tree on the wrong branch -- but it is worth saying, because
+// the branch the developer goes looking at will not have it.
 func commitAfterTurn(ctx context.Context, sess agentsession.Session, _ *agentsession.TurnResult, _ error) error {
+	if head, err := worktree.CheckedOutBranch(ctx, sess.Dir); err == nil && head != sess.Branch {
+		on := head
+		if on == "" {
+			on = "a detached HEAD"
+		}
+		log.Printf("agents: %s is on %s, not %s; this turn's snapshot commits there", sess.Dir, on, sess.Branch)
+	}
 	msg := fmt.Sprintf("docent: turn %d (%s)", sess.Turns+1, sess.ID)
 	if _, err := worktree.CommitAll(ctx, sess.Dir, msg); err != nil {
 		return fmt.Errorf("could not commit this turn's changes in %s: %w", sess.Dir, err)

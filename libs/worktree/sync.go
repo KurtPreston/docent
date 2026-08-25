@@ -55,6 +55,17 @@ func Sync(ctx context.Context, req SyncRequest) (SyncResult, error) {
 		return SyncResult{}, nil
 	}
 
+	// Everything below either moves HEAD or judges it, so HEAD has to be the
+	// branch the caller named. An agent gets a shell and may leave its worktree
+	// on another branch; the fast-forward would then advance that branch onto
+	// this one's commits, and the comparison that decides on it would be
+	// between two unrelated lines of work. Skipping a sync costs a turn started
+	// from slightly older objects, which is the cheaper of the two.
+	if head, err := CheckedOutBranch(ctx, dir); err == nil && head != branch {
+		return SyncResult{Note: fmt.Sprintf("left alone: %s is on %s, not %s",
+			Display(dir), headDescription(ctx, dir), branch)}, nil
+	}
+
 	var notes []string
 	for _, remote := range []string{localRemote, "origin"} {
 		if !hasRemote(ctx, dir, remote) {
@@ -122,6 +133,25 @@ func CommitAll(ctx context.Context, dir, message string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// CheckedOutBranch names the branch a working tree has HEAD on, or "" when HEAD
+// is detached.
+//
+// Worth asking rather than assuming, at every step that acts on "the branch's
+// worktree": the directory an agent ran in is only on the branch docent put it
+// on until the agent checks something else out.
+func CheckedOutBranch(ctx context.Context, dir string) (string, error) {
+	out, err := gitOutput(ctx, dir, gitTimeout, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	// git prints the literal "HEAD" when detached, and refuses to create a
+	// branch by that name, so there is nothing else it can mean.
+	if name := strings.TrimSpace(out); name != "HEAD" {
+		return name, nil
+	}
+	return "", nil
 }
 
 // IsDirty reports uncommitted changes, tracked or not.

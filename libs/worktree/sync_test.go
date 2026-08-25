@@ -111,6 +111,34 @@ func TestSyncLeavesADirtyTreeBehind(t *testing.T) {
 	}
 }
 
+// The fast-forward moves whatever HEAD is on, so a worktree an agent left on
+// another branch would have that branch advanced onto this one's commits -- and
+// the comparison deciding on it would be between two unrelated lines of work.
+func TestSyncLeavesADriftedWorktreeAlone(t *testing.T) {
+	requireGit(t)
+	local, docent := twoCopies(t, "salsa-1/fix")
+	commitIn(t, local, "theirs.txt", "theirs")
+	gitAt(t, docent, "checkout", "-q", "-b", "release-next", "origin/main")
+	before := headSubject(t, docent)
+
+	res, err := Sync(context.Background(), SyncRequest{Dir: docent, Branch: "salsa-1/fix"})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.FastForwarded {
+		t.Error("FastForwarded = true; the branch that moved was not the one asked about")
+	}
+	if got := currentBranch(t, docent); got != "release-next" {
+		t.Errorf("worktree is on %q; Sync is not the place that puts drift right", got)
+	}
+	if got := headSubject(t, docent); got != before {
+		t.Errorf("HEAD moved from %q to %q on a branch nobody asked about", before, got)
+	}
+	if !strings.Contains(res.Note, "release-next") {
+		t.Errorf("Note = %q, want it to name what is checked out instead", res.Note)
+	}
+}
+
 func TestSyncIsQuietWhenTheBranchIsOnlyDocents(t *testing.T) {
 	requireGit(t)
 	f := newForge(t)
