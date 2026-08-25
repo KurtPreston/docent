@@ -178,6 +178,74 @@ func TestRenderDailyPlanStartedTierWithPR(t *testing.T) {
 	}
 }
 
+// TestRenderDailyPlanCommitsOnOthersPRBranch covers reviewing a colleague's
+// PR closely enough to push commits to their branch. Work items group by head
+// branch, so those commits share a unit with their PR — which must read as a
+// review, not as work of mine that started.
+func TestRenderDailyPlanCommitsOnOthersPRBranch(t *testing.T) {
+	theirPR := model.Entity{
+		Kind: "pr_review_status", URL: "https://git.example/p/40",
+		Coordinates: map[string]string{"ticket": "SALSA-40"},
+		State: map[string]string{"relation": "reviewable", "mine": "false", "state": "open",
+			"is_draft": "false", "created_at": preWindow, "pr_author": "someone"},
+	}
+	myCommit := model.Entity{
+		Kind: "commit", Title: "[SALSA-40] try a narrower gate",
+		Coordinates: map[string]string{"ticket": "SALSA-40"},
+		State:       map[string]string{"observedAt": inWindow, "is_self": "true"},
+	}
+
+	in := RunInput{
+		Since: testSince, Now: testNow,
+		PrevDayLabel: "Monday", NextDayLabel: "Tuesday",
+		WorkItems: []model.WorkItem{
+			ticketWorkItem("SALSA-40", "Theirs", "https://git.example/p/40", theirPR, myCommit),
+			// Same shape plus proof I reviewed it -> the Reviewed section.
+			ticketWorkItem("SALSA-41", "Theirs reviewed", "https://git.example/p/41", theirPR, myCommit,
+				model.Entity{Kind: "reviewed_pr", URL: "https://git.example/p/41", Title: "[SALSA-41] Theirs reviewed",
+					Coordinates: map[string]string{"ticket": "SALSA-41"},
+					State:       map[string]string{"state": "open", "updated_at": inWindow}},
+			),
+		},
+	}
+	md := RenderDailyPlanMarkdown(in, nil)
+	if strings.Contains(md, "Started [SALSA-40]") || strings.Contains(md, "SALSA-40") {
+		t.Errorf("commits on someone else's PR branch must not read as started work:\n%s", md)
+	}
+	if !strings.Contains(md, "Reviewed:\n- [SALSA-41](https://git.example/p/41)") {
+		t.Errorf("expected SALSA-41 under Reviewed:\n%s", md)
+	}
+	if strings.Contains(md, "Started [SALSA-41]") || strings.Contains(md, "Continue on [SALSA-41]") {
+		t.Errorf("reviewed item must not appear as started or continuing work:\n%s", md)
+	}
+}
+
+// TestRenderDailyPlanStartedTierIgnoresOthersPR guards the second "Started"
+// arm: a started-tier ticket is not mine to claim when the only PR on it
+// belongs to someone else, even with local branch activity.
+func TestRenderDailyPlanStartedTierIgnoresOthersPR(t *testing.T) {
+	in := RunInput{
+		Since: testSince, Now: testNow,
+		PrevDayLabel: "Monday", NextDayLabel: "Tuesday",
+		WorkItems: []model.WorkItem{
+			ticketWorkItem("SALSA-42", "Theirs in dev", "https://jira.example/browse/SALSA-42",
+				model.Entity{Kind: "issue_activity", URL: "https://jira.example/browse/SALSA-42",
+					Coordinates: map[string]string{"ticket": "SALSA-42"},
+					State:       map[string]string{"status": "In Development", "status_tier": "started", "updated": inWindow}},
+				model.Entity{Kind: "reflog", Coordinates: map[string]string{"ticket": "SALSA-42"},
+					State: map[string]string{"observedAt": inWindow}},
+				model.Entity{Kind: "pr_review_status", URL: "https://git.example/p/42",
+					Coordinates: map[string]string{"ticket": "SALSA-42"},
+					State:       map[string]string{"relation": "reviewable", "mine": "false", "state": "open", "created_at": preWindow}},
+			),
+		},
+	}
+	md := RenderDailyPlanMarkdown(in, nil)
+	if strings.Contains(md, "SALSA-42") {
+		t.Errorf("started-tier ticket whose only PR is someone else's should be dropped:\n%s", md)
+	}
+}
+
 func TestRenderDailyPlanExcludesBotCommit(t *testing.T) {
 	in := RunInput{
 		Since: testSince, Now: testNow,

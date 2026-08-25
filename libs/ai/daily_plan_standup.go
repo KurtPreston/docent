@@ -144,16 +144,18 @@ type standupLine struct {
 // closed > opened(draft) > opened > updated (pushed commits to an existing
 // PR) > started (new commits with no PR, or a ticket moved into the started
 // tier in-window backed by branch activity or one of my PRs) > reviewed (a PR
-// I reviewed). Items whose only evidence is a reflog branch-visit, a stale
-// open PR merely "updated", or a watcher-only Jira change fall through to
-// ok=false and are dropped.
+// I reviewed). Neither "started" form fires when the branch carries somebody
+// else's PR: commits I pushed while reviewing a colleague's branch are not
+// work of my own beginning. Items whose only evidence is a reflog
+// branch-visit, a stale open PR merely "updated", or a watcher-only Jira
+// change fall through to ok=false and are dropped.
 func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, bool) {
 	var (
 		merged, closed, opened, anyDraft bool
 		selfCommit, hasAuthoredPR        bool
 		recentAuthoredPR                 bool
 		jiraStarted, branchEvidence      bool
-		reviewed                         bool
+		reviewed, othersPR               bool
 	)
 	for _, ent := range wi.Entities {
 		switch ent.Kind {
@@ -185,8 +187,12 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 				jiraStarted = true
 			}
 		case "authored_pr", "pr_review_status":
-			// Only PRs I own; pr_review_status carries the mine flag.
+			// Only PRs I own; pr_review_status carries the mine flag. A PR
+			// somebody else owns still tells us something: work items group
+			// by head branch, so its presence means I was committing on a
+			// colleague's branch rather than starting work of my own.
 			if ent.State["mine"] == "false" {
+				othersPR = true
 				continue
 			}
 			hasAuthoredPR = true
@@ -225,9 +231,9 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 		verb, category, rank = "Opened PR for", categoryInProgress, 3
 	case pushed:
 		verb, category, rank = "Updated PR for", categoryInProgress, 4
-	case selfCommit && !hasAuthoredPR:
+	case selfCommit && !hasAuthoredPR && !othersPR:
 		verb, category, rank = "Started", categoryInProgress, 5
-	case jiraStarted && (branchEvidence || recentAuthoredPR):
+	case jiraStarted && !othersPR && (branchEvidence || recentAuthoredPR):
 		// A ticket in the started tier (updated in-window), backed by local
 		// branch activity or a freshly-opened PR of mine, was genuinely
 		// started. Requiring one of those excludes both watcher-only tickets
