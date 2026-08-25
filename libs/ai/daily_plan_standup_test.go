@@ -277,6 +277,30 @@ func TestRenderDailyPlanExcludesBotCommit(t *testing.T) {
 	}
 }
 
+// TestRenderDailyPlanReviewedLinksTheReviewedPR covers a ticket carrying more
+// than one PR: the backport of the PR I reviewed shares its ticket, so the
+// bullet must link the reviewed PR rather than whichever PR came first.
+func TestRenderDailyPlanReviewedLinksTheReviewedPR(t *testing.T) {
+	in := RunInput{
+		Since: testSince, Now: testNow,
+		PrevDayLabel: "Monday", NextDayLabel: "Tuesday",
+		WorkItems: []model.WorkItem{
+			ticketWorkItem("SALSA-50", "Fix the drag handler", "https://jira.example/browse/SALSA-50",
+				model.Entity{Kind: "pr_review_status", URL: "https://git.example/p/51",
+					Coordinates: map[string]string{"ticket": "SALSA-50"},
+					State:       map[string]string{"mine": "false", "state": "open", "created_at": preWindow}},
+				model.Entity{Kind: "reviewed_pr", URL: "https://git.example/p/50", Title: "[SALSA-50] Fix the drag handler",
+					Coordinates: map[string]string{"ticket": "SALSA-50"},
+					State:       map[string]string{"state": "merged", "updated_at": inWindow}},
+			),
+		},
+	}
+	md := RenderDailyPlanMarkdown(in, nil)
+	if !strings.Contains(md, "- [SALSA-50](https://git.example/p/50) Fix the drag handler") {
+		t.Fatalf("reviewed bullet should link the PR I reviewed:\n%s", md)
+	}
+}
+
 func TestRenderDailyPlanReviewedWithoutTicket(t *testing.T) {
 	in := RunInput{
 		Since: testSince, Now: testNow,

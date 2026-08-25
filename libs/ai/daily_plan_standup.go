@@ -249,6 +249,15 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 	if link == "" {
 		link = ticketBrowseFallback(wi, ticket)
 	}
+	// A reviewed line has to point at the PR I actually reviewed. One ticket
+	// can carry several — a backport of the reviewed PR, or a follow-up
+	// somebody else opened — and primaryTicketLink picks whichever comes
+	// first, since it has no way to tell them apart.
+	if category == categoryReviewed {
+		if _, url := reviewedPRTitleURL(wi); url != "" {
+			link = url
+		}
+	}
 
 	// Prefer a real JIRA-style ticket key with a link.
 	if ticket != "" && jiraKeyPattern.MatchString(ticket) && link != "" {
