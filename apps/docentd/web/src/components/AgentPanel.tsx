@@ -164,6 +164,39 @@ function reduce(blocks: Block[], ev: AgentEvent): Block[] {
   }
 }
 
+// Reasoning arrives as a run of titled sections -- "**Weighing the cache**" on
+// its own line, then the prose under it -- but it streams as deltas, so the
+// structure only exists once the text is reassembled. Recovering it here is
+// what lets a collapsed thought say what it was about: a column of rows all
+// reading "thinking" hides the one you wanted to read.
+const THOUGHT_TITLE = /^\s*\*\*(.+?)\*\*\s*$/;
+
+type Thought = { title?: string; text: string };
+
+function thoughts(text: string): Thought[] {
+  const out: Thought[] = [];
+  let title: string | undefined;
+  let lines: string[] = [];
+  const flush = () => {
+    const body = lines.join("\n").trim();
+    if (title || body) out.push({ title, text: body });
+    lines = [];
+  };
+  for (const line of text.split("\n")) {
+    const m = THOUGHT_TITLE.exec(line);
+    if (m) {
+      flush();
+      title = m[1].trim();
+    } else {
+      lines.push(line);
+    }
+  }
+  flush();
+  // A thought whose first delta has not landed yet still gets a row, so the
+  // transcript does not flicker one in a moment later.
+  return out.length ? out : [{ text: "" }];
+}
+
 function AgentMarkdown({ text, className }: { text: string; className: string }) {
   return (
     <div className={className}>
@@ -278,10 +311,17 @@ function TranscriptBlock({ block, sessionId }: { block: Block; sessionId?: strin
       return <AgentMarkdown text={block.text} className="ag-text" />;
     case "thinking":
       return (
-        <details className="ag-thinking">
-          <summary>thinking</summary>
-          <div>{block.text}</div>
-        </details>
+        <>
+          {thoughts(block.text).map((t, i) => (
+            <details key={i} className="ag-thinking">
+              <summary>
+                thinking
+                {t.title ? <span className="ag-thinking-title">{t.title}</span> : null}
+              </summary>
+              <div>{t.text}</div>
+            </details>
+          ))}
+        </>
       );
     case "plan":
       return <AgentMarkdown text={block.text} className="ag-plan" />;
