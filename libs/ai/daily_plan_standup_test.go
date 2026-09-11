@@ -539,6 +539,222 @@ func TestPRWindowHelpers(t *testing.T) {
 
 // ticketWorkItem builds a JIRA-ticket-anchored work item with the given
 // entities, seeding a TicketRef so the bullet renders "[KEY](link) desc".
+// myPR builds one PR entity of mine. state is open, merged, or closed.
+func myPR(kind, url, state, createdAt, closedAt, headBranch string, draft bool) model.Entity {
+	st := map[string]string{"state": state, "mine": "true"}
+	if createdAt != "" {
+		st["created_at"] = createdAt
+	}
+	if closedAt != "" {
+		st["closed_at"] = closedAt
+	}
+	if draft {
+		st["is_draft"] = "true"
+	}
+	return model.Entity{
+		Kind:        kind,
+		Title:       "a pull request",
+		URL:         url,
+		Coordinates: map[string]string{"head_branch": headBranch},
+		State:       st,
+	}
+}
+
+// commitOn builds one of my local commits on a named branch.
+func commitOn(branch, at string) model.Entity {
+	return model.Entity{
+		Kind:        "commit",
+		Title:       "wip",
+		Coordinates: map[string]string{"branch": branch},
+		State:       map[string]string{"observedAt": at, "is_self": "true"},
+	}
+}
+
+// TestDeriveStandupLineVerbs is the full verb matrix: every combination of what
+// can happen to a PR inside the window, and what the standup calls it. A
+// terminal event keeps the opening verb rather than replacing it, so an old PR
+// merging reads differently from one opened and merged the same day.
+func TestDeriveStandupLineVerbs(t *testing.T) {
+	const head = "feature-x"
+	cases := []struct {
+		name     string
+		entities []model.Entity
+		want     string // "" means the item is dropped
+	}{{
+		name:     "commits with no PR are started work",
+		entities: []model.Entity{commitOn(head, inWindow)},
+		want:     "Started",
+	}, {
+		name: "a ticket moved to the started tier, backed by a branch visit",
+		entities: []model.Entity{
+			{Kind: "ticket", State: map[string]string{"observedAt": inWindow, "status_tier": "started"}},
+			{Kind: "reflog", Coordinates: map[string]string{"branch": head}, State: map[string]string{"observedAt": inWindow}},
+		},
+		want: "Started",
+	}, {
+		name:     "draft opened in window",
+		entities: []model.Entity{myPR("authored_pr", "u", "open", inWindow, "", head, true)},
+		want:     "Opened draft PR for",
+	}, {
+		name:     "opened in window",
+		entities: []model.Entity{myPR("authored_pr", "u", "open", inWindow, "", head, false)},
+		want:     "Opened PR for",
+	}, {
+		name: "pushed to a pre-existing open PR",
+		entities: []model.Entity{
+			myPR("pr_review_status", "u", "open", preWindow, "", head, false),
+			commitOn(head, inWindow),
+		},
+		want: "Updated PR for",
+	}, {
+		name:     "a pre-existing open PR nobody touched is not news",
+		entities: []model.Entity{myPR("pr_review_status", "u", "open", preWindow, "", head, false)},
+		want:     "",
+	}, {
+		name:     "an older PR merged",
+		entities: []model.Entity{myPR("pr_closed_status", "u", "merged", preWindow, inWindow, head, false)},
+		want:     "Merged PR for",
+	}, {
+		name: "pushed to an older PR, then merged it",
+		entities: []model.Entity{
+			myPR("pr_closed_status", "u", "merged", preWindow, inWindow, head, false),
+			commitOn(head, inWindow),
+		},
+		want: "Updated/Merged PR for",
+	}, {
+		name:     "opened and merged the same day",
+		entities: []model.Entity{myPR("pr_closed_status", "u", "merged", inWindow, inWindow, head, false)},
+		want:     "Landed PR for",
+	}, {
+		name:     "an older PR closed unmerged",
+		entities: []model.Entity{myPR("pr_closed_status", "u", "closed", preWindow, inWindow, head, false)},
+		want:     "Closed PR for",
+	}, {
+		name: "pushed to an older PR, then closed it unmerged",
+		entities: []model.Entity{
+			myPR("pr_closed_status", "u", "closed", preWindow, inWindow, head, false),
+			commitOn(head, inWindow),
+		},
+		// Deliberately not "Updated/Closed": work thrown away does not earn
+		// credit for the push that preceded it.
+		want: "Closed PR for",
+	}, {
+		name:     "opened and closed unmerged the same day",
+		entities: []model.Entity{myPR("pr_closed_status", "u", "closed", inWindow, inWindow, head, false)},
+		want:     "Abandoned PR for",
+	}, {
+		name:     "opened as a draft and closed unmerged the same day",
+		entities: []model.Entity{myPR("pr_closed_status", "u", "closed", inWindow, inWindow, head, true)},
+		want:     "Abandoned PR for",
+	}, {
+		name: "reviewed somebody else's PR",
+		entities: []model.Entity{
+			{Kind: "reviewed_pr", Title: "their work", URL: "https://git.example/o/r/pull/9",
+				State: map[string]string{"updated_at": inWindow}},
+		},
+		want: "Reviewed",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wi := ticketWorkItem("SALSA-1", "do a thing", "https://git.example/o/r/pull/1", tc.entities...)
+			line, ok := deriveStandupLine(wi, testSince, testNow)
+			if tc.want == "" {
+				if ok {
+					t.Fatalf("expected the item to be dropped, got %q %q", line.Verb, line.Bullet)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("expected verb %q, but the item was dropped", tc.want)
+			}
+			if line.Verb != tc.want {
+				t.Errorf("verb = %q, want %q", line.Verb, tc.want)
+			}
+		})
+	}
+}
+
+// A squash-merge commit lands on the base branch authored by me, so it looks
+// exactly like a commit of mine in the window. Crediting it as a push would make
+// every merge read "Updated/Merged" and destroy the distinction.
+func TestDeriveStandupLineMergeCommitIsNotAPush(t *testing.T) {
+	const head = "feature-x"
+	merged := myPR("pr_closed_status", "https://git.example/o/r/pull/1", "merged", preWindow, inWindow, head, false)
+
+	for _, tc := range []struct {
+		name   string
+		commit model.Entity
+	}{{
+		// github_commit carries no branch at all, so it can never prove a push.
+		name:   "github_commit from the author search",
+		commit: model.Entity{Kind: "github_commit", Title: "squash (#1)", State: map[string]string{"observedAt": inWindow}},
+	}, {
+		name:   "local commit on the base branch",
+		commit: commitOn("release/next", inWindow),
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			wi := ticketWorkItem("SALSA-1", "do a thing", "https://git.example/o/r/pull/1", merged, tc.commit)
+			line, ok := deriveStandupLine(wi, testSince, testNow)
+			if !ok {
+				t.Fatal("expected a merged line")
+			}
+			if line.Verb != "Merged PR for" {
+				t.Errorf("verb = %q, want %q", line.Verb, "Merged PR for")
+			}
+		})
+	}
+}
+
+// One ticket can carry several of my PRs. Verbs are decided per PR so a pair
+// always describes one real PR: an older PR merging beside a fresh follow-up
+// must not read as though a single PR was opened and merged.
+func TestDeriveStandupLineMultiplePRsPerTicket(t *testing.T) {
+	const oldPR = "https://git.example/o/r/pull/1"
+	const newPR = "https://git.example/o/r/pull/2"
+	wi := ticketWorkItem("SALSA-1", "do a thing", oldPR,
+		myPR("pr_closed_status", oldPR, "merged", preWindow, inWindow, "old-branch", false),
+		myPR("authored_pr", newPR, "open", inWindow, "", "new-branch", false),
+	)
+	line, ok := deriveStandupLine(wi, testSince, testNow)
+	if !ok {
+		t.Fatal("expected a line")
+	}
+	if line.Verb == "Landed PR for" {
+		t.Fatal("two different PRs were folded into one: neither was opened and merged")
+	}
+	if line.Verb != "Merged PR for" {
+		t.Errorf("verb = %q, want the most advanced PR's verb %q", line.Verb, "Merged PR for")
+	}
+	// And the bullet has to point at the PR the verb is about.
+	if !strings.Contains(line.Bullet, oldPR) {
+		t.Errorf("bullet = %q, want it to link the merged PR %s", line.Bullet, oldPR)
+	}
+}
+
+// The same PR arrives as several entities and only the state-side row knows the
+// head branch. Treating them as two PRs would let the branchless view win and
+// report a plain "Merged" for a PR that was pushed to.
+func TestDeriveStandupLineMergesDuplicateViewsOfOnePR(t *testing.T) {
+	const url = "https://git.example/o/r/pull/1"
+	const head = "feature-x"
+	wi := ticketWorkItem("SALSA-1", "do a thing", url,
+		// Events-side view: knows it merged, has no head branch.
+		model.Entity{Kind: "authored_pr", Title: "a pull request", URL: url,
+			State: map[string]string{"state": "merged", "mine": "true", "created_at": preWindow, "closed_at": inWindow}},
+		// State-side view: supplies the head branch.
+		myPR("pr_closed_status", url, "merged", preWindow, inWindow, head, false),
+		commitOn(head, inWindow),
+	)
+	line, ok := deriveStandupLine(wi, testSince, testNow)
+	if !ok {
+		t.Fatal("expected a line")
+	}
+	if line.Verb != "Updated/Merged PR for" {
+		t.Errorf("verb = %q, want %q", line.Verb, "Updated/Merged PR for")
+	}
+}
+
 func ticketWorkItem(key, desc, url string, entities ...model.Entity) model.WorkItem {
 	return model.WorkItem{
 		Key:      key,

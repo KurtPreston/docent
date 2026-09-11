@@ -138,25 +138,51 @@ type standupLine struct {
 	rank     int    // display order within a section
 }
 
+// prFacts is what one PR of mine contributes: the window-scoped events it saw,
+// plus the title and URL a line links when the work item carries no JIRA ticket.
+type prFacts struct {
+	title      string
+	url        string
+	headBranch string
+	isDraft    bool
+	merged     bool // merged inside the window
+	closed     bool // closed without merging, inside the window
+	created    bool // opened inside the window
+	// createdSinceStart also accepts a PR opened after the window (e.g. this
+	// morning), which still marks a ticket as freshly started rather than stale.
+	createdSinceStart bool
+}
+
 // deriveStandupLine inspects a work item's window-scoped signals and returns
 // the single standup line that best describes what happened to it yesterday,
-// or ok=false when nothing genuine did. Precedence (highest first): merged >
-// closed > opened(draft) > opened > updated (pushed commits to an existing
-// PR) > started (new commits with no PR, or a ticket moved into the started
-// tier in-window backed by branch activity or one of my PRs) > reviewed (a PR
-// I reviewed). Neither "started" form fires when the branch carries somebody
-// else's PR: commits I pushed while reviewing a colleague's branch are not
-// work of my own beginning. Items whose only evidence is a reflog
-// branch-visit, a stale open PR merely "updated", or a watcher-only Jira
-// change fall through to ok=false and are dropped.
+// or ok=false when nothing genuine did.
+//
+// PR verbs are decided per PR and the most advanced one wins (see
+// standupPRVerb), because a work item can carry several of mine — an older PR
+// that merged today alongside a follow-up opened today — and folding their
+// facts together would report one PR as having been both opened and merged.
+// Failing that, precedence runs: started (new commits with no PR, or a ticket
+// moved into the started tier in-window backed by branch activity or one of my
+// PRs) > reviewed (a PR I reviewed). Neither "started" form fires when the
+// branch carries somebody else's PR: commits I pushed while reviewing a
+// colleague's branch are not work of my own beginning. Items whose only
+// evidence is a reflog branch-visit, a stale open PR merely "updated", or a
+// watcher-only Jira change fall through to ok=false and are dropped.
 func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, bool) {
 	var (
-		merged, closed, opened, anyDraft bool
-		selfCommit, hasAuthoredPR        bool
-		recentAuthoredPR                 bool
-		jiraStarted, branchEvidence      bool
-		reviewed, othersPR               bool
+		selfCommit                  bool
+		jiraStarted, branchEvidence bool
+		reviewed, othersPR          bool
+		prOrder                     []string
 	)
+	prs := map[string]*prFacts{}
+	// Branches I committed to inside the window. Only local commits carry a
+	// branch, and that is what lets them prove a push to a PR: a github_commit
+	// has none, so a squash-merge landing on the base branch — authored by me,
+	// since squashing preserves the author — is indistinguishable there from a
+	// commit I pushed to the PR itself.
+	pushedBranches := map[string]bool{}
+
 	for _, ent := range wi.Entities {
 		switch ent.Kind {
 		case "commit":
@@ -166,6 +192,9 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 			if entityTimestampInWindow(ent, since, until) && ent.State["is_self"] != "false" {
 				selfCommit = true
 				branchEvidence = true
+				if b := strings.TrimSpace(ent.Coordinates["branch"]); b != "" {
+					pushedBranches[b] = true
+				}
 			}
 		case "github_commit":
 			// github_commit comes from an author-anchored search, so it is
@@ -186,7 +215,7 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 			if entityTimestampInWindow(ent, since, until) && ent.State["status_tier"] == "started" {
 				jiraStarted = true
 			}
-		case "authored_pr", "pr_review_status":
+		case "authored_pr", "pr_review_status", "pr_closed_status":
 			// Only PRs I own; pr_review_status carries the mine flag. A PR
 			// somebody else owns still tells us something: work items group
 			// by head branch, so its presence means I was committing on a
@@ -195,43 +224,49 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 				othersPR = true
 				continue
 			}
-			hasAuthoredPR = true
-			if ent.State["is_draft"] == "true" {
-				anyDraft = true
+			// Keyed by URL because one PR arrives as several entities: a merged
+			// one is both an events-side authored_pr and a state-side
+			// pr_closed_status, and only the latter knows its head branch.
+			key := strings.TrimSpace(ent.URL)
+			if key == "" {
+				key = ent.ID
 			}
-			if authoredPRMergedInWindow(ent, since, until) {
-				merged = true
-			} else if authoredPRClosedNotMergedInWindow(ent, since, until) {
-				closed = true
+			f, ok := prs[key]
+			if !ok {
+				f = &prFacts{}
+				prs[key] = f
+				prOrder = append(prOrder, key)
 			}
-			if prCreatedInWindow(ent, since, until) {
-				opened = true
-			}
-			// A PR created no earlier than the window start (in-window or since,
-			// e.g. opened this morning) is fresh work, distinct from a months-old
-			// stale draft that merely still exists.
-			if prCreatedOnOrAfter(ent, since) {
-				recentAuthoredPR = true
-			}
+			mergePRFacts(f, ent, since, until)
 		}
 	}
-	// A push counts only for an existing PR (not one opened/closed in-window).
-	pushed := hasAuthoredPR && selfCommit && !opened && !merged && !closed
 
-	var verb, category string
-	var rank int
+	var (
+		verb, category   string
+		rank             int
+		chosen           *prFacts
+		recentAuthoredPR bool
+	)
+	for _, key := range prOrder {
+		pr := prs[key]
+		if pr.createdSinceStart {
+			recentAuthoredPR = true
+		}
+		v, c, r, ok := standupPRVerb(*pr, selfCommit, pr.headBranch != "" && pushedBranches[pr.headBranch])
+		if !ok {
+			continue
+		}
+		// Most advanced wins; URL breaks a tie so the choice is deterministic
+		// rather than dependent on entity order.
+		if chosen == nil || r < rank || (r == rank && pr.url < chosen.url) {
+			verb, category, rank, chosen = v, c, r, pr
+		}
+	}
+
 	switch {
-	case merged:
-		verb, category, rank = "Merged PR for", categoryDone, 0
-	case closed:
-		verb, category, rank = "Closed PR for", categoryDone, 1
-	case opened && anyDraft:
-		verb, category, rank = "Opened draft PR for", categoryInProgress, 2
-	case opened:
-		verb, category, rank = "Opened PR for", categoryInProgress, 3
-	case pushed:
-		verb, category, rank = "Updated PR for", categoryInProgress, 4
-	case selfCommit && !hasAuthoredPR && !othersPR:
+	case chosen != nil:
+		// Verb already set above.
+	case selfCommit && len(prs) == 0 && !othersPR:
 		verb, category, rank = "Started", categoryInProgress, 5
 	case jiraStarted && !othersPR && (branchEvidence || recentAuthoredPR):
 		// A ticket in the started tier (updated in-window), backed by local
@@ -248,6 +283,12 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 	ticket, desc, link := primaryTicketLink(wi)
 	if link == "" {
 		link = ticketBrowseFallback(wi, ticket)
+	}
+	// The line describes one particular PR, so link that one rather than
+	// whichever primaryTicketLink found first: on a ticket carrying several of
+	// mine, pointing "Landed" at a sibling that is still open reads as an error.
+	if chosen != nil && chosen.url != "" {
+		link = chosen.url
 	}
 	// A reviewed line has to point at the PR I actually reviewed. One ticket
 	// can carry several — a backport of the reviewed PR, or a follow-up
@@ -281,17 +322,84 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 	}
 
 	// Nor does a PR of my own: not every repo I work in tracks its work in a
-	// JIRA project, so link the PR itself rather than drop the line. Keyed on
-	// a PR of mine specifically, so unticketed work with no PR behind it —
-	// local commits, a branch visit — stays dropped.
-	if title, url := authoredPRTitleURL(wi); url != "" {
+	// JIRA project, so link the PR itself rather than drop the line. Unticketed
+	// work with no PR behind it — local commits, a branch visit — stays dropped.
+	if chosen != nil && chosen.url != "" {
+		title := chosen.title
 		if title == "" {
-			title = url
+			title = chosen.url
 		}
-		return standupLine{Ticket: url, Bullet: fmt.Sprintf("[%s](%s)", title, url), Verb: verb, Category: category, rank: rank}, true
+		return standupLine{Ticket: chosen.url, Bullet: fmt.Sprintf("[%s](%s)", title, chosen.url), Verb: verb, Category: category, rank: rank}, true
 	}
 
 	return standupLine{}, false
+}
+
+// mergePRFacts folds one entity's view of a PR into the facts already gathered
+// for it. Merged rather than appended because the same PR arrives more than
+// once and the views differ in what they know: the events-side authored_pr has
+// the merge state, the state-side pr_closed_status adds the head branch.
+func mergePRFacts(f *prFacts, ent model.Entity, since, until time.Time) {
+	if f.title == "" {
+		f.title = strings.TrimSpace(ent.Title)
+	}
+	if f.url == "" {
+		f.url = strings.TrimSpace(ent.URL)
+	}
+	if f.headBranch == "" {
+		f.headBranch = strings.TrimSpace(ent.Coordinates["head_branch"])
+	}
+	if ent.State["is_draft"] == "true" {
+		f.isDraft = true
+	}
+	if authoredPRMergedInWindow(ent, since, until) {
+		f.merged = true
+	} else if authoredPRClosedNotMergedInWindow(ent, since, until) {
+		f.closed = true
+	}
+	if prCreatedInWindow(ent, since, until) {
+		f.created = true
+	}
+	if prCreatedOnOrAfter(ent, since) {
+		f.createdSinceStart = true
+	}
+}
+
+// standupPRVerb returns the verb one PR of mine earns, or ok=false when nothing
+// happened to it inside the window. Lower rank is more advanced.
+//
+// A terminal event keeps the opening verb rather than replacing it, so a PR I
+// opened and finished the same day reads differently from an old one that merely
+// finished: "Landed" and "Abandoned" each say both halves in a single word, and
+// "Updated/Merged" credits the push that preceded the merge. Closing without
+// merging is the exception — work thrown away is not worth crediting a push for,
+// so a pre-existing PR I pushed to and then closed is just "Closed".
+//
+// pushedToHead is required for "Updated/Merged" but not for "Updated": a merged
+// PR has a squash commit on the base branch that GitHub attributes to me, and
+// without the head-branch check that commit alone would make every merge read as
+// updated. An open PR has no such commit, so any commit of mine on the work item
+// is good evidence for it.
+func standupPRVerb(pr prFacts, selfCommit, pushedToHead bool) (verb, category string, rank int, ok bool) {
+	switch {
+	case pr.merged && pr.created:
+		return "Landed PR for", categoryDone, 0, true
+	case pr.merged && pushedToHead:
+		return "Updated/Merged PR for", categoryDone, 0, true
+	case pr.merged:
+		return "Merged PR for", categoryDone, 0, true
+	case pr.closed && pr.created:
+		return "Abandoned PR for", categoryDone, 1, true
+	case pr.closed:
+		return "Closed PR for", categoryDone, 1, true
+	case pr.created && pr.isDraft:
+		return "Opened draft PR for", categoryInProgress, 2, true
+	case pr.created:
+		return "Opened PR for", categoryInProgress, 3, true
+	case selfCommit:
+		return "Updated PR for", categoryInProgress, 4, true
+	}
+	return "", "", 0, false
 }
 
 // reviewedPRTitleURL returns the title and URL of the first reviewed PR on the
@@ -299,22 +407,6 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 func reviewedPRTitleURL(wi model.WorkItem) (title, url string) {
 	for _, ent := range wi.Entities {
 		if ent.Kind == "reviewed_pr" && ent.URL != "" {
-			return strings.TrimSpace(ent.Title), ent.URL
-		}
-	}
-	return "", ""
-}
-
-// authoredPRTitleURL returns the title and URL of the first PR on the work item
-// that I own, used when such a PR has no associated JIRA ticket. PRs somebody
-// else owns are skipped so a line never links a colleague's work.
-func authoredPRTitleURL(wi model.WorkItem) (title, url string) {
-	for _, ent := range wi.Entities {
-		switch ent.Kind {
-		case "authored_pr", "pr_review_status":
-			if ent.URL == "" || ent.State["mine"] == "false" {
-				continue
-			}
 			return strings.TrimSpace(ent.Title), ent.URL
 		}
 	}
