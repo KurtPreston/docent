@@ -76,12 +76,60 @@ Modes are declarative: every run is described by an `ExecutionMode` value that b
 
 | Mode | Lookback | Scope | Behavior |
 |------|----------|-------|----------|
-| `daily-plan` | Previous weekday 00:00 → now (Mon/weekends → last Fri) | `involved` | AI output should use `## Yesterday` and `## Today`. Pulls your own activity plus PRs/issues you reviewed, were assigned, or were mentioned in (see *Scope semantics* below). |
+| `daily-plan` | Morning: previous workday 00:00 → today 00:00 (Mon/weekends → last Fri). After the noon cutoff: today 00:00 → now. | `involved` | A Slack-mrkdwn standup: `*Yesterday*` and `*Today*`, then `Reviewed:` and `PRs ready for review:`. Rendered deterministically — the AI provider is not consulted (see *The standup line* below). Pulls your own activity plus PRs/issues you reviewed, were assigned, or were mentioned in (see *Scope semantics* below). |
 | `recent-activity` | `--days N` (default 7, or prompt) | prompt (default `involved`) | Summarize activity; grouped markdown. The scope picker lets you broaden to `all` or narrow to `self` per run. |
 | `prs` (Pull request status) | n/a (lists currently-open PRs) | `self` | Lists your open GitHub PRs split into **Ready for review:** (not a draft, all checks passing) and **Work in progress:** (everything else). Each bullet links the Jira ticket key (parsed from the title) to the PR, followed by the title with the ticket stripped. **Only runs the `github` / `github-enterprise` collectors** (see *Restricting collectors* below). Rendered deterministically — the AI provider is not consulted. |
 | `custom-prompt` | `--days N` (default 7, or prompt) | `involved` | `--prompt` / `--prompt-file` / interactive prompt; model follows your instructions over the same `involved` set. Override with `scope: all` on a user-declared mode if you want everything. |
 
 Run without `--mode` on a TTY to pick interactively.
+
+### The standup line
+
+`daily-plan` is rendered in Go rather than by the model, so its wording is fixed.
+Each work item earns at most one line, and the verb says what actually happened to
+it inside the window. PR verbs are decided per PR and the most advanced one wins,
+so on a ticket carrying several of your PRs the verb and the link always describe
+the same one.
+
+A terminal event keeps the opening verb instead of replacing it. That is what
+separates an old PR finally landing from one you opened and merged the same
+morning.
+
+| What happened in the window | Line | Section |
+|-----------------------------|------|---------|
+| Commits on disk, no PR of yours | `Started` | Yesterday + Today |
+| A Jira ticket moved into the started tier, backed by branch activity or a fresh PR | `Started` | Yesterday + Today |
+| PR opened as a draft, still open | `Opened draft PR for` | Yesterday + Today |
+| PR opened, still open | `Opened PR for` | Yesterday + Today |
+| Pushed to a PR that predates the window, still open | `Updated PR for` | Yesterday + Today |
+| A PR that predates the window, merely "updated" | dropped | — |
+| A PR that predates the window merged | `Merged PR for` | Yesterday |
+| Pushed to a PR that predates the window, then merged it | `Updated/Merged PR for` | Yesterday |
+| PR opened and merged in the same window | `Landed PR for` | Yesterday |
+| A PR that predates the window closed unmerged | `Closed PR for` | Yesterday |
+| Pushed to a PR that predates the window, then closed it unmerged | `Closed PR for` | Yesterday |
+| PR opened and closed unmerged in the same window | `Abandoned PR for` | Yesterday |
+| A PR you reviewed | `Reviewed` | Reviewed: |
+
+"Yesterday + Today" means the line also becomes a `Continue on …` entry under
+*Today*. Anything carrying a terminal verb is finished and appears under the
+previous day only.
+
+Two asymmetries are deliberate. Closing without merging never takes the
+`Updated/` prefix, because work you threw away does not earn credit for the push
+that preceded it. And a draft opened and abandoned inside one window is just
+`Abandoned PR for` — once a PR has a terminal verb, the draft qualifier has
+stopped telling you anything.
+
+`Updated/Merged` requires a commit on the PR's own head branch, which is why the
+recently-closed rows carry `head_branch` (see [Recently-closed PRs](#recently-closed-prs)).
+A squash merge lands on the base branch still authored by you, so crediting any
+commit of yours would make every merge read as updated.
+
+A line needs something to link. Normally that is the Jira key parsed from the work
+item; failing that, the PR's own title and URL, which is how PRs in repos with no
+Jira project still show up. Unticketed work with no PR behind it — a bare local
+commit, a branch you merely visited — is dropped.
 
 ### Restricting collectors
 
@@ -196,6 +244,32 @@ newest 50 rather than spending a collection on the rest.
 
 Like `pr_queries`, these searches run at `involved` and `all` only: `scope: self`
 is your own work by definition, and other people's PRs are the opposite of that.
+
+### Recently-closed PRs
+
+Alongside the open-PR searches, the state pass looks for your own PRs closed no
+earlier than the window start — the last 7 days when the caller sets no window,
+as `docentd` does. These arrive as `pr_closed_status` rows carrying `state`
+(`merged` or `closed`), `created_at`, `closed_at`, and `head_branch`.
+
+They exist for that head branch. A merged PR is otherwise visible only as the
+events-side `authored_pr` row, and `gh search prs --json` cannot return a head
+branch; without one there is no telling a commit you pushed to the PR from the
+squash-merge commit GitHub attributes to you on the base branch. It also lets
+correlation anchor a merged PR to its branch unit rather than floating it on the
+ticket.
+
+The separate kind is a safety boundary rather than a naming choice. Everything
+that reads `pr_review_status` takes "open" as given: the automation matcher's
+`sourceKinds`, the cockpit's bucket classification, the `prs` mode, and the
+standup's ready-for-review list. A `checks: failing` rule that could see a merged
+PR would have `autofix-pr` pushing commits at a finished branch. `pr_closed_status`
+is deliberately absent from `sourceKinds`, so **no automation can trigger on it** —
+including through the friendly `kind: pr` alias.
+
+A failed closed-PR search is reported as a `collector_error` row instead of
+failing the whole state collect, since the open-PR rows it would otherwise take
+down are what the cockpit and every automation run on.
 
 ### Extra open-PR searches
 
