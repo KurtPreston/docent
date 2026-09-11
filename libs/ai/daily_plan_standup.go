@@ -280,6 +280,17 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 		return standupLine{Ticket: url, Bullet: fmt.Sprintf("[%s](%s)", title, url), Verb: verb, Category: category, rank: rank}, true
 	}
 
+	// Nor does a PR of my own: not every repo I work in tracks its work in a
+	// JIRA project, so link the PR itself rather than drop the line. Keyed on
+	// a PR of mine specifically, so unticketed work with no PR behind it —
+	// local commits, a branch visit — stays dropped.
+	if title, url := authoredPRTitleURL(wi); url != "" {
+		if title == "" {
+			title = url
+		}
+		return standupLine{Ticket: url, Bullet: fmt.Sprintf("[%s](%s)", title, url), Verb: verb, Category: category, rank: rank}, true
+	}
+
 	return standupLine{}, false
 }
 
@@ -288,6 +299,22 @@ func deriveStandupLine(wi model.WorkItem, since, until time.Time) (standupLine, 
 func reviewedPRTitleURL(wi model.WorkItem) (title, url string) {
 	for _, ent := range wi.Entities {
 		if ent.Kind == "reviewed_pr" && ent.URL != "" {
+			return strings.TrimSpace(ent.Title), ent.URL
+		}
+	}
+	return "", ""
+}
+
+// authoredPRTitleURL returns the title and URL of the first PR on the work item
+// that I own, used when such a PR has no associated JIRA ticket. PRs somebody
+// else owns are skipped so a line never links a colleague's work.
+func authoredPRTitleURL(wi model.WorkItem) (title, url string) {
+	for _, ent := range wi.Entities {
+		switch ent.Kind {
+		case "authored_pr", "pr_review_status":
+			if ent.URL == "" || ent.State["mine"] == "false" {
+				continue
+			}
 			return strings.TrimSpace(ent.Title), ent.URL
 		}
 	}

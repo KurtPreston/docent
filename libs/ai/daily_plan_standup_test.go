@@ -410,6 +410,64 @@ func TestRenderDailyPlanSkipsUnticketed(t *testing.T) {
 	}
 }
 
+// A PR I opened in a repo with no JIRA project behind it still earns a line;
+// the bullet links the PR itself, the way a reviewed PR's does.
+func TestRenderDailyPlanUnticketedAuthoredPRLinksPR(t *testing.T) {
+	const url = "https://git.example/Chip/transact_web_protocol/pull/15"
+	md := RenderDailyPlanMarkdown(RunInput{
+		PrevDayLabel: "Monday",
+		NextDayLabel: "Tuesday",
+		Since:        testSince,
+		Now:          testNow,
+		WorkItems: []model.WorkItem{{
+			Key:   "wb:Chip/transact_web_protocol:add-heartbeat-round-trip-ms",
+			Title: "Add per-strategy heartbeat round trip timing",
+			Entities: []model.Entity{{
+				Kind:  "authored_pr",
+				Title: "Add per-strategy heartbeat round trip timing",
+				URL:   url,
+				State: map[string]string{"state": "open", "created_at": inWindow},
+			}},
+		}},
+	}, nil)
+	want := "- Opened PR for [Add per-strategy heartbeat round trip timing](" + url + ")"
+	if !strings.Contains(md, want) {
+		t.Fatalf("expected %q in:\n%s", want, md)
+	}
+	// It is in-flight work, so it carries into today as well.
+	if !strings.Contains(md, "- Continue on [Add per-strategy heartbeat round trip timing]("+url+")") {
+		t.Fatalf("expected a Continue on line:\n%s", md)
+	}
+}
+
+// A PR on the branch that belongs to somebody else must never become the link
+// for one of my lines.
+func TestRenderDailyPlanUnticketedSkipsOthersPR(t *testing.T) {
+	md := RenderDailyPlanMarkdown(RunInput{
+		PrevDayLabel: "Monday",
+		NextDayLabel: "Tuesday",
+		Since:        testSince,
+		Now:          testNow,
+		WorkItems: []model.WorkItem{{
+			Key:   "wb:org/repo:their-branch",
+			Title: "their feature",
+			Entities: []model.Entity{
+				{Kind: "commit", Title: "wip",
+					State: map[string]string{"observedAt": inWindow}},
+				{Kind: "pr_review_status", Title: "their feature",
+					URL:   "https://git.example/org/repo/pull/9",
+					State: map[string]string{"state": "open", "created_at": inWindow, "mine": "false"}},
+			},
+		}},
+	}, nil)
+	if strings.Contains(md, "https://git.example/org/repo/pull/9") {
+		t.Fatalf("a colleague's PR should not be linked:\n%s", md)
+	}
+	if !strings.Contains(md, "*Monday*\n- _none_") {
+		t.Fatalf("expected empty prev section:\n%s", md)
+	}
+}
+
 func TestRenderDailyPlanReadyForReviewSection(t *testing.T) {
 	md := RenderDailyPlanMarkdown(RunInput{
 		PrevDayLabel: "Monday", NextDayLabel: "Tuesday",
