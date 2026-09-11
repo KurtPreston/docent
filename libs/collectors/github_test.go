@@ -533,6 +533,84 @@ func TestCapReviewCandidatesKeepsNewestAndLeavesOwnedRows(t *testing.T) {
 	}
 }
 
+func TestBuildClosedPRSpecsOwnedOnly(t *testing.T) {
+	extra := []userdata.PRQuery{{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"}}
+
+	if specs := buildClosedPRSpecs(ScopeSelf, "alice", extra); len(specs) != 1 || specs[0].relation != "authored" {
+		t.Fatalf("self should yield only the authored search, got %+v", specs)
+	}
+
+	specs := buildClosedPRSpecs(ScopeInvolved, "alice", extra)
+	if len(specs) != 2 {
+		t.Fatalf("involved should add the declared query, got %d: %+v", len(specs), specs)
+	}
+	// Nothing here may reach a PR that isn't the user's own: a teammate's merged
+	// PR is not their work, and the review of it is over either way.
+	for _, s := range specs {
+		if !s.mine {
+			t.Errorf("relation %q is not owned", s.relation)
+		}
+		if s.reviewable {
+			t.Errorf("relation %q is a review candidate; a merged PR is not review work", s.relation)
+		}
+		if s.relation == "review_requested" {
+			t.Error("review_requested has no analogue once a PR is closed")
+		}
+	}
+}
+
+func TestClosedPRItemSeparatesMergeFromAbandonment(t *testing.T) {
+	now := time.Date(2026, 9, 11, 5, 0, 0, 0, time.UTC)
+	row := ghSearchActivityRow{
+		Title:     "[SALSA-13031] PersistenceService: reject failed batch record deletes",
+		URL:       "https://git.example/Chip/salsa/pull/7971",
+		State:     "closed",
+		CreatedAt: "2026-09-09T21:50:19Z",
+		ClosedAt:  "2026-09-10T19:09:02Z",
+		UpdatedAt: "2026-09-10T19:09:02Z",
+	}
+	row.Repository.NameWithOwner = "Chip/salsa"
+	directive := userdata.Directive{ID: "gh", Collector: "github-enterprise"}
+	spec := prReviewSpec{relation: "authored", mine: true}
+
+	merged := closedPRItem(directive, "alice", "git.example", now, row, spec, "salsa-13031-fix", true)
+	// The separate kind is the whole safety mechanism: it keeps merged PRs out of
+	// the automation matcher and the open-PR renderers without a guard in each.
+	if merged.Kind != "pr_closed_status" {
+		t.Fatalf("kind = %q, want pr_closed_status", merged.Kind)
+	}
+	if merged.Fields["state"] != "merged" {
+		t.Errorf("state = %q, want merged", merged.Fields["state"])
+	}
+	// The reason the row exists at all — the events-side authored_pr cannot
+	// carry a head branch.
+	if merged.Fields["head_branch"] != "salsa-13031-fix" {
+		t.Errorf("head_branch = %q, want salsa-13031-fix", merged.Fields["head_branch"])
+	}
+	if !merged.IsSelf || merged.Fields["mine"] != "true" {
+		t.Error("the user's own closed PR must report as theirs")
+	}
+	// Observed when the PR finished, not at poll time, so it lands in the window
+	// that saw the merge.
+	if got := merged.ObservedAt.Format(time.RFC3339); got != "2026-09-10T19:09:02Z" {
+		t.Errorf("ObservedAt = %s, want the close time", got)
+	}
+	// Both are needed to tell a PR opened and merged in one window from an older
+	// one that merged in it.
+	for _, k := range []string{"created_at", "closed_at"} {
+		if merged.Fields[k] == "" {
+			t.Errorf("missing %q", k)
+		}
+	}
+
+	// GitHub reports an abandoned PR identically as state "closed"; only the
+	// per-PR lookup tells them apart.
+	abandoned := closedPRItem(directive, "alice", "git.example", now, row, spec, "salsa-13031-fix", false)
+	if abandoned.Fields["state"] != "closed" {
+		t.Errorf("state = %q, want closed", abandoned.Fields["state"])
+	}
+}
+
 func TestBuildPRReviewSpecsSelf(t *testing.T) {
 	extra := []userdata.PRQuery{{Relation: "backport", Qualifiers: "author:app/ci-bot assignee:@me"}}
 	specs := buildPRReviewSpecs(ScopeSelf, "alice", extra, []string{"o/r"})

@@ -202,6 +202,51 @@ func TestMatchTransitions_matchFields(t *testing.T) {
 	}
 }
 
+// A PR that already merged must be unreachable by the rules that act on open
+// ones. The state collector emits recently-closed PRs as `pr_closed_status`, and
+// those rows carry the same checks/mergeable-shaped state as an open PR — so if
+// the kind were reachable, autofix-pr would clone a worktree and push commits at
+// a finished PR. The safety comes entirely from the kind being absent from
+// sourceKinds, which is what this pins.
+func TestMatchTransitions_closedPRKindUnreachable(t *testing.T) {
+	rules := []automation.Rule{
+		{
+			ID:      "autofix-pr",
+			Enabled: true,
+			Trigger: automation.Trigger{
+				Type: "transition", Source: "github-enterprise",
+				Kind: automation.KindSpec{"pr_review_status"},
+				When: automation.When{Field: "checks", To: "failing"},
+			},
+			Actions: []automation.Action{{Type: "shell", Command: "true"}},
+		},
+		{
+			// The friendly alias must not reach it either.
+			ID:      "autofix-pr-via-alias",
+			Enabled: true,
+			Trigger: automation.Trigger{
+				Type: "transition", Source: "github-enterprise",
+				Kind: automation.KindSpec{"pr"},
+				When: automation.When{Field: "checks", To: "failing"},
+			},
+			Actions: []automation.Action{{Type: "shell", Command: "true"}},
+		},
+	}
+	prev := map[string]model.Entity{
+		"pr:Chip/salsa#1": {ID: "pr:Chip/salsa#1", Kind: "pr_closed_status", State: map[string]string{
+			"checks": "passing", "is_self": "true",
+		}},
+	}
+	next := map[string]model.Entity{
+		"pr:Chip/salsa#1": {ID: "pr:Chip/salsa#1", Kind: "pr_closed_status", State: map[string]string{
+			"checks": "failing", "is_self": "true", "state": "merged",
+		}},
+	}
+	if evs := automation.MatchTransitions(rules, prev, next, automation.MatchOpts{}); len(evs) != 0 {
+		t.Fatalf("a merged PR fired %d automation event(s), want 0: %+v", len(evs), evs)
+	}
+}
+
 func TestMatchTransitions_selfCondition(t *testing.T) {
 	self := true
 	rules := []automation.Rule{{
