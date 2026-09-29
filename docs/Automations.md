@@ -5,7 +5,8 @@ transition, or a schedule), optional **conditions**, and one or more
 **actions** (webhook, shell, JIRA comment, Slack post, generate-and-deliver a
 report, run a coding agent, or open an editor). `docentd` evaluates rules
 continuously and dispatches matching ones; see the [README](../README.md) for
-how this fits into the rest of docent.
+how this fits into the rest of docent. For copy-and-adapt examples, see
+[Automation recipes](Automation-recipes.md).
 
 ## Where rules live
 
