@@ -211,7 +211,7 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 	var sel string
 	prompt := &survey.Select{
 		Message: "Which AI provider?",
-		Options: []string{"cursor", "claude", "ollama", "none (offline rule-based)"},
+		Options: []string{"cursor", "claude", "copilot", "ollama", "none (offline rule-based)"},
 		Default: providerDefaultLabel(cfg.AI.Provider),
 	}
 	if err := survey.AskOne(prompt, &sel, surveyOpt); err != nil {
@@ -222,6 +222,7 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 		cfg.AI.Provider = "cursor"
 		cfg.AI.Ollama = userdata.AIProviderOllama{}
 		cfg.AI.Claude = userdata.AIProviderClaude{}
+		cfg.AI.Copilot = userdata.AIProviderCopilot{}
 		if err := fillAINested(cfg, model, "cursor", surveyOpt); err != nil {
 			return err
 		}
@@ -229,13 +230,23 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 		cfg.AI.Provider = "claude"
 		cfg.AI.Ollama = userdata.AIProviderOllama{}
 		cfg.AI.Cursor = userdata.AIProviderCursor{}
+		cfg.AI.Copilot = userdata.AIProviderCopilot{}
 		if err := fillAINested(cfg, model, "claude", surveyOpt); err != nil {
+			return err
+		}
+	case strings.HasPrefix(sel, "copilot"):
+		cfg.AI.Provider = "copilot"
+		cfg.AI.Ollama = userdata.AIProviderOllama{}
+		cfg.AI.Cursor = userdata.AIProviderCursor{}
+		cfg.AI.Claude = userdata.AIProviderClaude{}
+		if err := fillAINested(cfg, model, "copilot", surveyOpt); err != nil {
 			return err
 		}
 	case strings.HasPrefix(sel, "ollama"):
 		cfg.AI.Provider = "ollama"
 		cfg.AI.Cursor = userdata.AIProviderCursor{}
 		cfg.AI.Claude = userdata.AIProviderClaude{}
+		cfg.AI.Copilot = userdata.AIProviderCopilot{}
 		if err := fillAINested(cfg, model, "ollama", surveyOpt); err != nil {
 			return err
 		}
@@ -244,6 +255,7 @@ func pickAI(cfg *userdata.ConfigFile, model configschema.Model, surveyOpt survey
 		cfg.AI.Ollama = userdata.AIProviderOllama{}
 		cfg.AI.Cursor = userdata.AIProviderCursor{}
 		cfg.AI.Claude = userdata.AIProviderClaude{}
+		cfg.AI.Copilot = userdata.AIProviderCopilot{}
 	}
 	return pickActivityFormatter(cfg, model, surveyOpt)
 }
@@ -304,6 +316,8 @@ func providerDefaultLabel(p string) string {
 		return "cursor"
 	case "claude":
 		return "claude"
+	case "copilot":
+		return "copilot"
 	case "ollama":
 		return "ollama"
 	default:
@@ -334,6 +348,10 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 				if cfg.AI.Claude.Args != nil {
 					def = strings.Join(cfg.AI.Claude.Args, ",")
 				}
+			case "copilot":
+				if cfg.AI.Copilot.Args != nil {
+					def = strings.Join(cfg.AI.Copilot.Args, ",")
+				}
 			}
 			var line string
 			p := &survey.Input{Message: f.Prompt, Default: def}
@@ -354,6 +372,8 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 					cfg.AI.Cursor.Args = parts
 				case "claude":
 					cfg.AI.Claude.Args = parts
+				case "copilot":
+					cfg.AI.Copilot.Args = parts
 				}
 			}
 			continue
@@ -374,6 +394,10 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 		case "claude":
 			if f.Key == "command" && cfg.AI.Claude.Command != "" {
 				def = cfg.AI.Claude.Command
+			}
+		case "copilot":
+			if f.Key == "command" && cfg.AI.Copilot.Command != "" {
+				def = cfg.AI.Copilot.Command
 			}
 		}
 		var val string
@@ -407,6 +431,10 @@ func fillAINested(cfg *userdata.ConfigFile, model configschema.Model, nestedKey 
 		case "claude":
 			if f.Key == "command" {
 				cfg.AI.Claude.Command = val
+			}
+		case "copilot":
+			if f.Key == "command" {
+				cfg.AI.Copilot.Command = val
 			}
 		}
 	}

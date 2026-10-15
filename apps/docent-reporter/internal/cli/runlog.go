@@ -113,6 +113,12 @@ func writeRunLogHeader(w io.Writer, now time.Time, resolved executionmode.Resolv
 	if len(cfg.AI.Claude.Args) > 0 {
 		fmt.Fprintf(w, "  claude.args:        %s\n", strings.Join(cfg.AI.Claude.Args, " "))
 	}
+	if v := strings.TrimSpace(cfg.AI.Copilot.Command); v != "" {
+		fmt.Fprintf(w, "  copilot.command:    %s\n", v)
+	}
+	if len(cfg.AI.Copilot.Args) > 0 {
+		fmt.Fprintf(w, "  copilot.args:       %s\n", strings.Join(cfg.AI.Copilot.Args, " "))
+	}
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "## Directives")

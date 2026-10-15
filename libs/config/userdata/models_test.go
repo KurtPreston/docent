@@ -107,7 +107,7 @@ func TestOpenTriggerCursorWriteColorEnabled(t *testing.T) {
 }
 
 func TestAIProfilesAgainstSchema(t *testing.T) {
-	for _, p := range []string{"ollama", "cursor", "claude", "rule-based"} {
+	for _, p := range []string{"ollama", "cursor", "claude", "copilot", "rule-based"} {
 		cfg := ConfigFile{AI: AIConfig{Provider: p}}
 		if p == "ollama" {
 			cfg.AI.Ollama.BaseURL = "http://127.0.0.1:11434"
@@ -118,6 +118,9 @@ func TestAIProfilesAgainstSchema(t *testing.T) {
 		}
 		if p == "claude" {
 			cfg.AI.Claude.Command = "claude"
+		}
+		if p == "copilot" {
+			cfg.AI.Copilot.Command = "copilot"
 		}
 		raw, err := yaml.Marshal(cfg)
 		if err != nil {

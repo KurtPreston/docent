@@ -48,7 +48,7 @@ type RunInput struct {
 	// CLI providers). Nil is fine; providers skip the callback.
 	OnContent func(string)
 	// OnThinking is an optional live callback for model "thinking" tokens
-	// (Ollama) or provider progress banners (Cursor/Claude stderr). Kept
+	// (Ollama) or provider progress banners (Cursor/Claude/Copilot stderr). Kept
 	// separate from OnContent so the dashboard can show progress without
 	// polluting the markdown preview.
 	OnThinking func(string)

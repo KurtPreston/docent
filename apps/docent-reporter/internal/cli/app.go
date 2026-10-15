@@ -200,7 +200,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	provider := ai.SelectProvider(cfg.AI, a.AI)
 	var stream io.Writer
 	switch provider.(type) {
-	case ai.OllamaProvider, ai.CursorCLIProvider, ai.ClaudeCLIProvider:
+	case ai.OllamaProvider, ai.CursorCLIProvider, ai.ClaudeCLIProvider, ai.CopilotCLIProvider:
 		stream = a.Err
 	}
 

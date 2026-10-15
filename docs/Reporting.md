@@ -49,7 +49,7 @@ Example:
 ```yaml
 # yaml-language-server: $schema=../jsonschema/config.schema.json
 ai:
-  provider: ollama   # or cursor, claude, rule-based
+  provider: ollama   # or cursor, claude, copilot, rule-based
   activity_formatter: repo-chronological  # optional; or json-signal-list
   ollama:
     base_url: http://127.0.0.1:11434
@@ -375,6 +375,7 @@ Paths follow the XDG base-directory layout by default:
 - **`ollama`**: HTTP chat to Ollama; streams to stderr when connected to a TTY.
 - **`cursor`**: Shells out to `cursor-agent` (override with `ai.cursor.command` / `args`). Each call runs from a fresh temp directory in read-only `--mode=ask`, so the agent cannot edit files or run shell commands. `--sandbox=enabled` is intentionally not part of the defaults (it's host-dependent on Linux and `--mode=ask` already blocks the behaviors it would constrain); opt in via `ai.cursor.args` if you want it. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
 - **`claude`**: Shells out to the Claude Code CLI `claude` (override with `ai.claude.command` / `args`). Each call runs from a fresh temp directory in non-interactive `--print` mode with the file-mutating and shell tools disabled (`--disallowedTools=Bash,Edit,Write,MultiEdit,NotebookEdit`), so the agent cannot edit files or run shell commands; override the whole flag set via `ai.claude.args` if you need different behavior. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
+- **`copilot`**: Shells out to the GitHub Copilot CLI `copilot` (override with `ai.copilot.command` / `args`). Each call runs from a fresh temp directory in non-interactive `-p` mode with the shell and file-write tools denied (`--deny-tool=shell,write`), repo custom instructions, `ask_user`, and the built-in MCP servers disabled, so the agent cannot edit files or run shell commands. Override the whole flag set via `ai.copilot.args` if you need different behavior (for example to add `--model`); `-p <prompt>` is always appended last, so don't include it. Run `copilot login` once beforehand. Stderr is streamed to the terminal and any non-zero exit is surfaced with the captured stderr.
 
 These same providers back the dashboard's [Report page](Dashboard.md#report-page) and the automations [`report` action](Automations.md#action-types) — configure `ai:` once and every surface uses it.
 

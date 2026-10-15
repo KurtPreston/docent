@@ -331,6 +331,12 @@ func aiIdentity(cfg userdata.AIConfig) (provider, model string) {
 			c = "claude"
 		}
 		return "claude", c
+	case "copilot":
+		c := strings.TrimSpace(cfg.Copilot.Command)
+		if c == "" {
+			c = "copilot"
+		}
+		return "copilot", c
 	default:
 		return "rule-based", ""
 	}
@@ -344,6 +350,8 @@ func providerLabel(provider, model string) string {
 		return "Cursor CLI (" + model + ")"
 	case "claude":
 		return "Claude CLI (" + model + ")"
+	case "copilot":
+		return "Copilot CLI (" + model + ")"
 	default:
 		return "Rule-based (deterministic)"
 	}

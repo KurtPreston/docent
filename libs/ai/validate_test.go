@@ -198,3 +198,24 @@ func TestValidateClaudeOnPath(t *testing.T) {
 		t.Fatalf("expected no issues when claude is on PATH, got %#v", issues)
 	}
 }
+
+func TestValidateCopilotMissingBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	issues := Validate(context.Background(), userdata.AIConfig{Provider: "copilot"}, nil)
+	if len(issues) == 0 || issues[0].Provider != "copilot" || issues[0].Field != "ai.copilot.command" {
+		t.Fatalf("expected copilot missing issue, got %#v", issues)
+	}
+}
+
+func TestValidateCopilotOnPath(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "copilot")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	issues := Validate(context.Background(), userdata.AIConfig{Provider: "copilot"}, nil)
+	if len(issues) != 0 {
+		t.Fatalf("expected no issues when copilot is on PATH, got %#v", issues)
+	}
+}
