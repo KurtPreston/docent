@@ -369,6 +369,44 @@
           },
           "required": ["provider"],
           "additionalProperties": false
+        },
+        {
+          "properties": {
+            "provider": {
+              "type": "string",
+              "const": "copilot"
+            },
+            "activity_formatter": {
+              "type": "string",
+              "enum": ["repo-chronological", "json-signal-list"],
+              "default": "repo-chronological",
+              "x-docent-prompt": "Activity formatter",
+              "x-docent-default": "repo-chronological",
+              "x-docent-setup-skip-prompt": true
+            },
+            "copilot": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "x-docent-prompt": "copilot command",
+                  "x-docent-default": "copilot",
+                  "x-docent-setup-skip-prompt": true
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "x-docent-prompt": "Extra copilot args (optional, comma-separated)",
+                  "x-docent-setup-skip-prompt": true
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["provider"],
+          "additionalProperties": false
         }
       ]
     },

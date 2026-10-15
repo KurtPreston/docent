@@ -35,6 +35,12 @@ func SelectProvider(cfg userdata.AIConfig, fallback Provider) Provider {
 			cmd = "claude"
 		}
 		return ClaudeCLIProvider{Command: cmd, Args: cfg.Claude.Args, Formatter: formatter}
+	case "copilot":
+		cmd := strings.TrimSpace(cfg.Copilot.Command)
+		if cmd == "" {
+			cmd = "copilot"
+		}
+		return CopilotCLIProvider{Command: cmd, Args: cfg.Copilot.Args, Formatter: formatter}
 	case "", "rule-based":
 		return RuleBasedProvider{Formatter: formatter}
 	default:
@@ -62,6 +68,9 @@ func WithFormatter(p Provider, f ActivityFormatter) Provider {
 		pp.Formatter = f
 		return pp
 	case ClaudeCLIProvider:
+		pp.Formatter = f
+		return pp
+	case CopilotCLIProvider:
 		pp.Formatter = f
 		return pp
 	default:

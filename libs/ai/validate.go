@@ -16,7 +16,7 @@ import (
 // (or degrade) generation. The CLI converts these into the unified
 // collectors.ValidationIssue shape for rendering alongside directive issues.
 type Issue struct {
-	Provider    string // "cursor", "claude", "ollama", "rule-based"
+	Provider    string // "cursor", "claude", "copilot", "ollama", "rule-based"
 	Field       string // pointer at the offending config field
 	Message     string
 	Remediation string
@@ -63,6 +63,20 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 			}}
 		}
 		return nil
+	case "copilot":
+		cmd := strings.TrimSpace(cfg.Copilot.Command)
+		if cmd == "" {
+			cmd = "copilot"
+		}
+		if _, err := exec.LookPath(cmd); err != nil {
+			return []Issue{{
+				Provider:    "copilot",
+				Field:       "ai.copilot.command",
+				Message:     fmt.Sprintf("%q not found on PATH", cmd),
+				Remediation: "install the GitHub Copilot CLI (https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) or set ai.copilot.command to a binary on PATH",
+			}}
+		}
+		return nil
 	case "ollama":
 		base := strings.TrimRight(strings.TrimSpace(cfg.Ollama.BaseURL), "/")
 		if base == "" {
@@ -105,7 +119,7 @@ func Validate(ctx context.Context, cfg userdata.AIConfig, httpClient *http.Clien
 			Provider:    provider,
 			Field:       "ai.provider",
 			Message:     fmt.Sprintf("unknown AI provider %q", provider),
-			Remediation: "set ai.provider to one of: cursor, claude, ollama, rule-based",
+			Remediation: "set ai.provider to one of: cursor, claude, copilot, ollama, rule-based",
 		}}
 	}
 }

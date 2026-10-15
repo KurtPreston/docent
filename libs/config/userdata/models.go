@@ -108,11 +108,12 @@ func ParseDuration(s string) (time.Duration, error) {
 }
 
 type AIConfig struct {
-	Provider          string           `yaml:"provider,omitempty"`
-	ActivityFormatter string           `yaml:"activity_formatter,omitempty"`
-	Ollama            AIProviderOllama `yaml:"ollama,omitempty"`
-	Cursor            AIProviderCursor `yaml:"cursor,omitempty"`
-	Claude            AIProviderClaude `yaml:"claude,omitempty"`
+	Provider          string            `yaml:"provider,omitempty"`
+	ActivityFormatter string            `yaml:"activity_formatter,omitempty"`
+	Ollama            AIProviderOllama  `yaml:"ollama,omitempty"`
+	Cursor            AIProviderCursor  `yaml:"cursor,omitempty"`
+	Claude            AIProviderClaude  `yaml:"claude,omitempty"`
+	Copilot           AIProviderCopilot `yaml:"copilot,omitempty"`
 }
 
 type AIProviderOllama struct {
@@ -126,6 +127,11 @@ type AIProviderCursor struct {
 }
 
 type AIProviderClaude struct {
+	Command string   `yaml:"command,omitempty"`
+	Args    []string `yaml:"args,omitempty"`
+}
+
+type AIProviderCopilot struct {
 	Command string   `yaml:"command,omitempty"`
 	Args    []string `yaml:"args,omitempty"`
 }
