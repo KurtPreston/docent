@@ -73,7 +73,16 @@ type When struct {
 	Field string `yaml:"field" json:"field"`
 	From  string `yaml:"from,omitempty" json:"from,omitempty"`
 	To    string `yaml:"to,omitempty" json:"to,omitempty"`
+	// Change restricts a numeric field's transition to a direction:
+	// "increase" or "decrease". An empty value reads as 0; a non-numeric value
+	// never matches. Empty Change matches any change.
+	Change string `yaml:"change,omitempty" json:"change,omitempty"`
 }
+
+const (
+	ChangeIncrease = "increase"
+	ChangeDecrease = "decrease"
+)
 
 // Conditions gate a matched trigger before actions run.
 type Conditions struct {
@@ -150,6 +159,11 @@ type Event struct {
 	// real failure instead of guessing from side effects. Empty when every
 	// preceding action in this run succeeded.
 	PriorActionError string
+
+	// PriorAgentOutput is the final output of the most recent agent-inline
+	// action earlier in this rule's chain, so a later notifier can relay what
+	// the agent did. Empty when no earlier action produced output.
+	PriorAgentOutput string
 }
 
 // Context is the template/env context for an action.
@@ -173,6 +187,8 @@ type Context struct {
 	FiredAt  time.Time
 	// ActionError mirrors Event.PriorActionError (see there for details).
 	ActionError string
+	// AgentOutput mirrors Event.PriorAgentOutput (see there for details).
+	AgentOutput string
 }
 
 // TicketRef is a JIRA (or ticket-pattern) key attached to an event.

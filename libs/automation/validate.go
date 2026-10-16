@@ -84,6 +84,11 @@ func validateTrigger(path string, t Trigger) []string {
 		if strings.TrimSpace(t.When.Field) == "" {
 			problems = append(problems, path+".when.field is required for transition triggers")
 		}
+		switch c := strings.ToLower(strings.TrimSpace(t.When.Change)); c {
+		case "", ChangeIncrease, ChangeDecrease:
+		default:
+			problems = append(problems, fmt.Sprintf("%s.when.change %q must be increase or decrease", path, t.When.Change))
+		}
 	case "schedule":
 		if strings.TrimSpace(t.Cron) == "" && strings.TrimSpace(t.At) == "" {
 			problems = append(problems, path+" requires cron or at for schedule triggers")

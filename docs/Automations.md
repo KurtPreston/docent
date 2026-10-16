@@ -58,7 +58,7 @@ automations:
 | Type | Fires when | Key fields |
 |------|-----------|------------|
 | `signal` (default) | A newly-collected signal matches the filters. | `source` (collector, e.g. `github`), `kind` (one or a list; friendly aliases like `pr` match `pr_review_status`/`pr_activity`, `ticket`/`issue` are interchangeable), `match.text` (regex against title+summary), `match.ticket_key` (require a JIRA key to be extractable), `match.fields` (exact field equality). |
-| `transition` | An entity's state field changes value between two collects. | `source`, `kind`, `when.field` (required), `when.from` / `when.to` (either can be the sentinel `me`, meaning "belongs to you", e.g. `assignee: me` on an assignment). Empty `from`/`to` matches any value. `match.fields` narrows which entities are eligible, as it does for signals — an entity's state carries every field of the signal it came from. |
+| `transition` | An entity's state field changes value between two collects. | `source`, `kind`, `when.field` (required), `when.from` / `when.to` (either can be the sentinel `me`, meaning "belongs to you", e.g. `assignee: me` on an assignment). Empty `from`/`to` matches any value. `when.change: increase` / `decrease` fires only when a numeric field goes up / down (an empty value reads as 0), e.g. `unresolved_mine` increasing means a new review comment is waiting on you. `match.fields` narrows which entities are eligible, as it does for signals — an entity's state carries every field of the signal it came from. |
 | `schedule` | A time is reached. | `cron` (5-field `min hour dom month dow`, local time, supports `*`, ranges, lists, `*/N` steps) **or** `at` (`"HH:MM"`, local time) with an optional `weekday` name to restrict to one day. |
 
 Signal and transition rules are evaluated right after each collector run, so
@@ -97,7 +97,7 @@ Optional gates evaluated after the trigger matches, before any action runs:
 | `slack-post` | Post a Slack message | `channel`, `body` (required). Uses the first enabled `slack` directive. |
 | `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`, and the optional prompt controls `prompt` / `context` (see [Report delivery](#report-delivery)). |
 | `agent` | Start a hosted agent session in a provisioned workdir | `provider` (`cursor` / `claude`), `workdir` (`worktree` default, or `open_path`), `base_ref` (branch point for a brand-new branch), `prompt` (required). Streams to the cockpit and ignores `post` — see [`agent` vs `agent-inline`](#agent-vs-agent-inline). |
-| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, plus `post` (see below). `provider` may also be `copilot` (run with `--allow-all --no-ask-user`). |
+| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, plus `post` (see below). `provider` may also be `copilot` (run with `--allow-all --no-ask-user`). The agent's final output is passed to later actions as `.AgentOutput`. |
 | `open` | Open a path in the editor via the configured [open trigger](Dashboard.md#open-trigger--live-window-polling-cursor--wsm--none) | An optional templated `cwd`. Only available when `open_trigger` is configured. |
 
 An action's failure doesn't stop the chain: every action in a rule runs even
@@ -245,8 +245,10 @@ Action strings that accept templates (`webhook.url`/`headers`/`body`,
 rendered against the event: `.RuleID`, `.Source`, `.Kind`, `.Title`,
 `.Summary`, `.URL`, `.Repo`, `.Branch`, `.OpenPath`, `.Ticket.Key` /
 `.Ticket.Title` / `.Ticket.URL`, `.From`, `.To`, `.Fields` (map), `.IsSelf`,
-`.ActionError`, and more. `shell` actions additionally get every field as a
-`DOCENT_*` environment variable (e.g. `DOCENT_ACTION_ERROR`, `DOCENT_TICKET`).
+`.ActionError`, `.AgentOutput` (the final output of the latest earlier
+`agent-inline` action in the chain), and more. `shell` actions additionally get
+every field as a `DOCENT_*` environment variable (e.g. `DOCENT_ACTION_ERROR`,
+`DOCENT_AGENT_OUTPUT`, `DOCENT_TICKET`).
 
 ## Webhook nudge (forcing a collect)
 

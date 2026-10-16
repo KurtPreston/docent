@@ -47,6 +47,7 @@ func EnvPairs(ctx Context) []string {
 		// to Slack) report the real failure instead of guessing from side
 		// effects like a missing output file.
 		{"DOCENT_ACTION_ERROR", ctx.ActionError},
+		{"DOCENT_AGENT_OUTPUT", ctx.AgentOutput},
 	}
 	out := make([]string, 0, len(pairs)+len(ctx.Fields)+len(ctx.Match))
 	for _, p := range pairs {
