@@ -160,7 +160,7 @@ func SamePath(a, b string) bool {
 func gitOutput(ctx context.Context, dir string, timeout time.Duration, args ...string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "git", args...)
+	cmd := exec.CommandContext(cctx, "git", bareGitDirArgs(dir, args)...)
 	cmd.Dir = dir
 	cmd.Stdin = nil
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
@@ -184,6 +184,25 @@ func gitOutput(ctx context.Context, dir string, timeout time.Duration, args ...s
 func gitRun(ctx context.Context, dir string, timeout time.Duration, args ...string) error {
 	_, err := gitOutput(ctx, dir, timeout, args...)
 	return err
+}
+
+// bareGitDirArgs names a bare repository explicitly with --git-dir. Git
+// refuses to discover a bare repository from the working directory when
+// safe.bareRepository=explicit, which some environments (e.g. Coder
+// workspaces) set globally, and docent's own clones are bare.
+func bareGitDirArgs(dir string, args []string) []string {
+	if dir == "" {
+		return args
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return args
+	}
+	for _, name := range []string{"HEAD", "objects", "refs"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			return args
+		}
+	}
+	return append([]string{"--git-dir=" + dir}, args...)
 }
 
 func detail(s string) string {

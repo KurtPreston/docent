@@ -114,7 +114,12 @@
       "properties": {
         "field": { "type": "string" },
         "from": { "type": "string" },
-        "to": { "type": "string" }
+        "to": { "type": "string" },
+        "change": {
+          "type": "string",
+          "enum": ["increase", "decrease"],
+          "description": "Only fire when a numeric field increases or decreases (empty reads as 0)"
+        }
       }
     },
     "automationConditions": {
