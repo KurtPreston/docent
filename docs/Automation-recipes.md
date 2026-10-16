@@ -238,9 +238,12 @@ thread. Clear-cut threads are resolved (accepted changes are pushed first);
 anything ambiguous gets a reply but stays open for you. Its summary is then
 posted to Slack.
 
-`unresolved_mine` counts open threads whose latest comment isn't yours, so
-`change: increase` fires only on new feedback. The agent's own replies post as
-you, so they lower the count and don't re-trigger the rule. The thread list in
+`unresolved_mine_latest` is the Unix time of the newest comment among open
+threads whose latest comment isn't yours (`0` when there are none), so
+`change: increase` fires on every new comment or reply awaiting you. It still
+rises when another thread is resolved in the same collect, where the count in
+`unresolved_mine` would hold steady. The agent's own replies post as you, so
+they don't raise it and don't re-trigger the rule. The thread list in
 `unresolved_threads` is a snapshot. The prompt tells the agent to re-read the
 live threads, so a second run that queued behind the first won't answer
 anything twice.
@@ -260,7 +263,7 @@ The Slack step relays the agent's final message through `.AgentOutput`. Set
       fields:
         mine: "true"
     when:
-      field: unresolved_mine
+      field: unresolved_mine_latest
       change: increase
   conditions:
     self: true
