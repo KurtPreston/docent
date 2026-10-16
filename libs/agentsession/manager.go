@@ -422,6 +422,19 @@ func (m *Manager) runTurn(ctx context.Context, lt *liveTurn, runner Runner, sess
 // incremented for any turn that actually ran, including a failed one: Claude
 // will not accept --session-id twice, so a retried first turn must resume.
 func (m *Manager) finish(id string, status Status, errMsg string, res *TurnResult) {
+	ev := Event{Kind: KindStatus, Text: string(status), Error: errMsg, SessionID: id, At: m.now()}
+	// One step under m.mu, which Subscribe also holds while reading the
+	// transcript: otherwise a caller that sees the terminal status and
+	// subscribes could get this event live, after the replay, as if it
+	// belonged to the next turn.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Persisted, not merely broadcast: a subscriber that reconnects after the
+	// turn ended replays the transcript, and without this its last event would
+	// be mid-turn output, leaving the lane looking stuck forever. Written
+	// before the status so that a terminal status means the turn has finished
+	// writing.
+	_ = m.Store.Append(id, ev)
 	_, _ = m.Store.Update(id, func(s *Session) {
 		s.Status = status
 		s.Error = errMsg
@@ -430,10 +443,7 @@ func (m *Manager) finish(id string, status Status, errMsg string, res *TurnResul
 			s.LastResult = res
 		}
 	})
-	// Persisted, not merely broadcast: a subscriber that reconnects after the
-	// turn ended replays the transcript, and without this its last event would
-	// be mid-turn output, leaving the lane looking stuck forever.
-	m.record(id, Event{Kind: KindStatus, Text: string(status), Error: errMsg, SessionID: id, At: m.now()})
+	m.broadcastLocked(id, ev)
 }
 
 func (m *Manager) release(id string) {
@@ -505,6 +515,10 @@ func (m *Manager) record(id string, ev Event) {
 func (m *Manager) broadcast(id string, ev Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.broadcastLocked(id, ev)
+}
+
+func (m *Manager) broadcastLocked(id string, ev Event) {
 	for ch := range m.subs[id] {
 		select {
 		case ch <- ev:
