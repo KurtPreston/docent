@@ -230,6 +230,111 @@ This follows the same pattern as the CI fixer, but the trigger is the PR's
       args: [pr]
 ```
 
+## Auto-reply to review comments on your PRs
+
+When a reviewer leaves a comment on one of your PRs that is waiting on you,
+an agent reads it, decides whether to accept or reject it, and replies in the
+thread. Clear-cut threads are resolved (accepted changes are pushed first);
+anything ambiguous gets a reply but stays open for you. Its summary is then
+posted to Slack.
+
+`unresolved_mine` counts open threads whose latest comment isn't yours, so
+`change: increase` fires only on new feedback. The agent's own replies post as
+you, so they lower the count and don't re-trigger the rule. The thread list in
+`unresolved_threads` is a snapshot. The prompt tells the agent to re-read the
+live threads, so a second run that queued behind the first won't answer
+anything twice.
+
+The Slack step relays the agent's final message through `.AgentOutput`. Set
+`channel` to a channel ID, or your member ID for a DM.
+
+```yaml
+- id: autoreply-pr-comments
+  name: Auto-reply to review comments on my PRs
+  enabled: true
+  trigger:
+    type: transition
+    source: github
+    kind: pr_review_status
+    match:
+      fields:
+        mine: "true"
+    when:
+      field: unresolved_mine
+      change: increase
+  conditions:
+    self: true
+  actions:
+    - type: agent-inline
+      provider: copilot
+      workdir: worktree
+      prompt: |-
+        You are an autonomous review-response agent in a git worktree checked
+        out on the head branch of a pull request authored by the user you act
+        for. The working directory is the repository root.
+
+        Pull request: {{.URL}}
+        Repository:   {{.Repo}}
+        Branch:       {{.Branch}}
+        Title:        {{.Title}}
+
+        Unresolved review threads when this fired (JSON snapshot, may be stale):
+        {{index .Fields "unresolved_threads"}}
+
+        1. Re-read the live threads (owner/name/number come from the URL):
+             gh api graphql -F owner=OWNER -F name=NAME -F number=NUMBER -f query='
+               query($owner:String!,$name:String!,$number:Int!){
+                 repository(owner:$owner,name:$name){ pullRequest(number:$number){
+                   reviewThreads(first:100){ nodes{ id isResolved path line
+                     comments(first:50){ nodes{ author{login} body url } } } } } } }'
+           Handle only threads that are unresolved and whose LAST comment is
+           not by `gh api user -q .login` and does not begin with
+           "🤖 docent autoreply:". If there are none, do nothing else.
+
+        2. For each, read the comment and the code it points at, then classify:
+           - ACCEPT: a clear, low-risk request you agree with that has one
+             obvious implementation (bug, typo, naming, docs, small refactor,
+             missing test or check).
+           - REJECT: clearly incorrect or already handled, and you can show
+             why from the code.
+           - UNCLEAR: anything else — design or product decisions, broad or
+             risky changes, ambiguity, or a question only the author can answer.
+
+        3. Apply every ACCEPT change. Build/test/lint what you touched with the
+           project's own tooling; if a change cannot be made to pass simply,
+           revert it and treat the thread as UNCLEAR. Then:
+             git add -A && git commit -m "Address review feedback"
+             git push origin HEAD:{{.Branch}}
+           Never force-push, push elsewhere, or open a PR.
+
+        4. Reply in each thread:
+             gh api graphql -F thread=THREAD_ID -F body=BODY -f query='
+               mutation($thread:ID!,$body:String!){
+                 addPullRequestReviewThreadReply(input:{
+                   pullRequestReviewThreadId:$thread, body:$body}){ comment{ url } } }'
+           - ACCEPT: say what changed and cite the commit SHA, then resolve.
+           - REJECT: explain why, then resolve.
+           - UNCLEAR: give your analysis and the open question; the author will
+             follow up. Do NOT resolve.
+           Resolve with:
+             gh api graphql -F thread=THREAD_ID -f query='
+               mutation($thread:ID!){ resolveReviewThread(input:{threadId:$thread}){
+                 thread{ isResolved } } }'
+           Begin every reply with "🤖 docent autoreply:".
+
+        5. Your final message is posted to Slack verbatim. Output only a short
+           summary, one bullet per thread:
+             • ACCEPTED | REJECTED | NEEDS INPUT — `file:line` @reviewer: gist →
+               what you did, or the question for the author. <reply url>
+           If nothing needed handling, output only: No new review comments to handle.
+    - type: slack-post
+      channel: U0123456789   # your Slack member ID (DM) or a channel ID
+      body: |-
+        🤖 *docent autoreply* — <{{.URL}}|{{.Title}}>
+        {{.AgentOutput}}{{if .ActionError}}
+        :warning: {{.ActionError}}{{end}}
+```
+
 ## Review and approve clean bot-generated backports
 
 This recipe suits repos where a CI bot cherry-picks merged PRs onto release

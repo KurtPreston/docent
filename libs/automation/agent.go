@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -39,14 +40,22 @@ type AgentRunner struct {
 }
 
 func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
+	_, err := r.RunWithOutput(ctx, action, ev)
+	return err
+}
+
+// RunWithOutput runs the agent and post-steps, returning the agent's final
+// stdout so later actions in the chain can relay it (e.g. to Slack). The
+// output is returned even when a post-step fails.
+func (r AgentRunner) RunWithOutput(ctx context.Context, action Action, ev Event) (string, error) {
 	actx := EventContext(ev)
 	prompt, err := RenderTemplate(action.Prompt, actx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
-		return fmt.Errorf("agent: prompt is empty")
+		return "", fmt.Errorf("agent: prompt is empty")
 	}
 
 	mode := strings.TrimSpace(action.Workdir)
@@ -55,7 +64,7 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	}
 	baseRef, err := RenderTemplate(action.BaseRef, actx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	baseRef = strings.TrimSpace(baseRef)
 
@@ -70,7 +79,7 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	release, err := worktreeLocks.acquire(waitCtx, lockKey)
 	cancelWait()
 	if err != nil {
-		return fmt.Errorf("agent: gave up waiting for worktree %q: %w", lockKey, err)
+		return "", fmt.Errorf("agent: gave up waiting for worktree %q: %w", lockKey, err)
 	}
 	defer release()
 
@@ -94,7 +103,7 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 		Hook:     r.WorktreeHook,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	provider := strings.TrimSpace(action.Provider)
@@ -104,13 +113,16 @@ func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
 	if provider == "" {
 		provider = "cursor"
 	}
-	if err := r.runAgent(runCtx, provider, wd.Path, prompt); err != nil {
-		return err
+	out, err := r.runAgent(runCtx, provider, wd.Path, prompt)
+	if err != nil {
+		return out, err
 	}
-	return r.runPost(runCtx, action, actx, wd.Path)
+	return out, r.runPost(runCtx, action, actx, wd.Path)
 }
 
-func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string) error {
+// runAgent returns the agent's stdout: its final answer for providers run in
+// text/silent mode.
+func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, agentTimeout)
 	defer cancel()
 
@@ -141,27 +153,27 @@ func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string)
 		// agent's response on stdout.
 		args = []string{"--allow-all", "--no-ask-user", "--silent", "--no-color", "-p", prompt}
 	default:
-		return fmt.Errorf("agent: unknown provider %q", provider)
+		return "", fmt.Errorf("agent: unknown provider %q", provider)
 	}
 
 	cmd := exec.CommandContext(cctx, cmdName, args...)
 	cmd.Dir = cwd
 	configureProcGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
-	var combined bytes.Buffer
-	cmd.Stdout = &combined
+	var combined, stdout bytes.Buffer
+	cmd.Stdout = io.MultiWriter(&combined, &stdout)
 	cmd.Stderr = &combined
 	if err := cmd.Run(); err != nil {
 		out := strings.TrimSpace(combined.String())
 		if cctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("agent %s timed out", provider)
+			return stdout.String(), fmt.Errorf("agent %s timed out", provider)
 		}
 		if out != "" {
-			return fmt.Errorf("agent %s: %w\n%s", provider, err, out)
+			return stdout.String(), fmt.Errorf("agent %s: %w\n%s", provider, err, out)
 		}
-		return fmt.Errorf("agent %s: %w", provider, err)
+		return stdout.String(), fmt.Errorf("agent %s: %w", provider, err)
 	}
-	return nil
+	return stdout.String(), nil
 }
 
 func (r AgentRunner) runPost(ctx context.Context, action Action, actx Context, cwd string) error {

@@ -53,12 +53,28 @@ func (r *Registry) Register(typ string, runner Runner) {
 
 // Run dispatches an action to its registered runner.
 func (r *Registry) Run(ctx context.Context, action Action, ev Event) error {
+	_, err := r.RunOutput(ctx, action, ev)
+	return err
+}
+
+// OutputRunner is a Runner that also reports output for later actions in the
+// chain (see Event.PriorAgentOutput).
+type OutputRunner interface {
+	RunWithOutput(ctx context.Context, action Action, ev Event) (string, error)
+}
+
+// RunOutput dispatches like Run and returns the runner's output when it is an
+// OutputRunner (empty otherwise).
+func (r *Registry) RunOutput(ctx context.Context, action Action, ev Event) (string, error) {
 	typ := strings.TrimSpace(action.Type)
 	runner, ok := r.runners[typ]
 	if !ok {
-		return fmt.Errorf("no runner registered for action type %q", typ)
+		return "", fmt.Errorf("no runner registered for action type %q", typ)
 	}
-	return runner.Run(ctx, action, ev)
+	if or, ok := runner.(OutputRunner); ok {
+		return or.RunWithOutput(ctx, action, ev)
+	}
+	return "", runner.Run(ctx, action, ev)
 }
 
 // WebhookRunner POSTs a JSON (or templated) body to action.URL.

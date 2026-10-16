@@ -20,12 +20,12 @@ func TestAgentRunnerCopilot(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	stub := filepath.Join(dir, "copilot")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho 'final answer'\necho 'noise' >&2\n"
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r := automation.AgentRunner{DefaultProvider: "copilot", CopilotCommand: stub}
-	err := r.Run(context.Background(), automation.Action{
+	out, err := r.RunWithOutput(context.Background(), automation.Action{
 		Type:    "agent-inline",
 		Workdir: "open_path",
 		Prompt:  "do {{.Title}}",
@@ -36,6 +36,9 @@ func TestAgentRunnerCopilot(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) != "final answer" {
+		t.Fatalf("output = %q, want stdout only", out)
 	}
 	b, err := os.ReadFile(argsFile)
 	if err != nil {

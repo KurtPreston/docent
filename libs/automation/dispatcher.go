@@ -106,7 +106,11 @@ func (d *Dispatcher) RunRuleNow(ctx context.Context, ev Event) Job {
 	var priorErrs []string
 	for _, action := range ev.Rule.Actions {
 		ev.PriorActionError = strings.Join(priorErrs, "; ")
-		if err := d.Registry.Run(ctx, action, ev); err != nil {
+		out, err := d.Registry.RunOutput(ctx, action, ev)
+		if out = strings.TrimSpace(out); out != "" {
+			ev.PriorAgentOutput = out
+		}
+		if err != nil {
 			lastErr = err
 			priorErrs = append(priorErrs, describeActionError(action.Type, err))
 			d.logf("automation %s (manual) action %s failed: %v", ev.Rule.ID, action.Type, err)
@@ -132,7 +136,11 @@ func (d *Dispatcher) runJob(id string, ev Event) {
 	var priorErrs []string
 	for _, action := range ev.Rule.Actions {
 		ev.PriorActionError = strings.Join(priorErrs, "; ")
-		if err := d.Registry.Run(ctx, action, ev); err != nil {
+		out, err := d.Registry.RunOutput(ctx, action, ev)
+		if out = strings.TrimSpace(out); out != "" {
+			ev.PriorAgentOutput = out
+		}
+		if err != nil {
 			lastErr = err
 			priorErrs = append(priorErrs, describeActionError(action.Type, err))
 			d.logf("automation %s action %s failed: %v", ev.Rule.ID, action.Type, err)

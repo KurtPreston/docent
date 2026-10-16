@@ -3,6 +3,7 @@ package automation
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,6 +97,9 @@ func MatchTransitions(rules []Rule, prev, next map[string]model.Entity, opts Mat
 				continue
 			}
 			if !transitionValueMatch(wantTo, newVal, newSelf) {
+				continue
+			}
+			if !transitionChangeMatch(rule.Trigger.When.Change, oldVal, newVal) {
 				continue
 			}
 			if !conditionsOK(rule.Conditions, nil, &ent) {
@@ -265,6 +269,40 @@ func transitionValueMatch(want, got string, isSelf bool) bool {
 	return strings.EqualFold(want, got)
 }
 
+// transitionChangeMatch applies When.change to a transition. Empty old/new
+// values read as 0, so a counter's first appearance counts as an increase
+// from nothing, consistent with how a missing entity reads as an empty old
+// value elsewhere.
+func transitionChangeMatch(change, oldVal, newVal string) bool {
+	change = strings.ToLower(strings.TrimSpace(change))
+	if change == "" {
+		return true
+	}
+	parse := func(s string) (float64, bool) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return 0, true
+		}
+		f, err := strconv.ParseFloat(s, 64)
+		return f, err == nil
+	}
+	o, ok := parse(oldVal)
+	if !ok {
+		return false
+	}
+	n, ok := parse(newVal)
+	if !ok {
+		return false
+	}
+	switch change {
+	case ChangeIncrease:
+		return n > o
+	case ChangeDecrease:
+		return n < o
+	}
+	return false
+}
+
 func conditionsOK(c Conditions, sig *model.Signal, ent *model.Entity) bool {
 	if c.Self != nil {
 		want := *c.Self
@@ -348,6 +386,7 @@ func EventContext(ev Event) Context {
 		Ticket:      TicketRef{Key: ev.TicketKey},
 		Fields:      map[string]string{},
 		ActionError: ev.PriorActionError,
+		AgentOutput: ev.PriorAgentOutput,
 	}
 	if ev.Signal != nil {
 		ctx.Source = ev.Signal.Source
