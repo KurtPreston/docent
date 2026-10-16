@@ -1035,6 +1035,10 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	if spec.mine {
 		fields["ready"] = strconv.FormatBool(!row.IsDraft && (detail.Checks == "passing" || detail.Checks == "none"))
 		fields["unresolved_mine"] = strconv.Itoa(countThreadsAwaitingMe(detail.Threads))
+		// A count can stand still while the threads change under it (one is
+		// resolved as another arrives between two collects); the newest comment
+		// awaiting a reply only moves forward when there is something new.
+		fields["unresolved_mine_latest"] = strconv.FormatInt(latestThreadAwaitingMe(detail.Threads), 10)
 		// The threads themselves travel only for the user's own PRs, where a
 		// comment is something to answer. Carrying every thread on every
 		// candidate would put a followed repo's whole review history in the
@@ -1324,6 +1328,23 @@ func countThreadsAwaitingMe(threads []ReviewThread) int {
 		}
 	}
 	return n
+}
+
+// latestThreadAwaitingMe returns the Unix time of the most recent last comment
+// among threads awaiting me, or 0 when none are. It rises whenever someone
+// comments or replies in a thread that is my turn, and never rises when I am
+// the one who spoke, which makes it a trigger for "new review feedback".
+func latestThreadAwaitingMe(threads []ReviewThread) int64 {
+	var latest int64
+	for _, t := range threads {
+		if t.Mine {
+			continue
+		}
+		if at := parseGitHubTime(t.UpdatedAt); !at.IsZero() && at.Unix() > latest {
+			latest = at.Unix()
+		}
+	}
+	return latest
 }
 
 // threadBodyLimit keeps a single quoted comment from dominating a dashboard
