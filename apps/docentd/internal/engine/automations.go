@@ -162,6 +162,7 @@ func (e *Engine) wireAutomationConnectors() {
 		DefaultProvider: e.cfg.AI.Provider,
 		CursorCommand:   e.cfg.AI.Cursor.Command,
 		ClaudeCommand:   e.cfg.AI.Claude.Command,
+		CopilotCommand:  e.cfg.AI.Copilot.Command,
 		// The runner needs to know where the developer's own copies of a
 		// repository live, to learn a clone URL and to reference its objects.
 		// The local-git roots are exactly that.
