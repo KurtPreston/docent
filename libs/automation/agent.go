@@ -21,11 +21,13 @@ const worktreeAcquireTimeout = 2 * agentTimeout
 // AgentRunner runs a write-capable coding agent in a provisioned workdir,
 // then optionally runs post-steps (validate / commit / push).
 type AgentRunner struct {
-	// DefaultProvider is used when action.Provider is empty ("cursor" or "claude").
+	// DefaultProvider is used when action.Provider is empty ("cursor",
+	// "claude", or "copilot").
 	DefaultProvider string
-	// CursorCommand / ClaudeCommand override the CLI binaries.
-	CursorCommand string
-	ClaudeCommand string
+	// CursorCommand / ClaudeCommand / CopilotCommand override the CLI binaries.
+	CursorCommand  string
+	ClaudeCommand  string
+	CopilotCommand string
 	// Commenter is used when post.jira_comment is set.
 	Commenter IssueCommenter
 	// Roots are the directories searched for the developer's own copy of a
@@ -129,6 +131,15 @@ func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string)
 		}
 		// Write mode: omit --disallowedTools so Edit/Write/Bash are available.
 		args = []string{"--print", "--output-format=text", "--permission-mode", "acceptEdits", prompt}
+	case "copilot":
+		cmdName = r.CopilotCommand
+		if cmdName == "" {
+			cmdName = "copilot"
+		}
+		// Write mode, unattended: every tool/path/URL is allowed and ask_user is
+		// disabled since nobody is there to answer. --silent leaves only the
+		// agent's response on stdout.
+		args = []string{"--allow-all", "--no-ask-user", "--silent", "--no-color", "-p", prompt}
 	default:
 		return fmt.Errorf("agent: unknown provider %q", provider)
 	}
