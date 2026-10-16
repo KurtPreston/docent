@@ -202,7 +202,10 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   installs `docentd` only (the dashboard/collector daemon) as a `systemd --user`
   service, and enables lingering (`loginctl enable-linger`) by default so docentd
   keeps running — and scheduled automations still fire — even when you're logged
-  out (pass `--no-linger` to opt out). There is no window manager on Linux —
+  out (pass `--no-linger` to opt out). Where systemd isn't running (e.g.
+  containers), it starts docentd as a background process instead and prints a
+  `--start-only` command to add to your container/workspace startup script.
+  There is no window manager on Linux —
   install wsm on the Windows/macOS host that connects here.
 - **macOS** — [`scripts/install-docent-macos.sh`](scripts/install-docent-macos.sh):
   installs `docentd` (optionally, locally via `launchd`), the Hammerspoon launcher

@@ -30,6 +30,11 @@ SRC_CONFIG="$ROOT/userdata/config.yaml"
 SRC_ENV="$ROOT/userdata/.env"
 
 INSTALL_SYSTEMD=1
+# Set when systemd was wanted but isn't running (e.g. containers): docentd is
+# then started as a plain background process instead.
+RUN_BACKGROUND=0
+START_ONLY=0
+LOG_PATH="$CONFIG_DIR/docentd.log"
 SKIP_BUILD=0
 ENABLE_LINGER=1
 DRY_RUN=0
@@ -51,6 +56,12 @@ dashboard on 127.0.0.1:39787. Lingering is enabled by default so docentd keeps
 running — and scheduled automations still fire — even when you're logged out
 (pass --no-linger to opt out).
 
+If systemd isn't running (e.g. in a container, where `systemctl` may be a
+no-op shim), the unit is skipped and docentd is started as a background
+process logging to ~/.config/docent/docentd.log. Nothing restarts it on boot
+in that case; run `install-docent-linux.sh --start-only` from your container
+or workspace startup script.
+
 config.yaml and .env are canonical real files in ~/.config/docent. On first
 run they are seeded from the repo's userdata/ (or the bundled examples) when
 missing; an existing config is left untouched. A leftover symlink from an
@@ -59,6 +70,9 @@ earlier install is converted into a real file in place.
 Options:
   --no-systemd      Skip systemd unit install (build + config only)
   --no-build        Skip go build (reuse existing binary in BIN_DIR)
+  --start-only      Only (re)start the installed docentd (via systemd if it's
+                    running, else as a background process), then exit. Use
+                    this from a container/workspace startup script.
   --no-linger       Don't enable lingering. docentd then only runs while you
                     have an active login session, so scheduled automations are
                     skipped whenever you're logged out.
@@ -93,6 +107,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-systemd) INSTALL_SYSTEMD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
+    --start-only) START_ONLY=1; SKIP_BUILD=1 ;;
     --linger) ENABLE_LINGER=1 ;;
     --no-linger) ENABLE_LINGER=0 ;;
     --extension) INSTALL_EXTENSION=yes ;;
@@ -105,6 +120,17 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# systemctl's exit status can't be trusted for this: some container images ship
+# a /usr/local/bin/systemctl shim that prints a notice and exits 0.
+has_systemd() { [ -d /run/systemd/system ]; }
+
+if [ "$INSTALL_SYSTEMD" -eq 1 ] && ! has_systemd; then
+  log "systemd is not running here (container?); skipping the systemd unit and"
+  log "  starting docentd as a background process instead"
+  INSTALL_SYSTEMD=0
+  RUN_BACKGROUND=1
+fi
 
 # --- Go toolchain selection (go.mod needs >= 1.22) ----------------------------
 go_version() { "$1" version 2>/dev/null | awk '{print $3}' | sed 's/^go//'; }
@@ -186,7 +212,7 @@ DOCENTD_BIN="$BIN_DIR/docentd"
 stop_previous_docent_services() {
   log "stopping previous docentd services"
 
-  if systemctl --user cat "$SERVICE_NAME" &>/dev/null; then
+  if has_systemd && systemctl --user cat "$SERVICE_NAME" &>/dev/null; then
     log "stopping systemd --user unit $SERVICE_NAME"
     run systemctl --user stop "$SERVICE_NAME" || true
   fi
@@ -200,6 +226,63 @@ stop_previous_docent_services() {
     sleep 0.5
   fi
 }
+
+# start_docentd_background runs docentd detached from this shell for hosts
+# without systemd. Mirrors the unit's PATH/WorkingDirectory.
+start_docentd_background() {
+  if [ "$DRY_RUN" -eq 0 ] && [ ! -x "$DOCENTD_BIN" ]; then
+    echo "docentd not found at $DOCENTD_BIN; run the installer without --start-only first" >&2
+    exit 1
+  fi
+  if pgrep -x docentd >/dev/null 2>&1; then
+    log "stopping running docentd process(es)"
+    run pkill -x docentd || true
+    [ "$DRY_RUN" -eq 1 ] || sleep 0.5
+  fi
+  log "starting docentd in the background (log: $LOG_PATH)"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    run printf '%s\n' "nohup $DOCENTD_BIN -config $CONFIG_PATH -port $DOCENT_PORT >>$LOG_PATH 2>&1 &"
+    return
+  fi
+  mkdir -p "$CONFIG_DIR"
+  local detach=()
+  command -v setsid >/dev/null 2>&1 && detach=(setsid)
+  (
+    cd "$CONFIG_DIR"
+    PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" \
+      nohup "${detach[@]}" "$DOCENTD_BIN" -config "$CONFIG_PATH" -port "$DOCENT_PORT" \
+      >>"$LOG_PATH" 2>&1 </dev/null &
+  )
+}
+
+health_check() {
+  local fail_hint="$1" _
+  log "health check"
+  for _ in 1 2 3 4 5; do
+    sleep 1
+    if curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null; then
+      echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok"
+      return 0
+    fi
+  done
+  echo "  docentd     FAIL — $fail_hint" >&2
+  return 1
+}
+
+if [ "$START_ONLY" -eq 1 ]; then
+  if [ "$INSTALL_SYSTEMD" -eq 1 ]; then
+    log "restarting $SERVICE_NAME"
+    run systemctl --user restart "$SERVICE_NAME"
+    hint="journalctl --user -u $SERVICE_NAME -n 50"
+  else
+    start_docentd_background
+    hint="tail -n 50 $LOG_PATH"
+  fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    health_check "$hint" || exit 1
+  fi
+  exit 0
+fi
 
 stop_previous_docent_services
 
@@ -532,19 +615,19 @@ EOF
   fi
 fi
 
+if [ "$RUN_BACKGROUND" -eq 1 ]; then
+  start_docentd_background
+fi
+
 # --- Doctor + health ----------------------------------------------------------
 if [ "$DRY_RUN" -eq 0 ]; then
   log "running doctor"
   "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
 
   if [ "$INSTALL_SYSTEMD" -eq 1 ]; then
-    log "health check"
-    sleep 1
-    if curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null; then
-      echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok"
-    else
-      echo "  docentd     FAIL — journalctl --user -u $SERVICE_NAME -n 50" >&2
-    fi
+    health_check "journalctl --user -u $SERVICE_NAME -n 50" || true
+  elif [ "$RUN_BACKGROUND" -eq 1 ]; then
+    health_check "tail -n 50 $LOG_PATH" || true
   fi
 fi
 
@@ -568,6 +651,21 @@ Manage:
   systemctl --user restart $SERVICE_NAME
   journalctl --user -u $SERVICE_NAME -f
   loginctl show-user $USER -p Linger   # Linger=yes => runs even when logged out
+EOF
+elif [ "$RUN_BACKGROUND" -eq 1 ]; then
+  cat <<EOF
+  process      background (no systemd)   log: $LOG_PATH
+
+docentd will NOT restart on its own after a reboot or container restart.
+To start it automatically, add this to your container/workspace startup
+script (e.g. a Coder template startup script or your dotfiles install script):
+
+  $ROOT/scripts/install-docent-linux.sh --start-only
+
+Manage:
+  $ROOT/scripts/install-docent-linux.sh --start-only   # (re)start
+  pkill -x docentd                                       # stop
+  tail -f $LOG_PATH
 EOF
 fi
 
