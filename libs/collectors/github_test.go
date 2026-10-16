@@ -242,8 +242,8 @@ func TestPrReviewItemFields(t *testing.T) {
 
 	authoredSpec := prReviewSpec{relation: "authored", mine: true}
 	threads := []ReviewThread{
-		{ID: "t1", Author: "bob", Body: "why?", Mine: false},
-		{ID: "t2", Author: "bob", Body: "and this?", Mine: true},
+		{ID: "t1", Author: "bob", Body: "why?", Mine: false, UpdatedAt: "2026-05-04T09:30:00Z"},
+		{ID: "t2", Author: "bob", Body: "and this?", Mine: true, UpdatedAt: "2026-05-04T09:45:00Z"},
 	}
 	authoredDetail := prDetail{
 		Checks: "passing", ReviewDecision: "APPROVED", HeadBranch: "feature-branch",
@@ -269,6 +269,8 @@ func TestPrReviewItemFields(t *testing.T) {
 		// Both threads are unresolved, but only the one whose last comment is
 		// someone else's is my turn.
 		"unresolved": "2", "unresolved_mine": "1",
+		// Only t1 is my turn, so t2's later (own) reply does not count.
+		"unresolved_mine_latest": "1777887000",
 		// The classification travels alongside its inputs so consumers do not
 		// re-derive it.
 		"bucket": "ready_to_merge", "last_action": "author",
@@ -367,7 +369,7 @@ func TestPrReviewItemCandidate(t *testing.T) {
 	// Owned-only fields stay owned-only: "ready" and "my turn" are statements
 	// about the user, and the threads themselves are follow-up work they do not
 	// have.
-	for _, k := range []string{"ready", "unresolved_mine", "unresolved_threads"} {
+	for _, k := range []string{"ready", "unresolved_mine", "unresolved_mine_latest", "unresolved_threads"} {
 		if _, ok := item.Fields[k]; ok {
 			t.Errorf("candidate should omit %q, got %q", k, item.Fields[k])
 		}
@@ -440,6 +442,31 @@ func TestReviewThreadsResponseFiltersNoise(t *testing.T) {
 	}
 	if countThreadsAwaitingMe(got) != 1 {
 		t.Errorf("countThreadsAwaitingMe = %d, want 1", countThreadsAwaitingMe(got))
+	}
+	// "answered" has the later comment, but it is mine, so it is not the latest
+	// thing awaiting me.
+	if want := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix(); latestThreadAwaitingMe(got) != want {
+		t.Errorf("latestThreadAwaitingMe = %d, want %d", latestThreadAwaitingMe(got), want)
+	}
+}
+
+// The count can hold steady while the threads awaiting me change; the latest
+// timestamp still rises, which is what lets a transition rule catch it.
+func TestLatestThreadAwaitingMeRisesWhenCountHolds(t *testing.T) {
+	before := []ReviewThread{{ID: "a", UpdatedAt: "2026-01-01T00:00:00Z"}}
+	after := []ReviewThread{{ID: "b", UpdatedAt: "2026-01-02T00:00:00Z"}}
+	if countThreadsAwaitingMe(before) != countThreadsAwaitingMe(after) {
+		t.Fatal("fixture should hold the count steady")
+	}
+	if latestThreadAwaitingMe(after) <= latestThreadAwaitingMe(before) {
+		t.Errorf("latest did not rise: %d -> %d", latestThreadAwaitingMe(before), latestThreadAwaitingMe(after))
+	}
+	if got := latestThreadAwaitingMe(nil); got != 0 {
+		t.Errorf("no threads = %d, want 0", got)
+	}
+	replied := []ReviewThread{{ID: "b", Mine: true, UpdatedAt: "2026-01-03T00:00:00Z"}}
+	if latestThreadAwaitingMe(replied) != 0 {
+		t.Error("my own reply must not count as something awaiting me")
 	}
 }
 
