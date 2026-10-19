@@ -346,8 +346,13 @@ session being connected.
 
 The per-OS installers set this up **by default in remote mode**, pointing the
 launcher at the local end of the forward. Pass `--no-tunnel` / `-NoTunnel` to opt
-out (and hit the remote URL directly), or `--ssh-host` / `-SshHost` to override
-the SSH host (it otherwise defaults to the host in the remote URL). This mirrors
+out (and hit the remote URL directly). In tunnel mode the wizard doesn't ask for
+a URL: it lists the `Host` aliases in `~/.ssh/config` (via `docent-tunnel
+-list-hosts`) in an `fzf` picker — or a numbered list without fzf — then SSHes to
+the chosen host and checks that docentd answers on its loopback port, asking for
+docentd's token only if docentd rejects the request without one
+(`docent-tunnel -check` exits `3` on a 401). Typing a name that isn't listed uses
+it as-is; `--ssh-host` / `-SshHost` skips the picker. This mirrors
 the reverse tunnel wsm owns for its own port, in the opposite direction — the two
 projects share the pattern but not code.
 

@@ -60,6 +60,8 @@ window manager itself lives in the separate wsm project -- install it from
 https://github.com/KurtPreston/wsm.
 
 On first run, asks whether docentd runs on this Mac (local) or remotely.
+Remote installs pick the SSH host from ~/.ssh/config (fzf when installed),
+check that docentd answers there, and ask for a token only if it requires one.
 Local installs build the dashboard (Vite/React) + docentd (dashboard embedded
 into the binary via -tags embed), run docent-setup when needed, and register
 its LaunchAgent. Remote installs point hooks/launcher at the remote docentd
@@ -78,7 +80,7 @@ Options:
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
   --ssh-host HOST   SSH host for the docent-tunnel forward to a remote docentd
-                    (default: the host in the remote URL). May be an
+                    (default: picked from ~/.ssh/config). May be an
                     ~/.ssh/config alias: the tunnel honors its HostName, User,
                     IdentityFile, and ProxyCommand/ProxyJump (e.g. Coder).
   --ssh-identity P  SSH private key for the forward (default: the IdentityFile
@@ -90,9 +92,10 @@ Options:
 Environment:
   DOCENT_BIN_DIR       Same as --bin-dir
   DOCENT_CONFIG_DIR    Config root (default: ~/.config/docent)
-  DOCENTD_URL          Remote docentd base URL (skips local docentd install)
+  DOCENTD_URL          Remote docentd base URL (implies remote; with --no-tunnel,
+                       the URL to connect to directly)
   DOCENTD_TOKEN        Bearer token for remote docentd / hooks
-  DOCENT_TUNNEL_HOST   Same as --ssh-host (implies --tunnel)
+  DOCENT_TUNNEL_HOST   Same as --ssh-host (implies remote mode)
   DOCENT_TUNNEL_IDENTITY  Same as --ssh-identity
   DOCENT_NODE          Node binary for the dashboard build (default: node; needs >= 18)
   DOCENT_NPM           npm binary (default: npm)
@@ -195,10 +198,10 @@ read_saved_remote_state() {
 offer_reuse_config() {
   local ans
   read_saved_remote_state
-  if [ -n "$SAVED_URL" ]; then
+  if [ -n "$SAVED_URL" ] || [ -n "$SAVED_SSH_HOST" ]; then
     echo ""
     echo "Found existing docent config (remote docentd):"
-    echo "  URL    $SAVED_URL"
+    if [ "$SAVED_USE_TUNNEL" != 1 ]; then echo "  URL    $SAVED_URL"; fi
     if [ -n "$SAVED_TOKEN" ]; then echo "  token  set"; else echo "  token  (none)"; fi
     if [ "$SAVED_USE_TUNNEL" = 1 ] && [ -n "$SAVED_SSH_HOST" ]; then echo "  tunnel via $SAVED_SSH_HOST"; fi
     printf "Reuse this config? [Y/n]: "
@@ -225,7 +228,7 @@ offer_reuse_config() {
 }
 
 resolve_docentd_location() {
-  if [ -n "$DOCENTD_URL" ]; then
+  if [ -n "$DOCENTD_URL" ] || [ -n "$SSH_HOST" ]; then
     DOCENTD_MODE=remote
     return 0
   fi
@@ -247,6 +250,8 @@ resolve_docentd_location() {
   esac
 }
 
+# prompt_remote_endpoint asks for the docentd URL + token when connecting
+# directly (--no-tunnel); tunnel mode picks an SSH host instead.
 prompt_remote_endpoint() {
   if [ -n "$DOCENTD_URL" ]; then
     return 0
@@ -256,7 +261,7 @@ prompt_remote_endpoint() {
     DOCENTD_TOKEN="${DOCENTD_TOKEN:-dry-run-token}"
     return 0
   fi
-  printf "Remote docentd base URL (e.g. https://ubuntu.example:39787): "
+  printf "Remote docentd base URL (e.g. http://devbox:39787): "
   read -r DOCENTD_URL
   DOCENTD_URL="${DOCENTD_URL%/}"
   if [ -z "$DOCENTD_URL" ]; then
@@ -280,26 +285,143 @@ url_host() {
 
 # resolve_tunnel sets up the launcher/dashboard to reach a remote docentd through
 # a local SSH forward (docent-tunnel). This is the default in remote mode; pass
-# --no-tunnel to hit the remote URL directly instead. It sets USE_TUNNEL to 1/0
-# and, when 1, fills SSH_HOST (defaulting to the host in the remote URL).
+# --no-tunnel to hit a URL directly instead. Interactive runs pick the SSH host
+# from ~/.ssh/config (fzf when available) and check docentd answers there,
+# asking for a token only if docentd rejects the request without one.
 resolve_tunnel() {
   if [ "$USE_TUNNEL" = 0 ]; then
     return 0
   fi
   USE_TUNNEL=1
-
-  local raw_host="$SSH_HOST"
-  [ -n "$raw_host" ] || raw_host="$(url_host "$DOCENTD_URL")"
-
-  if [ "$DRY_RUN" -eq 0 ] && [ -t 0 ] && [ -z "$SSH_HOST" ]; then
-    local host_in
-    printf "SSH host or ~/.ssh/config alias for the dev box [%s]: " "$raw_host"
-    read -r host_in
-    raw_host="${host_in:-$raw_host}"
+  if [ -z "$SSH_HOST" ] && [ -n "$DOCENTD_URL" ]; then
+    SSH_HOST="$(url_host "$DOCENTD_URL")"
   fi
 
-  # Keep the alias as-is: docent-tunnel resolves ssh_config itself (ssh -G).
-  SSH_HOST="$raw_host"
+  # Dry-run and non-interactive runs take the host as given.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    SSH_HOST="${SSH_HOST:-devbox.example.invalid}"
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    if [ -z "$SSH_HOST" ]; then
+      echo "an SSH host is required for docent-tunnel (pass --ssh-host, or --no-tunnel with DOCENTD_URL)" >&2
+      exit 2
+    fi
+    return 0
+  fi
+
+  # Pick a host (unless one is set) and retry until docentd answers there.
+  local choice
+  while :; do
+    [ -n "$SSH_HOST" ] || pick_ssh_host
+    if check_ssh_host; then
+      return 0
+    fi
+    echo ""
+    echo "Could not reach docentd on $SSH_HOST."
+    echo "  1) Pick another host [default]"
+    echo "  2) Continue anyway (checked again after the build)"
+    echo "  3) Abort"
+    printf "Choice [1]: "
+    read -r choice
+    case "${choice:-1}" in
+      2) return 0 ;;
+      3) echo "aborted." >&2; exit 1 ;;
+      *) SSH_HOST="" ;;
+    esac
+  done
+}
+
+# ensure_probe_tunnel sets PROBE_TUNNEL_BIN to a docent-tunnel binary for the
+# wizard's host listing and checks: a fresh temp build, or the installed one
+# with --no-build. Returns non-zero when neither is available.
+PROBE_TUNNEL_BIN=""
+ensure_probe_tunnel() {
+  [ -n "$PROBE_TUNNEL_BIN" ] && return 0
+  if [ "$SKIP_BUILD" -eq 1 ]; then
+    [ -x "$BIN_DIR/docent-tunnel" ] || return 1
+    PROBE_TUNNEL_BIN="$BIN_DIR/docent-tunnel"
+    return 0
+  fi
+  command -v go >/dev/null 2>&1 || return 1
+  local dir
+  dir="$(mktemp -d)" || return 1
+  trap 'rm -rf "'"$dir"'"' EXIT
+  log "building docent-tunnel (for host discovery)"
+  (cd "$ROOT" && go build -o "$dir/docent-tunnel" ./apps/docent-tunnel) || return 1
+  PROBE_TUNNEL_BIN="$dir/docent-tunnel"
+}
+
+# pick_ssh_host sets SSH_HOST from the Host aliases in ~/.ssh/config, using fzf
+# when installed and a numbered list otherwise. Typing a name that isn't listed
+# (or listing failing) falls back to that typed host.
+pick_ssh_host() {
+  local list="" sel query i n alias hn
+  if ensure_probe_tunnel; then
+    list="$("$PROBE_TUNNEL_BIN" -list-hosts 2>/dev/null)"
+  fi
+  if [ -z "$list" ]; then
+    printf "SSH host or ~/.ssh/config alias of the machine running docentd: "
+    read -r SSH_HOST
+    [ -n "$SSH_HOST" ] || { echo "an SSH host is required" >&2; exit 2; }
+    return 0
+  fi
+
+  # fzf: first output line is the typed query, the second the selection.
+  if command -v fzf >/dev/null 2>&1; then
+    sel="$(printf '%s\n' "$list" | fzf --height=40% --reverse --print-query \
+      --prompt='docentd host> ' --delimiter='\t' \
+      --header='Pick the SSH host running docentd (Enter on no match uses what you typed)')"
+    query="$(printf '%s\n' "$sel" | sed -n 1p)"
+    sel="$(printf '%s\n' "$sel" | sed -n 2p)"
+    SSH_HOST="${sel%%$'\t'*}"
+    [ -n "$SSH_HOST" ] || SSH_HOST="$query"
+  else
+    # Numbered fallback: accept a number or a typed host name.
+    local -a aliases=()
+    echo ""
+    echo "SSH hosts in ~/.ssh/config:"
+    while IFS=$'\t' read -r alias hn; do
+      aliases+=("$alias")
+      printf '  %d) %s%s\n' "${#aliases[@]}" "$alias" "${hn:+  ($hn)}"
+    done <<<"$list"
+    printf "Host running docentd (number or name): "
+    read -r n
+    if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "${#aliases[@]}" ]; then
+      i=$((n - 1))
+      SSH_HOST="${aliases[$i]}"
+    else
+      SSH_HOST="$n"
+    fi
+  fi
+  [ -n "$SSH_HOST" ] || { echo "no SSH host selected" >&2; exit 2; }
+}
+
+# check_ssh_host runs `docent-tunnel -check` against SSH_HOST. When docentd
+# rejects the request for a missing/wrong token (exit 3), it prompts for one and
+# retries. Returns non-zero when docentd isn't reachable; skips (returns 0) when
+# no docent-tunnel binary is available, leaving the post-build validation.
+check_ssh_host() {
+  ensure_probe_tunnel || return 0
+  local rc token_in
+  local -a args=(-check -host "$SSH_HOST" -remote "127.0.0.1:$DOCENT_PORT")
+  [ -n "$SSH_IDENTITY" ] && args+=(-identity "$SSH_IDENTITY")
+  log "checking for docentd on $SSH_HOST"
+  while :; do
+    DOCENT_TUNNEL_TOKEN="$DOCENTD_TOKEN" "$PROBE_TUNNEL_BIN" "${args[@]}"
+    rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      3)
+        printf "docentd on %s requires its token (docentd.yaml token:): " "$SSH_HOST"
+        read -rs token_in
+        echo ""
+        [ -n "$token_in" ] || return 1
+        DOCENTD_TOKEN="$token_in"
+        ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 # remote_connection_ok returns 0 when the launcher can actually reach the remote
@@ -333,10 +455,10 @@ remote_connection_ok() {
 # reprompt_tunnel / reprompt_direct re-collect connection details after a failed
 # validation attempt.
 reprompt_tunnel() {
-  local host_in ident_in token_in
-  printf "SSH host or ~/.ssh/config alias for the dev box [%s]: " "$SSH_HOST"
-  read -r host_in
-  [ -n "$host_in" ] && SSH_HOST="$host_in"
+  local ident_in token_in
+  # Re-pick the host from ~/.ssh/config, then optional identity/token overrides
+  SSH_HOST=""
+  pick_ssh_host
   printf "SSH identity key [%s]: " "${SSH_IDENTITY:-from ~/.ssh/config}"
   read -r ident_in
   [ -n "$ident_in" ] && SSH_IDENTITY="$ident_in"
@@ -405,7 +527,7 @@ write_remote_config() {
   if [ "$DRY_RUN" -eq 1 ]; then
     run printf '%s\n' "write DOCENT_URL=$sessions_url / DOCENT_TOKEN to $env_file"
     run printf '%s\n' "write $CONFIG_DIR/launcher.lua (url=$sessions_url)"
-    run printf '%s\n' "write $REMOTE_STATE (real endpoint $DOCENTD_URL for reuse)"
+    run printf '%s\n' "write $REMOTE_STATE (saved connection details for reuse)"
     return 0
   fi
   touch "$env_file"
@@ -466,8 +588,11 @@ run_docent_setup_if_needed() {
 
 resolve_docentd_location
 if [ "$DOCENTD_MODE" = remote ]; then
-  prompt_remote_endpoint
-  resolve_tunnel
+  if [ "$USE_TUNNEL" = 0 ]; then
+    prompt_remote_endpoint
+  else
+    resolve_tunnel
+  fi
   # write_remote_config is deferred until after the tunnel binary is built and
   # the connection is validated (see below), so we never persist broken config.
 else
@@ -925,7 +1050,7 @@ else
     cat <<EOF
 
 Installed (remote docentd, via docent-tunnel):
-  docentd           $DOCENTD_URL  (remote — reached through the local forward)
+  docentd           127.0.0.1:$DOCENT_PORT on $SSH_HOST  (remote — reached through the local forward)
   docent-tunnel     $DOCENT_TUNNEL_BIN  (127.0.0.1:$DOCENT_PORT -> $SSH_HOST:127.0.0.1:$DOCENT_PORT)
   launcher/dash     http://127.0.0.1:$DOCENT_PORT/
   config            $CONFIG_DIR/

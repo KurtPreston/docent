@@ -29,6 +29,10 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// ErrUnauthorized marks a Check that reached docentd but had its bearer token
+// rejected (missing or wrong), so callers can prompt for a token.
+var ErrUnauthorized = errors.New("docentd rejected the bearer token")
+
 // Config describes how to dial the dev box and which ports to bridge.
 type Config struct {
 	Host           string // SSH host of the dev box (required); an ssh_config alias once resolved
@@ -177,7 +181,7 @@ func probe(ctx context.Context, client *http.Client, path, token string) error {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("GET %s returned 401 Unauthorized — the bearer token is missing or incorrect", path)
+		return fmt.Errorf("GET %s returned 401 Unauthorized: %w (missing or incorrect)", path, ErrUnauthorized)
 	case resp.StatusCode >= 400:
 		return fmt.Errorf("GET %s returned unexpected status %s", path, resp.Status)
 	}

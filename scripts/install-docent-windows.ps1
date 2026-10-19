@@ -39,8 +39,8 @@ Use a remote docentd at this base URL (skips the prompt + local build).
 Bearer token for the remote docentd (optional).
 
 .PARAMETER SshHost
-SSH host for the docent-tunnel forward to a remote docentd (default: the host
-parsed from -RemoteUrl). May be an ~/.ssh/config alias: the tunnel honors its
+SSH host for the docent-tunnel forward to a remote docentd (default: picked
+from ~/.ssh/config, else the host in -RemoteUrl). May be an ~/.ssh/config alias: the tunnel honors its
 HostName, User, IdentityFile, and ProxyCommand/ProxyJump (e.g. Coder). Remote
 mode uses the forward unless -NoTunnel.
 
@@ -187,13 +187,78 @@ function Test-NodeOk {
 # can reuse them instead of forcing you to retype the URL and token.
 function Get-SavedRemoteConfig {
     param([string]$EnvFile)
-    $result = [pscustomobject]@{ Url = ''; Token = '' }
+    $result = [pscustomobject]@{ Url = ''; Token = ''; TunnelHost = '' }
     if (-not (Test-Path -LiteralPath $EnvFile)) { return $result }
     foreach ($line in @(Get-Content -LiteralPath $EnvFile)) {
         if ($line -match '^\s*DOCENT_URL=(.*)$') { $result.Url = $Matches[1].Trim() }
         elseif ($line -match '^\s*DOCENT_TOKEN=(.*)$') { $result.Token = $Matches[1].Trim() }
+        elseif ($line -match '^\s*DOCENT_TUNNEL_HOST=(.*)$') { $result.TunnelHost = $Matches[1].Trim() }
     }
     return $result
+}
+
+# --- SSH host picker -----------------------------------------------------------
+# Get-ProbeTunnel returns a docent-tunnel.exe usable before the main build (for
+# host discovery): the installed one with -NoBuild, else a temp build. $null if
+# neither is available (the picker then falls back to a typed host).
+$script:ProbeTunnel = $null
+function Get-ProbeTunnel {
+    if ($script:ProbeTunnel) { return $script:ProbeTunnel }
+    if ($NoBuild) {
+        if (Test-Path -LiteralPath $DocentTunnelBin) { $script:ProbeTunnel = $DocentTunnelBin }
+        return $script:ProbeTunnel
+    }
+    if (-not (Get-Command go -ErrorAction SilentlyContinue)) { return $null }
+    # Build into a temp dir that is removed when the installer exits
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ("docent-tunnel-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $exe = Join-Path $dir 'docent-tunnel.exe'
+    Log "building docent-tunnel (for host discovery)"
+    Push-Location $Root
+    try { & go build -o $exe ./apps/docent-tunnel } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) { return $null }
+    Register-EngineEvent PowerShell.Exiting -MessageData $dir -Action { Remove-Item -Recurse -Force -LiteralPath $Event.MessageData -ErrorAction SilentlyContinue } | Out-Null
+    $script:ProbeTunnel = $exe
+    return $exe
+}
+
+# Select-SshHost returns the SSH host running docentd, picked from the Host
+# aliases in ~/.ssh/config (fzf when installed, else a numbered list). Typing a
+# name that isn't listed uses it as-is.
+function Select-SshHost {
+    $lines = @()
+    $bin = Get-ProbeTunnel
+    if ($bin) { $lines = @(& $bin -list-hosts 2>$null | Where-Object { $_ }) }
+    if (-not $lines) {
+        $h = Read-Host "SSH host or ~/.ssh/config alias of the machine running docentd"
+        if (-not $h) { throw "an SSH host is required" }
+        return $h
+    }
+
+    # fzf: first output line is the typed query, the second the selection
+    if (Get-Command fzf -ErrorAction SilentlyContinue) {
+        $out = @($lines | & fzf --height=40% --reverse --print-query --prompt='docentd host> ' `
+                --delimiter="`t" --header='Pick the SSH host running docentd (Enter on no match uses what you typed)')
+        $h = if ($out.Count -ge 2 -and $out[1]) { ($out[1] -split "`t")[0] } elseif ($out.Count -ge 1) { $out[0] } else { '' }
+    }
+    else {
+        # Numbered fallback: accept a number or a typed host name
+        Write-Host ""
+        Write-Host "SSH hosts in ~/.ssh/config:"
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $parts = $lines[$i] -split "`t"
+            $hn = if ($parts.Count -gt 1 -and $parts[1]) { "  ($($parts[1]))" } else { '' }
+            Write-Host ("  {0}) {1}{2}" -f ($i + 1), $parts[0], $hn)
+        }
+        $n = Read-Host "Host running docentd (number or name)"
+        $idx = 0
+        if ([int]::TryParse($n, [ref]$idx) -and $idx -ge 1 -and $idx -le $lines.Count) {
+            $h = ($lines[$idx - 1] -split "`t")[0]
+        }
+        else { $h = $n }
+    }
+    if (-not $h) { throw "no SSH host selected" }
+    return $h
 }
 
 # --- resolve docentd location ------------------------------------------------
@@ -202,7 +267,7 @@ $Sessions = $null
 $UseTunnel = $false
 $keptExisting = $false
 
-if ($RemoteUrl) {
+if ($RemoteUrl -or $SshHost) {
     $Mode = 'remote'
     $RemoteUrl = $RemoteUrl.TrimEnd('/')
 }
@@ -217,7 +282,12 @@ else {
     $haveLocal = Test-Path -LiteralPath $ConfigPath
     if ($saved.Url -or $haveLocal) {
         Write-Host ""
-        if ($saved.Url) {
+        if ($saved.TunnelHost) {
+            Write-Host "Found existing docent config (remote docentd):"
+            Write-Host ("  tunnel via {0}" -f $saved.TunnelHost)
+            Write-Host ("  token  {0}" -f $(if ($saved.Token) { 'set' } else { '(none)' }))
+        }
+        elseif ($saved.Url) {
             Write-Host "Found existing docent config (remote docentd):"
             Write-Host ("  URL    {0}" -f $saved.Url)
             Write-Host ("  token  {0}" -f $(if ($saved.Token) { 'set' } else { '(none)' }))
@@ -227,7 +297,13 @@ else {
         }
         $keep = Read-Host "Reuse this config? [Y/n]"
         if ($keep -notin 'n', 'N', 'no', 'No') {
-            if ($saved.Url) {
+            if ($saved.TunnelHost) {
+                $Mode = 'remote'
+                if (-not $SshHost) { $SshHost = $saved.TunnelHost }
+                if (-not $Token) { $Token = $saved.Token }
+                $keptExisting = $true
+            }
+            elseif ($saved.Url) {
                 $Mode = 'remote'
                 $RemoteUrl = $saved.Url.TrimEnd('/')
                 if (-not $Token) { $Token = $saved.Token }
@@ -249,7 +325,7 @@ else {
     }
 }
 
-if ($Mode -eq 'remote') {
+if ($Mode -eq 'remote' -and $NoTunnel) {
     if (-not $RemoteUrl) {
         $RemoteUrl = (Read-Host "Remote docentd base URL (e.g. http://desktop:39787)").TrimEnd('/')
         if (-not $RemoteUrl) { throw "remote docentd URL is required" }
@@ -258,7 +334,9 @@ if ($Mode -eq 'remote') {
     if (-not $Token -and -not $keptExisting) {
         $Token = Read-Host "Bearer token for $RemoteUrl (blank if none)"
     }
+}
 
+if ($Mode -eq 'remote') {
     # Remote mode reaches docentd through a local SSH forward (docent-tunnel) by
     # default; -NoTunnel opts out and points the launcher at the remote URL.
     # The actual connection is verified later (Invoke-RemoteValidation), after
@@ -267,15 +345,13 @@ if ($Mode -eq 'remote') {
     if ($UseTunnel) {
         $rawHost = $SshHost
         if (-not $rawHost -and $RemoteUrl -match '^[a-zA-Z]+://([^:/]+)') { $rawHost = $Matches[1] }
-        if (-not $DryRun -and -not $SshHost) {
-            $inp = Read-Host "SSH host or ~/.ssh/config alias for the dev box [$rawHost]"
-            if ($inp) { $rawHost = $inp }
-        }
+        if ($DryRun -and -not $rawHost) { $rawHost = 'devbox.example.invalid' }
+        if (-not $rawHost -and -not [Console]::IsInputRedirected) { $rawHost = Select-SshHost }
         if (-not $rawHost) { throw "an SSH host is required for docent-tunnel (pass -SshHost, or -NoTunnel to skip)" }
         # Keep the alias as-is: docent-tunnel resolves ssh_config itself (ssh -G).
         $SshHost = $rawHost
         $Sessions = "http://127.0.0.1:$Port"
-        Log "reaching remote docentd $RemoteUrl through docent-tunnel -> $SshHost (local 127.0.0.1:$Port)"
+        Log "reaching remote docentd through docent-tunnel -> $SshHost (local 127.0.0.1:$Port)"
     }
     else {
         $Sessions = $RemoteUrl
@@ -402,8 +478,16 @@ function Test-RemoteConnection {
         if ($SshIdentity) { $checkArgs += @('-identity', $SshIdentity) }
         $prev = $env:DOCENT_TUNNEL_TOKEN
         $env:DOCENT_TUNNEL_TOKEN = $Token
-        try { & $DocentTunnelBin @checkArgs } finally { $env:DOCENT_TUNNEL_TOKEN = $prev }
-        return ($LASTEXITCODE -eq 0)
+        while ($true) {
+            $env:DOCENT_TUNNEL_TOKEN = $script:Token
+            try { & $DocentTunnelBin @checkArgs; $rc = $LASTEXITCODE } finally { $env:DOCENT_TUNNEL_TOKEN = $prev }
+            # Exit code 3: docentd wants a (different) token; ask and retry
+            if ($rc -ne 3 -or [Console]::IsInputRedirected) { return ($rc -eq 0) }
+            $t = Read-Host "docentd on $SshHost requires its token (docentd.yaml token:)" -AsSecureString
+            $t = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($t))
+            if (-not $t) { return $false }
+            $script:Token = $t
+        }
     }
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "$RemoteUrl/health" -TimeoutSec 8 | Out-Null
@@ -460,8 +544,7 @@ function Invoke-RemoteValidation {
             '4' { Write-Error "aborted."; exit 1 }
             default {
                 if ($script:UseTunnel) {
-                    $h = Read-Host "SSH host or ~/.ssh/config alias for the dev box [$script:SshHost]"
-                    if ($h) { $script:SshHost = $h }
+                    $script:SshHost = Select-SshHost
                     $idDefault = if ($script:SshIdentity) { $script:SshIdentity } else { 'from ~/.ssh/config' }
                     $i = Read-Host "SSH identity key [$idDefault]"
                     if ($i) { $script:SshIdentity = $i }
@@ -537,7 +620,8 @@ $envFile = Join-Path $ConfigDir '.env'
 if (-not $DryRun) {
     if (-not (Test-Path -LiteralPath $envFile)) { New-Item -ItemType File -Force -Path $envFile | Out-Null }
     if ($Mode -eq 'remote') {
-        Set-EnvLine -Key 'DOCENT_URL' -Value $RemoteUrl -File $envFile
+        Set-EnvLine -Key 'DOCENT_URL' -Value $Sessions -File $envFile
+        Set-EnvLine -Key 'DOCENT_TUNNEL_HOST' -Value $(if ($UseTunnel) { $SshHost } else { '' }) -File $envFile
         if ($Token) { Set-EnvLine -Key 'DOCENT_TOKEN' -Value $Token -File $envFile }
     }
 }
@@ -1011,7 +1095,7 @@ if ($Mode -eq 'local') {
 }
 elseif ($UseTunnel) {
     Write-Host "  docent-tunnel           $DocentTunnelBin  (127.0.0.1:$Port -> $SshHost`:127.0.0.1:$Port)"
-    Write-Host "  docentd                 $RemoteUrl  (remote - reached via docent-tunnel)"
+    Write-Host "  docentd                 127.0.0.1:$Port on $SshHost  (remote - reached via docent-tunnel)"
     Write-Host "  dashboard               http://127.0.0.1:$Port/"
 }
 else {
