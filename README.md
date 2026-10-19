@@ -212,7 +212,8 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   by default, and Cursor hooks when Cursor.app is installed (`--no-hooks` /
   `--no-hammerspoon` to skip). In remote mode it also installs `docent-tunnel` as a
   `launchd` `KeepAlive` agent by default (`--no-tunnel` to hit the remote URL
-  directly; `--ssh-host` to override the SSH host). The tunnel honors `~/.ssh/config`
+  directly). The wizard picks the SSH host from `~/.ssh/config` (fzf when installed;
+  `--ssh-host` to skip) and checks that docentd answers there. The tunnel honors `~/.ssh/config`
   aliases (including `ProxyCommand`, e.g. Coder workspaces), and the wizard
   verifies the connection (including the token) before finishing. Install the window manager from wsm separately.
 - **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
@@ -220,7 +221,8 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   (at-logon + a 1-minute watchdog), and optionally `docentd` locally. Prompts
   whether `docentd` runs locally or on a remote host; in remote mode it also
   installs `docent-tunnel` as its own watchdog task by default (`-NoTunnel` to opt
-  out; `-SshHost` to override the SSH host). The tunnel honors `~/.ssh/config`
+  out). The wizard picks the SSH host from `~/.ssh/config` (fzf when installed;
+  `-SshHost` to skip). The tunnel honors `~/.ssh/config`
   aliases (including `ProxyCommand`), and the wizard verifies the connection (including the token) before finishing.
   Install the window manager from wsm separately.
 
