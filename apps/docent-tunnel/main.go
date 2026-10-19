@@ -14,10 +14,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
@@ -26,7 +29,7 @@ import (
 
 func main() {
 	var cfg forward.Config
-	var check, useSSHConfig bool
+	var check, useSSHConfig, listHosts bool
 	var token, checkPath string
 	flag.StringVar(&cfg.Host, "host", env("DOCENT_TUNNEL_HOST", ""), "SSH host or ~/.ssh/config alias of the dev box running docentd (required)")
 	flag.IntVar(&cfg.Port, "port", envInt("DOCENT_TUNNEL_SSH_PORT", 0), "SSH port on the dev box (default: ssh_config, else 22)")
@@ -41,7 +44,16 @@ func main() {
 	flag.BoolVar(&check, "check", false, "run a one-shot connectivity check (SSH + remote docentd) and exit non-zero on failure")
 	flag.StringVar(&token, "token", env("DOCENT_TUNNEL_TOKEN", ""), "bearer token for the -check authed request (DOCENT_TUNNEL_TOKEN also works)")
 	flag.StringVar(&checkPath, "check-path", "/api/config", "authed docentd path to probe during -check")
+	flag.BoolVar(&listHosts, "list-hosts", false, "print the concrete Host aliases in ~/.ssh/config (alias<TAB>hostname per line) and exit")
 	flag.Parse()
+
+	// -list-hosts feeds the installers' SSH host picker.
+	if listHosts {
+		if err := printSSHHosts(); err != nil {
+			log.Fatalf("docent-tunnel: list hosts: %v", err)
+		}
+		return
+	}
 
 	if cfg.Host == "" {
 		log.Fatal("docent-tunnel: -host is required (the dev box running docentd; DOCENT_TUNNEL_HOST also works)")
@@ -61,6 +73,10 @@ func main() {
 	if check {
 		if err := forward.Check(context.Background(), cfg, token, checkPath); err != nil {
 			log.Printf("docent-tunnel: check failed: %v", err)
+			// Exit 3 means "reached docentd, token rejected" so installers can ask for one.
+			if errors.Is(err, forward.ErrUnauthorized) {
+				os.Exit(3)
+			}
 			os.Exit(1)
 		}
 		log.Printf("docent-tunnel: check ok — %s@%s:%d reaches docentd at %s", cfg.User, cfg.Host, cfg.Port, cfg.RemoteAddr)
@@ -80,6 +96,23 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// printSSHHosts prints each concrete Host alias in ~/.ssh/config (and its
+// Includes) as "alias<TAB>hostname".
+func printSSHHosts() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	hosts, err := forward.ListSSHHosts(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return err
+	}
+	for _, h := range hosts {
+		fmt.Printf("%s\t%s\n", h.Alias, h.HostName)
+	}
+	return nil
 }
 
 func envBool(key string, def bool) bool {
