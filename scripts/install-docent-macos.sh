@@ -78,11 +78,11 @@ Options:
   --no-build        Skip go build (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
   --ssh-host HOST   SSH host for the docent-tunnel forward to a remote docentd
-                    (default: the host in the remote URL). Aliases from
-                    ~/.ssh/config are resolved to their real HostName via
-                    `ssh -G`, since the tunnel does not read ssh_config.
+                    (default: the host in the remote URL). May be an
+                    ~/.ssh/config alias: the tunnel honors its HostName, User,
+                    IdentityFile, and ProxyCommand/ProxyJump (e.g. Coder).
   --ssh-identity P  SSH private key for the forward (default: the IdentityFile
-                    from `ssh -G`, else ssh-agent)
+                    from ~/.ssh/config, else ssh-agent)
   --no-tunnel       Don't set up the SSH forward; hit the remote URL directly
   --dry-run         Print actions without changing the system
   -h, --help        Show this help
@@ -278,41 +278,6 @@ url_host() {
   printf '%s' "$u"
 }
 
-# expand_tilde expands a leading ~ / ~/ to $HOME.
-expand_tilde() {
-  case "$1" in
-    "~") printf '%s' "$HOME" ;;
-    "~/"*) printf '%s/%s' "$HOME" "${1#"~/"}" ;;
-    *) printf '%s' "$1" ;;
-  esac
-}
-
-# ssh_effective resolves a host through `ssh -G` and prints "HOSTNAME\tIDENTITY".
-# docent-tunnel dials the host directly and does NOT read ~/.ssh/config, so an
-# SSH alias like `desktop` must be turned into its real HostName here (and its
-# configured IdentityFile picked up) or the tunnel can never connect. Falls back
-# to the input host and an empty identity when ssh is unavailable.
-ssh_effective() {
-  local host="$1" key val rhost="" ident="" expanded
-  if ! command -v ssh >/dev/null 2>&1; then
-    printf '%s\t%s\n' "$host" ""
-    return 0
-  fi
-  while IFS=' ' read -r key val; do
-    case "$key" in
-      hostname) [ -n "$val" ] && rhost="$val" ;;
-      identityfile)
-        if [ -z "$ident" ]; then
-          expanded="$(expand_tilde "$val")"
-          [ -f "$expanded" ] && ident="$expanded"
-        fi
-        ;;
-    esac
-  done < <(ssh -G "$host" 2>/dev/null)
-  [ -n "$rhost" ] || rhost="$host"
-  printf '%s\t%s\n' "$rhost" "$ident"
-}
-
 # resolve_tunnel sets up the launcher/dashboard to reach a remote docentd through
 # a local SSH forward (docent-tunnel). This is the default in remote mode; pass
 # --no-tunnel to hit the remote URL directly instead. It sets USE_TUNNEL to 1/0
@@ -328,19 +293,13 @@ resolve_tunnel() {
 
   if [ "$DRY_RUN" -eq 0 ] && [ -t 0 ] && [ -z "$SSH_HOST" ]; then
     local host_in
-    printf "SSH host for the dev box [%s]: " "$raw_host"
+    printf "SSH host or ~/.ssh/config alias for the dev box [%s]: " "$raw_host"
     read -r host_in
     raw_host="${host_in:-$raw_host}"
   fi
 
-  # Turn SSH aliases into the real hostname/identity — the tunnel can't use ssh_config.
-  local resolved ident
-  IFS=$'\t' read -r resolved ident < <(ssh_effective "$raw_host")
-  if [ "$resolved" != "$raw_host" ]; then
-    log "resolved SSH host $raw_host -> $resolved (via ssh -G)"
-  fi
-  SSH_HOST="$resolved"
-  [ -n "$SSH_IDENTITY" ] || SSH_IDENTITY="$ident"
+  # Keep the alias as-is: docent-tunnel resolves ssh_config itself (ssh -G).
+  SSH_HOST="$raw_host"
 }
 
 # remote_connection_ok returns 0 when the launcher can actually reach the remote
@@ -372,17 +331,15 @@ remote_connection_ok() {
 }
 
 # reprompt_tunnel / reprompt_direct re-collect connection details after a failed
-# validation attempt, re-resolving aliases so a corrected host takes effect.
+# validation attempt.
 reprompt_tunnel() {
-  local host_in ident_in token_in resolved ident
-  printf "SSH host for the dev box [%s]: " "$SSH_HOST"
+  local host_in ident_in token_in
+  printf "SSH host or ~/.ssh/config alias for the dev box [%s]: " "$SSH_HOST"
   read -r host_in
   [ -n "$host_in" ] && SSH_HOST="$host_in"
-  IFS=$'\t' read -r resolved ident < <(ssh_effective "$SSH_HOST")
-  SSH_HOST="$resolved"
-  printf "SSH identity key [%s]: " "${SSH_IDENTITY:-${ident:-ssh-agent}}"
+  printf "SSH identity key [%s]: " "${SSH_IDENTITY:-from ~/.ssh/config}"
   read -r ident_in
-  SSH_IDENTITY="${ident_in:-${SSH_IDENTITY:-$ident}}"
+  [ -n "$ident_in" ] && SSH_IDENTITY="$ident_in"
   printf "Bearer token [%s]: " "$([ -n "$DOCENTD_TOKEN" ] && echo 'keep current' || echo none)"
   read -r token_in
   [ -n "$token_in" ] && DOCENTD_TOKEN="$token_in"

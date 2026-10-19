@@ -351,10 +351,16 @@ the SSH host (it otherwise defaults to the host in the remote URL). This mirrors
 the reverse tunnel wsm owns for its own port, in the opposite direction — the two
 projects share the pattern but not code.
 
-Because `docent-tunnel` dials the host directly with Go's SSH library, it does
-**not** read `~/.ssh/config`. The installers therefore run `ssh -G <host>` to
-resolve an SSH alias (e.g. `desktop`) to its real `HostName` and to pick up the
-configured `IdentityFile`, then pass those to the tunnel. Before finishing, the
+`docent-tunnel` honors `~/.ssh/config`: at startup it runs `ssh -G <host>` and
+adopts the alias's `HostName`, `Port`, `User`, `IdentityFile`,
+`UserKnownHostsFile`, and `ProxyCommand` (or `ProxyJump`), so `-host desktop`
+connects the same way `ssh desktop` does. That includes hosts only reachable
+through a proxy, such as a Coder workspace (`coder ssh --stdio`); the tunnel runs
+the proxy itself, so no separate port-forward is needed. Explicit flags
+(`-port`, `-user`, `-identity`, `-known-hosts`, `-proxy-command`) override the
+resolved values, and `-ssh-config=false` skips the lookup. Host keys are always
+verified against `known_hosts`. The installers pass the alias through as-is.
+Before finishing, the
 wizard verifies the connection end-to-end (a one-shot `docent-tunnel -check` that
 performs the same SSH dial + `known_hosts` check + an authenticated request,
 including the bearer token) and will not complete until it succeeds — so a bad
