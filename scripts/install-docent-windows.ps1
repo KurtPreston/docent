@@ -40,13 +40,13 @@ Bearer token for the remote docentd (optional).
 
 .PARAMETER SshHost
 SSH host for the docent-tunnel forward to a remote docentd (default: the host
-parsed from -RemoteUrl). Aliases from ~/.ssh/config are resolved to their real
-HostName via `ssh -G`, since the tunnel does not read ssh_config. Remote mode
-uses the forward unless -NoTunnel.
+parsed from -RemoteUrl). May be an ~/.ssh/config alias: the tunnel honors its
+HostName, User, IdentityFile, and ProxyCommand/ProxyJump (e.g. Coder). Remote
+mode uses the forward unless -NoTunnel.
 
 .PARAMETER SshIdentity
 SSH private key for the docent-tunnel forward (default: the IdentityFile from
-`ssh -G`, otherwise ssh-agent is used).
+~/.ssh/config, otherwise ssh-agent is used).
 
 .PARAMETER NoTunnel
 Don't set up the SSH forward; point the launcher directly at the remote URL.
@@ -196,31 +196,6 @@ function Get-SavedRemoteConfig {
     return $result
 }
 
-# --- ssh alias resolution ----------------------------------------------------
-# docent-tunnel dials the host directly and does NOT read ~/.ssh/config, so an
-# SSH alias like `desktop` must be turned into its real HostName here (and its
-# configured IdentityFile picked up) via `ssh -G` or the tunnel can't connect.
-# Falls back to the input host and empty identity when ssh is unavailable.
-function Resolve-SshEffective {
-    param([string]$SshHostArg)
-    $result = [pscustomobject]@{ HostName = $SshHostArg; Identity = '' }
-    if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) { return $result }
-    $lines = try { & ssh -G $SshHostArg 2>$null } catch { @() }
-    foreach ($line in $lines) {
-        if ($line -match '^hostname\s+(.+)$') {
-            $h = $Matches[1].Trim()
-            if ($h) { $result.HostName = $h }
-        }
-        elseif ($line -match '^identityfile\s+(.+)$' -and -not $result.Identity) {
-            $p = $Matches[1].Trim()
-            if ($p.StartsWith('~')) { $p = Join-Path $HOME ($p.Substring(1).TrimStart('/', '\')) }
-            $p = [Environment]::ExpandEnvironmentVariables($p)
-            if (Test-Path -LiteralPath $p) { $result.Identity = $p }
-        }
-    }
-    return $result
-}
-
 # --- resolve docentd location ------------------------------------------------
 $Mode = $null
 $Sessions = $null
@@ -293,15 +268,12 @@ if ($Mode -eq 'remote') {
         $rawHost = $SshHost
         if (-not $rawHost -and $RemoteUrl -match '^[a-zA-Z]+://([^:/]+)') { $rawHost = $Matches[1] }
         if (-not $DryRun -and -not $SshHost) {
-            $inp = Read-Host "SSH host for the dev box [$rawHost]"
+            $inp = Read-Host "SSH host or ~/.ssh/config alias for the dev box [$rawHost]"
             if ($inp) { $rawHost = $inp }
         }
         if (-not $rawHost) { throw "an SSH host is required for docent-tunnel (pass -SshHost, or -NoTunnel to skip)" }
-        # Resolve SSH aliases / identity — the tunnel can't read ssh_config.
-        $eff = Resolve-SshEffective -SshHostArg $rawHost
-        if ($eff.HostName -ne $rawHost) { Log "resolved SSH host $rawHost -> $($eff.HostName) (via ssh -G)" }
-        $SshHost = $eff.HostName
-        if (-not $SshIdentity) { $SshIdentity = $eff.Identity }
+        # Keep the alias as-is: docent-tunnel resolves ssh_config itself (ssh -G).
+        $SshHost = $rawHost
         $Sessions = "http://127.0.0.1:$Port"
         Log "reaching remote docentd $RemoteUrl through docent-tunnel -> $SshHost (local 127.0.0.1:$Port)"
     }
@@ -488,13 +460,11 @@ function Invoke-RemoteValidation {
             '4' { Write-Error "aborted."; exit 1 }
             default {
                 if ($script:UseTunnel) {
-                    $h = Read-Host "SSH host for the dev box [$script:SshHost]"
+                    $h = Read-Host "SSH host or ~/.ssh/config alias for the dev box [$script:SshHost]"
                     if ($h) { $script:SshHost = $h }
-                    $eff = Resolve-SshEffective -SshHostArg $script:SshHost
-                    $script:SshHost = $eff.HostName
-                    $idDefault = if ($script:SshIdentity) { $script:SshIdentity } elseif ($eff.Identity) { $eff.Identity } else { 'ssh-agent' }
+                    $idDefault = if ($script:SshIdentity) { $script:SshIdentity } else { 'from ~/.ssh/config' }
                     $i = Read-Host "SSH identity key [$idDefault]"
-                    if ($i) { $script:SshIdentity = $i } elseif (-not $script:SshIdentity -and $eff.Identity) { $script:SshIdentity = $eff.Identity }
+                    if ($i) { $script:SshIdentity = $i }
                     $t = Read-Host "Bearer token [$(if ($script:Token) { 'keep current' } else { 'none' })]"
                     if ($t) { $script:Token = $t }
                 }

@@ -31,7 +31,8 @@ import (
 
 // Config describes how to dial the dev box and which ports to bridge.
 type Config struct {
-	Host           string // SSH host of the dev box (required)
+	Host           string // SSH host of the dev box (required); an ssh_config alias once resolved
+	HostAlias      string // host as given before ssh_config resolution (the %n token)
 	Port           int    // SSH port (default 22)
 	User           string // SSH user (default: current OS user)
 	IdentityFile   string // private key path; empty falls back to ssh-agent
@@ -39,6 +40,7 @@ type Config struct {
 	LocalAddr      string // local listen address, e.g. 127.0.0.1:39787
 	RemoteAddr     string // remote docentd address on the dev box, e.g. 127.0.0.1:39787
 	KeepAliveSec   int    // SSH keepalive interval in seconds (default 30)
+	ProxyCommand   string // OpenSSH-style ProxyCommand carrying the SSH transport (optional)
 }
 
 // ApplyDefaults fills unset fields and expands a leading ~ in the path fields.
@@ -116,8 +118,7 @@ func Check(ctx context.Context, cfg Config, token, checkPath string) error {
 	if err != nil {
 		return err
 	}
-	sshAddr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	client, err := ssh.Dial("tcp", sshAddr, clientCfg)
+	client, sshAddr, err := dialSSH(cfg, clientCfg)
 	if err != nil {
 		return mapSSHDialError(cfg, sshAddr, err)
 	}
@@ -188,7 +189,7 @@ func mapSSHDialError(cfg Config, sshAddr string, err error) error {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "no such host"):
-		return fmt.Errorf("dial %s: %w (this host must be resolvable by name/IP — SSH config aliases are not honored here)", sshAddr, err)
+		return fmt.Errorf("dial %s: %w (this host must be resolvable by name/IP, or reachable through a ProxyCommand/ProxyJump in ssh_config)", sshAddr, err)
 	case strings.Contains(msg, "knownhosts") || strings.Contains(msg, "key is unknown") || strings.Contains(msg, "host key"):
 		return fmt.Errorf("dial %s: %w (host key not trusted — run `ssh %s` once to add it to known_hosts)", sshAddr, err, cfg.Host)
 	case strings.Contains(msg, "unable to authenticate"):
@@ -198,13 +199,40 @@ func mapSSHDialError(cfg Config, sshAddr string, err error) error {
 	}
 }
 
+// proxyHandshakeTimeout bounds the SSH handshake over a ProxyCommand, which can
+// be slow (e.g. a Coder workspace waking up) but must not hang forever.
+const proxyHandshakeTimeout = 60 * time.Second
+
+// dialSSH connects to the dev box directly over TCP, or through cfg.ProxyCommand
+// when set. It returns the "host:port" used for logs and host-key checks.
+func dialSSH(cfg Config, clientCfg *ssh.ClientConfig) (*ssh.Client, string, error) {
+	sshAddr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	if cfg.ProxyCommand == "" {
+		client, err := ssh.Dial("tcp", sshAddr, clientCfg)
+		return client, sshAddr, err
+	}
+
+	// Run the SSH handshake over the proxy's stdio, killing it on timeout.
+	conn, err := dialProxy(cfg)
+	if err != nil {
+		return nil, sshAddr, fmt.Errorf("start ProxyCommand: %w", err)
+	}
+	timer := time.AfterFunc(proxyHandshakeTimeout, func() { _ = conn.Close() })
+	c, chans, reqs, err := ssh.NewClientConn(conn, sshAddr, clientCfg)
+	timer.Stop()
+	if err != nil {
+		_ = conn.Close()
+		return nil, sshAddr, fmt.Errorf("via ProxyCommand: %w", err)
+	}
+	return ssh.NewClient(c, chans, reqs), sshAddr, nil
+}
+
 func connectAndServe(ctx context.Context, cfg Config) error {
 	clientCfg, err := clientConfig(cfg)
 	if err != nil {
 		return err
 	}
-	sshAddr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	client, err := ssh.Dial("tcp", sshAddr, clientCfg)
+	client, sshAddr, err := dialSSH(cfg, clientCfg)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", sshAddr, err)
 	}
@@ -216,7 +244,11 @@ func connectAndServe(ctx context.Context, cfg Config) error {
 	}
 	defer ln.Close()
 
-	log.Printf("docent-tunnel: up — %s -> %s@%s -> %s", cfg.LocalAddr, cfg.User, sshAddr, cfg.RemoteAddr)
+	via := ""
+	if cfg.ProxyCommand != "" {
+		via = " (via ProxyCommand)"
+	}
+	log.Printf("docent-tunnel: up — %s -> %s@%s%s -> %s", cfg.LocalAddr, cfg.User, sshAddr, via, cfg.RemoteAddr)
 
 	acceptErr := make(chan error, 1)
 	go func() {
