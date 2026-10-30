@@ -542,15 +542,15 @@ changes `services/api/` plus every PR that asks the team for review:
 directives:
   - id: github
     collector: github
-    config:
-      pr_queries:
-        - relation: api
-          watch: true
-          qualifiers: repo:my-org/my-repo draft:false
-          paths: [services/api/]
-        - relation: api
-          watch: true
-          qualifiers: repo:my-org/my-repo draft:false team-review-requested:my-org/api-owners
+    enabled: true
+    pr_queries:
+      - relation: api
+        watch: true
+        qualifiers: repo:my-org/my-repo draft:false
+        paths: [services/api/]
+      - relation: api
+        watch: true
+        qualifiers: repo:my-org/my-repo draft:false team-review-requested:my-org/api-owners
 ```
 
 Then the rule fires on each new head commit in that set. A `transition` with

@@ -119,3 +119,8 @@ Design decisions (agreed):
   `GIT_CONFIG_COUNT` unset. Not a code issue.
 
 ## Found bugs
+
+- `docs/Automation-recipes.md` backport recipe nests `pr_queries` under
+  `config:`, but it is a directive-level field (`config` is a string map, so
+  the YAML fails to load). Separate and straightforward: fix on its own
+  branch.
