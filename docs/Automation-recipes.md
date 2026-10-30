@@ -166,18 +166,19 @@ polls stay quiet.
       args: [pr]
 ```
 
-## Fix flaky E2E specs from Azure Pipelines
+## Fix flaky E2E tests from Azure Pipelines
 
 CI retries hide flaky Playwright specs: the run passes, so nobody looks. This
 rule reacts to every spec that failed or flaked in an Azure Pipelines run, using
-the [`azure-pipelines` collector](Reporting.md#azure-pipelines). A write-mode
-agent decides between two responses:
+the [`azure-pipelines` collector](Reporting.md#azure-pipelines) with
+`log_parser: playwright` (see [Log parsers](Reporting.md#log-parsers)). A
+write-mode agent decides between two responses:
 
 - **A PR broke the spec.** It comments on that PR with the evidence.
 - **The spec is flaky, or fails on the main branch.** It fixes the spec on a
   fresh branch and opens a ready PR.
 
-Each signal covers one spec in one run, so a single rule run fixes a single
+Each signal covers one spec file in one run, so a single rule run fixes a single
 spec. `base_ref` starts the fix branch from the run's branch, or from `main`
 for PR runs. Agents for the same fix branch take turns, so a spec that flakes
 twice in a day lands on one branch. The prompt tells the agent to check for an
@@ -202,7 +203,7 @@ existing PR first.
         created from {{index .Fields "base_branch"}}.
 
         Run:      {{.URL}} ({{index .Fields "result"}}, {{index .Fields "reason"}})
-        Spec:     {{index .Fields "spec_file"}} ({{index .Fields "outcome"}})
+        Spec:     {{index .Fields "test_file"}} ({{index .Fields "outcome"}})
         Failed:   {{index .Fields "failed_tests"}}
         Flaky:    {{index .Fields "flaky_tests"}}
         PR:       {{index .Fields "pr_url"}} (head {{index .Fields "pr_head_branch"}}, commit {{index .Fields "commit"}})

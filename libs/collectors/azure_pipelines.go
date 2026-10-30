@@ -16,18 +16,16 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/logparsers"
 )
 
-// AzurePipelinesCollector watches Azure DevOps pipeline runs and emits one
-// `test_failure` signal per spec file that failed or flaked in a run.
+// AzurePipelinesCollector watches completed Azure DevOps pipeline runs.
 //
-// Flakes are the point: CI retries, so a spec that fails and then passes on
-// retry leaves the build green and the GitHub check reporting success. Only
-// the run's log says it flaked, so the collector reads the logs rather than
-// trusting the build result.
-//
-// It only understands Playwright's `list` reporter output (plus the `github`
-// reporter's `::error` annotations); runs with other test runners yield nothing.
+// With config.log_parser set, it reads the logs of the tasks matching
+// config.log_task and emits one `test_failure` signal per test file that
+// failed or flaked. Flakes are why logs matter: CI retries leave a flaky run
+// green, and only its log says a test needed a retry. A failed run with no
+// test findings (or no parser) yields one `build_failure` signal instead.
 type AzurePipelinesCollector struct {
 	Clock func() time.Time
 	HTTP  *http.Client
@@ -42,9 +40,9 @@ const (
 	// adoResourceID is Azure DevOps' Entra resource, the audience `az`
 	// mints tokens for.
 	adoResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
-	// adoDefaultPlaywrightTask matches the timeline tasks whose logs are parsed
-	// when config.playwright_task is unset.
-	adoDefaultPlaywrightTask = `(?i)playwright|e2e|test`
+	// adoDefaultBranchPrefix starts the fix branch suggested by test_failure
+	// signals when config.branch_prefix is unset.
+	adoDefaultBranchPrefix = "test-fix-"
 	// adoMaxBuildsPerCollect bounds one poll; ADO's own page size.
 	adoMaxBuildsPerCollect = 100
 	// adoMaxErrorsLen caps the combined `errors` field of one signal.
@@ -57,6 +55,8 @@ type adoConfig struct {
 	project      string
 	definitions  []int
 	repo         string
+	parserName   string
+	parser       logparsers.Parser
 	taskRE       *regexp.Regexp
 	branchPrefix string
 	baseBranch   string
@@ -130,7 +130,7 @@ func parseADOConfig(d userdata.Directive) (adoConfig, error) {
 		cfg.baseURL = adoDefaultBaseURL
 	}
 	if cfg.branchPrefix == "" {
-		cfg.branchPrefix = "e2e-fix-"
+		cfg.branchPrefix = adoDefaultBranchPrefix
 	}
 	if cfg.baseBranch == "" {
 		cfg.baseBranch = "main"
@@ -154,16 +154,23 @@ func parseADOConfig(d userdata.Directive) (adoConfig, error) {
 		return cfg, fmt.Errorf("config.definitions is required")
 	}
 
-	// playwright_task narrows which timeline tasks' logs are fetched and parsed
-	expr := strings.TrimSpace(d.Config["playwright_task"])
-	if expr == "" {
-		expr = adoDefaultPlaywrightTask
+	// log_parser names a built-in parser; without one no logs are read
+	if name := strings.ToLower(strings.TrimSpace(d.Config["log_parser"])); name != "" {
+		parser, ok := logparsers.Get(name)
+		if !ok {
+			return cfg, fmt.Errorf("config.log_parser: unknown parser %q (available: %s)", name, strings.Join(logparsers.Names(), ", "))
+		}
+		cfg.parserName, cfg.parser = name, parser
 	}
-	re, err := regexp.Compile(expr)
-	if err != nil {
-		return cfg, fmt.Errorf("config.playwright_task: %w", err)
+
+	// log_task narrows which timeline tasks' logs are parsed; default all
+	if expr := strings.TrimSpace(d.Config["log_task"]); expr != "" {
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return cfg, fmt.Errorf("config.log_task: %w", err)
+		}
+		cfg.taskRE = re
 	}
-	cfg.taskRE = re
 	return cfg, nil
 }
 
@@ -202,7 +209,7 @@ func (c AzurePipelinesCollector) CollectEvents(ctx context.Context, directive us
 		return nil, err
 	}
 
-	// Read each run's test logs and turn its failures into signals
+	// Read each run and turn its failures into signals
 	var items []StatusItem
 	for i, b := range builds {
 		if b.FinishTime.Before(since) || b.FinishTime.After(now) {
@@ -216,61 +223,93 @@ func (c AzurePipelinesCollector) CollectEvents(ctx context.Context, directive us
 			Completed:   i,
 			Total:       len(builds),
 		})
-		result, logURLs, err := c.buildTestResult(ctx, cfg, auth, b, opts, directive.ID)
+		rep, err := c.inspectBuild(ctx, cfg, auth, b, opts, directive.ID)
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, adoBuildSignals(directive, cfg, b, result, logURLs)...)
+		items = append(items, adoBuildSignals(directive, cfg, b, rep)...)
 	}
 	return items, nil
 }
 
-// buildTestResult fetches and parses the logs of a run's test tasks.
-func (c AzurePipelinesCollector) buildTestResult(ctx context.Context, cfg adoConfig, auth string, b adoBuild, opts *CollectOpts, directiveID string) (PlaywrightResult, []string, error) {
+// adoRunReport is what a run's timeline and logs add to its build record.
+type adoRunReport struct {
+	failedTasks []string
+	tests       logparsers.Result
+	logURLs     []string
+}
+
+// adoBuildFailed reports whether a run's result counts as a failure.
+func adoBuildFailed(b adoBuild) bool {
+	return b.Result == "failed" || b.Result == "partiallySucceeded"
+}
+
+// inspectBuild reads a run's timeline for failed tasks and, with a parser
+// configured, parses the matching tasks' logs. A green run with no parser
+// needs no requests.
+func (c AzurePipelinesCollector) inspectBuild(ctx context.Context, cfg adoConfig, auth string, b adoBuild, opts *CollectOpts, directiveID string) (adoRunReport, error) {
+	rep := adoRunReport{tests: logparsers.Result{Complete: true}}
+	if cfg.parser == nil && !adoBuildFailed(b) {
+		return rep, nil
+	}
 	buildURL := fmt.Sprintf("%s/_apis/build/builds/%d", cfg.projectURL(), b.ID)
 	var timeline struct {
 		Records []adoTimelineRecord `json:"records"`
 	}
 	if err := c.getJSON(ctx, buildURL+"/timeline?api-version="+adoAPIVersion, auth, &timeline, opts, directiveID); err != nil {
-		return PlaywrightResult{}, nil, err
+		return rep, err
 	}
 
-	// Merge results across every matching task (a pipeline may shard tests)
-	merged := PlaywrightResult{Errors: map[string]string{}, Summarized: true}
-	var logURLs []string
+	// Failed tasks say what broke a run that has no test findings
 	for _, rec := range timeline.Records {
-		if rec.Type != "Task" || rec.Log == nil || !cfg.taskRE.MatchString(rec.Name) {
+		if rec.Type == "Task" && rec.Result == "failed" {
+			rep.failedTasks = append(rep.failedTasks, rec.Name)
+		}
+	}
+	if cfg.parser == nil {
+		return rep, nil
+	}
+
+	// Merge parsed results across matching tasks (a pipeline may shard tests)
+	for _, rec := range timeline.Records {
+		if rec.Type != "Task" || rec.Log == nil || rec.Result == "skipped" {
+			continue
+		}
+		if cfg.taskRE != nil && !cfg.taskRE.MatchString(rec.Name) {
 			continue
 		}
 		logURL := fmt.Sprintf("%s/logs/%d?api-version=%s", buildURL, rec.Log.ID, adoAPIVersion)
 		text, err := c.getText(ctx, logURL, auth, opts, directiveID)
 		if err != nil {
-			return PlaywrightResult{}, nil, err
+			return rep, err
 		}
-		r := ParsePlaywrightLog(text)
+		r := cfg.parser(adoStripTimestamps(text))
 		if r.Empty() {
 			continue
 		}
-		logURLs = append(logURLs, logURL)
-		merged.Failed = append(merged.Failed, r.Failed...)
-		merged.Flaky = append(merged.Flaky, r.Flaky...)
-		merged.Summarized = merged.Summarized && r.Summarized
-		for k, v := range r.Errors {
-			if _, ok := merged.Errors[k]; !ok {
-				merged.Errors[k] = v
-			}
-		}
+		rep.logURLs = append(rep.logURLs, logURL)
+		rep.tests.Merge(r)
 	}
-	return merged, logURLs, nil
+	return rep, nil
 }
 
-// adoBuildSignals turns one run's failures into a signal per spec file.
-func adoBuildSignals(directive userdata.Directive, cfg adoConfig, b adoBuild, result PlaywrightResult, logURLs []string) []StatusItem {
-	if result.Empty() {
+// adoTimestampRE matches the "2026-01-02T03:04:05.0000000Z " prefix ADO puts
+// on every log line.
+var adoTimestampRE = regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?`)
+
+// adoStripTimestamps hands parsers plain console text.
+func adoStripTimestamps(log string) string {
+	return adoTimestampRE.ReplaceAllString(log, "")
+}
+
+// adoBuildSignals emits a test_failure per failing test file, or a single
+// build_failure for a failed run with no test findings.
+func adoBuildSignals(directive userdata.Directive, cfg adoConfig, b adoBuild, rep adoRunReport) []StatusItem {
+	if rep.tests.Empty() && !adoBuildFailed(b) {
 		return nil
 	}
 
-	// Context shared by every spec signal from this run
+	// Who and what the run was for
 	repo := cfg.repo
 	if repo == "" && strings.EqualFold(b.Repository.Type, "GitHub") {
 		repo = b.Repository.ID
@@ -279,9 +318,11 @@ func adoBuildSignals(directive userdata.Directive, cfg adoConfig, b adoBuild, re
 	if prNumber == "" {
 		prNumber = adoPRNumberFromRef(b.SourceBranch)
 	}
+	runBranch := ""
 	baseBranch := cfg.baseBranch
 	if strings.HasPrefix(b.SourceBranch, "refs/heads/") {
-		baseBranch = strings.TrimPrefix(b.SourceBranch, "refs/heads/")
+		runBranch = strings.TrimPrefix(b.SourceBranch, "refs/heads/")
+		baseBranch = runBranch
 	}
 	commit := b.SourceVersion
 	if sha := strings.TrimSpace(b.TriggerInfo["pr.sourceSha"]); sha != "" {
@@ -291,6 +332,8 @@ func adoBuildSignals(directive userdata.Directive, cfg adoConfig, b adoBuild, re
 	if author == "" {
 		author = b.RequestedFor.DisplayName
 	}
+
+	// Labels shared by every signal from this run
 	buildURL := fmt.Sprintf("%s/_build/results?buildId=%d", cfg.projectURL(), b.ID)
 	pipeline := b.Definition.Name
 	if pipeline == "" {
@@ -301,62 +344,94 @@ func adoBuildSignals(directive userdata.Directive, cfg adoConfig, b adoBuild, re
 		where = "on PR #" + prNumber
 	}
 
-	// One signal per spec file, so each fix is scoped to a single spec
-	var items []StatusItem
-	for _, spec := range result.BySpecFile() {
-		outcome := "flaky"
-		if len(spec.Failed) > 0 {
-			outcome = "failed"
+	// Run fields every signal carries
+	runFields := func() map[string]string {
+		f := map[string]string{
+			"repo":          repo,
+			"base_branch":   baseBranch,
+			"build_id":      strconv.Itoa(b.ID),
+			"build_number":  b.BuildNumber,
+			"build_url":     buildURL,
+			"pipeline":      pipeline,
+			"definition_id": strconv.Itoa(b.Definition.ID),
+			"result":        b.Result,
+			"reason":        b.Reason,
+			"source_branch": b.SourceBranch,
+			"commit":        commit,
+			"requested_by":  b.RequestedFor.UniqueName,
+			"failed_tasks":  strings.Join(rep.failedTasks, "\n"),
 		}
-		fields := map[string]string{
-			"repo":           repo,
-			"branch":         cfg.branchPrefix + adoSpecSlug(spec.File) + "-" + b.FinishTime.UTC().Format("20060102"),
-			"base_branch":    baseBranch,
-			"build_id":       strconv.Itoa(b.ID),
-			"build_number":   b.BuildNumber,
-			"build_url":      buildURL,
-			"pipeline":       pipeline,
-			"definition_id":  strconv.Itoa(b.Definition.ID),
-			"result":         b.Result,
-			"reason":         b.Reason,
-			"source_branch":  b.SourceBranch,
-			"commit":         commit,
-			"requested_by":   b.RequestedFor.UniqueName,
-			"spec_file":      spec.File,
-			"outcome":        outcome,
-			"failed_tests":   playwrightTestList(spec.Failed),
-			"flaky_tests":    playwrightTestList(spec.Flaky),
-			"errors":         playwrightErrors(result.Errors, spec),
-			"test_log_urls":  strings.Join(logURLs, "\n"),
-			"summary_parsed": strconv.FormatBool(result.Summarized),
-		}
-
-		// PR context, when the run was for a pull request
 		if prNumber != "" {
-			fields["pr_number"] = prNumber
-			fields["pr_url"] = adoPRURL(b.Repository.URL, repo, prNumber)
-			fields["pr_title"] = b.TriggerInfo["pr.title"]
-			fields["pr_head_branch"] = b.TriggerInfo["pr.sourceBranch"]
-			fields["pr_author"] = b.TriggerInfo["pr.sender.name"]
+			f["pr_number"] = prNumber
+			f["pr_url"] = adoPRURL(b.Repository.URL, repo, prNumber)
+			f["pr_title"] = b.TriggerInfo["pr.title"]
+			f["pr_head_branch"] = b.TriggerInfo["pr.sourceBranch"]
+			f["pr_author"] = b.TriggerInfo["pr.sender.name"]
 		}
-
-		n := len(spec.Failed) + len(spec.Flaky)
-		items = append(items, StatusItem{
+		return f
+	}
+	signal := func(kind, title, summary, severity, stableID string, fields map[string]string) StatusItem {
+		return StatusItem{
 			DirectiveID: directive.ID,
 			Repository:  repo,
 			Source:      "azure-pipelines",
-			Kind:        "test_failure",
-			Title:       fmt.Sprintf("%s: %s %s", pipeline, outcome, spec.File),
-			Summary:     fmt.Sprintf("Run %s %s: %d %s test(s) in %s", b.BuildNumber, where, n, outcome, spec.File),
+			Kind:        kind,
+			Title:       title,
+			Summary:     summary,
 			URL:         buildURL,
-			Severity:    map[string]string{"failed": "error", "flaky": "warning"}[outcome],
+			Severity:    severity,
 			ObservedAt:  b.FinishTime,
-			StableID:    fmt.Sprintf("azure-pipelines:%s/%s:%d:%s", cfg.org, cfg.project, b.ID, spec.File),
+			StableID:    stableID,
 			Author:      author,
 			Fields:      fields,
-		})
+		}
 	}
-	return items
+
+	// One test_failure per test file, so each fix is scoped to one file
+	var items []StatusItem
+	for _, file := range rep.tests.ByFile() {
+		outcome, severity := "flaky", "warning"
+		if len(file.Failed) > 0 {
+			outcome, severity = "failed", "error"
+		}
+		fields := runFields()
+		fields["branch"] = cfg.branchPrefix + adoTestSlug(file.File) + "-" + b.FinishTime.UTC().Format("20060102")
+		fields["test_file"] = file.File
+		fields["outcome"] = outcome
+		fields["failed_tests"] = testNames(file.Failed)
+		fields["flaky_tests"] = testNames(file.Flaky)
+		fields["errors"] = testErrors(rep.tests.Errors, file)
+		fields["test_log_urls"] = strings.Join(rep.logURLs, "\n")
+		fields["log_parser"] = cfg.parserName
+		fields["parse_complete"] = strconv.FormatBool(rep.tests.Complete)
+		n := len(file.Failed) + len(file.Flaky)
+		items = append(items, signal("test_failure",
+			fmt.Sprintf("%s: %s %s", pipeline, outcome, file.File),
+			fmt.Sprintf("Run %s %s: %d %s test(s) in %s", b.BuildNumber, where, n, outcome, file.File),
+			severity,
+			fmt.Sprintf("azure-pipelines:%s/%s:%d:%s", cfg.org, cfg.project, b.ID, file.File),
+			fields))
+	}
+	if len(items) > 0 {
+		return items
+	}
+
+	// A failed run with no test findings surfaces as one build failure
+	fields := runFields()
+	fields["branch"] = runBranch
+	if prNumber != "" {
+		fields["branch"] = b.TriggerInfo["pr.sourceBranch"]
+	}
+	summary := fmt.Sprintf("Run %s %s %s", b.BuildNumber, where, b.Result)
+	if len(rep.failedTasks) > 0 {
+		summary += ": " + strings.Join(rep.failedTasks, ", ")
+	}
+	return []StatusItem{signal("build_failure",
+		fmt.Sprintf("%s: %s %s", pipeline, b.Result, where),
+		summary,
+		"error",
+		fmt.Sprintf("azure-pipelines:%s/%s:%d", cfg.org, cfg.project, b.ID),
+		fields)}
 }
 
 var adoPullRefRE = regexp.MustCompile(`^refs/pull/(\d+)/`)
@@ -383,38 +458,36 @@ func adoPRURL(repoURL, repo, number string) string {
 
 var adoSlugRE = regexp.MustCompile(`[^a-z0-9]+`)
 
-// adoSpecSlug reduces "e2e/checkout-flow.spec.ts" to "checkout-flow" for a branch name.
-func adoSpecSlug(file string) string {
+// adoTestSlug reduces "e2e/checkout-flow.spec.ts" to "checkout-flow" for a branch name.
+func adoTestSlug(file string) string {
 	base := path.Base(file)
 	if i := strings.Index(base, "."); i > 0 {
 		base = base[:i]
 	}
 	slug := strings.Trim(adoSlugRE.ReplaceAllString(strings.ToLower(base), "-"), "-")
 	if slug == "" {
-		slug = "spec"
+		slug = "test"
 	}
 	return slug
 }
 
-func playwrightTestList(tests []PlaywrightTest) string {
+func testNames(tests []logparsers.Test) string {
 	names := make([]string, 0, len(tests))
 	for _, t := range tests {
-		names = append(names, t.Name())
+		names = append(names, t.Name)
 	}
 	return strings.Join(names, "\n")
 }
 
-// playwrightErrors renders each test's first error under a heading.
-func playwrightErrors(errors map[string]string, spec PlaywrightSpecFailures) string {
+// testErrors renders each test's first error under a heading.
+func testErrors(errors map[string]string, file logparsers.FileResult) string {
 	var b strings.Builder
-	for _, t := range append(append([]PlaywrightTest{}, spec.Failed...), spec.Flaky...) {
-		msg, ok := errors[t.Name()]
-		if !ok {
-			continue
+	for _, t := range append(append([]logparsers.Test{}, file.Failed...), file.Flaky...) {
+		if msg, ok := errors[t.Name]; ok {
+			fmt.Fprintf(&b, "### %s\n%s\n\n", t.Name, msg)
 		}
-		fmt.Fprintf(&b, "### %s\n%s\n\n", t.Name(), msg)
 	}
-	return truncateRunes(strings.TrimSpace(b.String()), adoMaxErrorsLen)
+	return logparsers.Truncate(strings.TrimSpace(b.String()), adoMaxErrorsLen)
 }
 
 // listBuilds returns completed runs of the configured definitions that
@@ -473,7 +546,7 @@ func (c AzurePipelinesCollector) get(ctx context.Context, rawURL, auth, accept s
 		return nil, fmt.Errorf("azure devops %s for %s: not authorized (run `az login`, or check the PAT in credential_refs.token)", res.Status, rawURL)
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("azure devops %s: %s — %s", res.Status, rawURL, truncateRunes(strings.TrimSpace(string(body)), 300))
+		return nil, fmt.Errorf("azure devops %s: %s — %s", res.Status, rawURL, logparsers.Truncate(strings.TrimSpace(string(body)), 300))
 	}
 	return body, nil
 }

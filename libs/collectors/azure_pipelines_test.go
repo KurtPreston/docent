@@ -12,6 +12,15 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
+// adoLog prefixes each line with an ADO-style timestamp, as pipeline logs do.
+func adoLog(lines ...string) string {
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("2026-01-02T03:04:05.0000000Z " + l + "\n")
+	}
+	return b.String()
+}
+
 // adoFakeServer serves a project with two completed runs: a PR run with a
 // flaky spec (green build) and a main run with a failed spec.
 func adoFakeServer(t *testing.T) (*httptest.Server, *[]string) {
@@ -57,8 +66,8 @@ func adoFakeServer(t *testing.T) (*httptest.Server, *[]string) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"value": builds})
 		case len(parts) == 3 && parts[2] == "timeline":
 			_ = json.NewEncoder(w).Encode(map[string]any{"records": []map[string]any{
-				{"type": "Task", "name": "Install dependencies", "log": map[string]int{"id": 3}},
-				{"type": "Task", "name": "Run Playwright tests", "log": map[string]int{"id": 9}},
+				{"type": "Task", "name": "Install dependencies", "result": "succeeded", "log": map[string]int{"id": 3}},
+				{"type": "Task", "name": "Run Playwright tests", "result": map[bool]string{true: "failed", false: "succeeded"}[parts[1] == "502"], "log": map[string]int{"id": 9}},
 			}})
 		case len(parts) == 4 && parts[2] == "logs" && parts[3] == "9":
 			_, _ = w.Write([]byte(logs[parts[1]]))
@@ -84,7 +93,7 @@ func adoTestCollector(now time.Time) AzurePipelinesCollector {
 
 func adoTestDirective(baseURL string) userdata.Directive {
 	return userdata.Directive{ID: "e2e", Collector: "azure-pipelines", Config: map[string]string{
-		"base_url": baseURL, "organization": "org", "project": "proj", "definitions": "7", "playwright_task": "Playwright",
+		"base_url": baseURL, "organization": "org", "project": "proj", "definitions": "7", "log_parser": "playwright", "log_task": "Playwright",
 	}}
 }
 
@@ -112,10 +121,10 @@ func TestAzurePipelinesCollectEvents(t *testing.T) {
 		t.Fatalf("pr item = %+v", pr)
 	}
 	want := map[string]string{
-		"repo": "acme/web", "branch": "e2e-fix-gadgets-20260102", "base_branch": "main", "build_id": "501",
-		"outcome": "flaky", "spec_file": "e2e/gadgets.spec.ts", "commit": "headsha", "pr_number": "42",
+		"repo": "acme/web", "branch": "test-fix-gadgets-20260102", "base_branch": "main", "build_id": "501",
+		"outcome": "flaky", "test_file": "e2e/gadgets.spec.ts", "commit": "headsha", "pr_number": "42",
 		"pr_url": "https://github.com/acme/web/pull/42", "pr_head_branch": "gadgets", "pr_author": "octo",
-		"flaky_tests": "e2e/gadgets.spec.ts:40:1 › opens a gadget", "failed_tests": "", "summary_parsed": "true",
+		"flaky_tests": "e2e/gadgets.spec.ts:40:1 › opens a gadget", "failed_tests": "", "parse_complete": "true", "log_parser": "playwright",
 	}
 	for k, v := range want {
 		if pr.Fields[k] != v {
@@ -175,7 +184,7 @@ func TestAzurePipelinesValidateDirective(t *testing.T) {
 	}
 
 	// Config errors are reported before any network access
-	cases := map[string]string{"definitions": "abc", "organization": "", "playwright_task": "("}
+	cases := map[string]string{"definitions": "abc", "organization": "", "log_task": "(", "log_parser": "jest"}
 	for key, val := range cases {
 		d := adoTestDirective(srv.URL)
 		d.Config[key] = val
@@ -198,11 +207,41 @@ func TestADOSpecSlugAndPRRef(t *testing.T) {
 	for in, want := range map[string]string{
 		"e2e/checkout-flow.spec.ts": "checkout-flow", "e2e/Foo_Bar.test.tsx": "foo-bar",
 	} {
-		if got := adoSpecSlug(in); got != want {
-			t.Errorf("adoSpecSlug(%q) = %q, want %q", in, got, want)
+		if got := adoTestSlug(in); got != want {
+			t.Errorf("adoTestSlug(%q) = %q, want %q", in, got, want)
 		}
 	}
 	if adoPRNumberFromRef("refs/pull/17/merge") != "17" || adoPRNumberFromRef("refs/heads/main") != "" {
 		t.Errorf("adoPRNumberFromRef mismatch")
+	}
+}
+
+func TestAzurePipelinesBuildFailureWithoutParser(t *testing.T) {
+	srv, paths := adoFakeServer(t)
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	d := adoTestDirective(srv.URL)
+	delete(d.Config, "log_parser")
+	items, err := adoTestCollector(now).CollectEvents(context.Background(), d, &CollectOpts{Since: now.Add(-6 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The green run is skipped outright; the failed one names its failed task
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	it := items[0]
+	if it.Kind != "build_failure" || it.Fields["build_id"] != "502" || it.Fields["failed_tasks"] != "Run Playwright tests" || it.Fields["branch"] != "main" {
+		t.Fatalf("item = %+v", it)
+	}
+	if it.StableID != "azure-pipelines:org/proj:502" {
+		t.Errorf("stable id = %q", it.StableID)
+	}
+
+	// Without a parser no logs are fetched, and green runs cost no requests
+	for _, p := range *paths {
+		if strings.Contains(p, "/logs/") || strings.Contains(p, "/501/") {
+			t.Fatalf("unexpected request %s", p)
+		}
 	}
 }

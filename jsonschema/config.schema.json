@@ -927,14 +927,20 @@
               "description": "owner/name the agent works in. Defaults to the run's GitHub repository.",
               "x-docent-setup-skip-prompt": true
             },
-            "playwright_task": {
+            "log_parser": {
               "type": "string",
-              "description": "Regex matching the timeline task names that run Playwright with its list reporter. Default: (?i)playwright|e2e|test",
+              "enum": ["playwright"],
+              "description": "Built-in parser for test task logs. With one set, each failing or flaky test file becomes a test_failure signal; without one, only failed runs are reported (build_failure).",
+              "x-docent-setup-skip-prompt": true
+            },
+            "log_task": {
+              "type": "string",
+              "description": "Regex matching the timeline task names whose logs log_parser reads. Default: every task.",
               "x-docent-setup-skip-prompt": true
             },
             "branch_prefix": {
               "type": "string",
-              "description": "Prefix of the fix branch name put in each signal's `branch` field. Default: e2e-fix-",
+              "description": "Prefix of the fix branch name put in each test_failure signal's `branch` field. Default: test-fix-",
               "x-docent-setup-skip-prompt": true
             },
             "base_branch": {
