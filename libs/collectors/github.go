@@ -59,6 +59,7 @@ type ghPRView struct {
 	StatusCheckRollup []ghCheckRollupEntry `json:"statusCheckRollup"`
 	ReviewDecision    string               `json:"reviewDecision"`
 	HeadRefName       string               `json:"headRefName"`
+	HeadRefOid        string               `json:"headRefOid"`
 	Mergeable         string               `json:"mergeable"`
 	// State is OPEN / CLOSED / MERGED. Read only for recently-closed PRs, where
 	// it is the one thing that separates a merge from an abandonment.
@@ -1026,6 +1027,11 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	if detail.HeadBranch != "" {
 		fields["head_branch"] = detail.HeadBranch
 	}
+	// head_sha changes on every push, so a transition rule on it fires once
+	// per new revision of a PR.
+	if detail.HeadSHA != "" {
+		fields["head_sha"] = detail.HeadSHA
+	}
 	if spec.mine || spec.reviewable {
 		fields["checks"] = detail.Checks
 		fields["review_decision"] = detail.ReviewDecision
@@ -1175,7 +1181,7 @@ func capReviewCandidates(rows []prReviewRow) []prReviewRow {
 }
 
 // fetchPRStatus resolves the aggregate checks status, review decision, head
-// branch, and merge-conflict verdict for a single PR via `gh pr view --json
+// branch and commit, and merge-conflict verdict for a single PR via `gh pr view --json
 // ...`. checks is one of "passing", "failing", "pending", "none", or
 // "unknown" (when the call fails or the payload can't be parsed); mergeable is
 // one of "mergeable", "conflicting", or "unknown". Failures are non-fatal: an
@@ -1190,26 +1196,27 @@ func capReviewCandidates(rows []prReviewRow) []prReviewRow {
 // the metadata call means a token that can't read checks still resolves the
 // head branch (which correlation needs to anchor the PR to its repo), plus the
 // review decision and mergeability; only the checks status degrades to unknown.
-func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch, mergeable string) {
+func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) prDetail {
+	d := prDetail{Checks: "unknown", Mergeable: "unknown"}
 	if strings.TrimSpace(prURL) == "" {
-		return "unknown", "", "", "unknown"
+		return d
 	}
-	view, err := c.fetchPRView(ctx, env, prURL, "reviewDecision,headRefName,mergeable", directive, opts)
+	view, err := c.fetchPRView(ctx, env, prURL, "reviewDecision,headRefName,headRefOid,mergeable", directive, opts)
 	if err != nil {
-		return "unknown", "", "", "unknown"
+		return d
 	}
-	reviewDecision = strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
-	headBranch = strings.TrimSpace(view.HeadRefName)
-	mergeable = normalizeMergeable(view.Mergeable)
+	d.ReviewDecision = strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
+	d.HeadBranch = strings.TrimSpace(view.HeadRefName)
+	d.HeadSHA = strings.TrimSpace(view.HeadRefOid)
+	d.Mergeable = normalizeMergeable(view.Mergeable)
 
 	// Best-effort: a permission error (or any other failure) reading the
 	// check rollup leaves checks="unknown" rather than discarding the
 	// metadata resolved above.
-	checks = "unknown"
 	if rollup, err := c.fetchPRView(ctx, env, prURL, "statusCheckRollup", directive, opts); err == nil {
-		checks = rollupChecksState(rollup.StatusCheckRollup)
+		d.Checks = rollupChecksState(rollup.StatusCheckRollup)
 	}
-	return checks, reviewDecision, headBranch, mergeable
+	return d
 }
 
 // fetchPRView runs `gh pr view <url> --json <fields>` and parses the subset of

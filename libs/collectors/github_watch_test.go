@@ -73,8 +73,8 @@ func TestWatchSpecForRowSettlesOwnership(t *testing.T) {
 	// The resulting rows: only the user's own may pass a `self: true` guard.
 	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	d := userdata.Directive{ID: "gh", Collector: "github"}
-	if it := prReviewItem(d, "alice", "github.com", now, theirs, other, prDetail{}); it.IsSelf || it.Author != "bob" || it.Fields["relation"] != "api" {
-		t.Errorf("other's row: IsSelf=%v Author=%q relation=%q", it.IsSelf, it.Author, it.Fields["relation"])
+	if it := prReviewItem(d, "alice", "github.com", now, theirs, other, prDetail{HeadSHA: "abc123"}); it.IsSelf || it.Author != "bob" || it.Fields["relation"] != "api" || it.Fields["head_sha"] != "abc123" {
+		t.Errorf("other's row: IsSelf=%v Author=%q relation=%q head_sha=%q", it.IsSelf, it.Author, it.Fields["relation"], it.Fields["head_sha"])
 	}
 	if it := prReviewItem(d, "alice", "github.com", now, mine, own, prDetail{}); !it.IsSelf || it.Fields["mine"] != "true" {
 		t.Errorf("own row: IsSelf=%v mine=%q", it.IsSelf, it.Fields["mine"])

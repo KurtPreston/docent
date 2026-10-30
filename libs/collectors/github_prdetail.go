@@ -18,9 +18,11 @@ type prDetail struct {
 	Checks         string
 	ReviewDecision string
 	HeadBranch     string
-	Mergeable      string
-	IsDraft        bool
-	Threads        []ReviewThread
+	// HeadSHA is the PR's current head commit, which changes on every push.
+	HeadSHA   string
+	Mergeable string
+	IsDraft   bool
+	Threads   []ReviewThread
 	// Status is the six-bucket classification and who-acted-last verdict. Its
 	// Bucket is empty when the timeline could not be read, which is the signal
 	// that classification is unavailable rather than "awaiting review".
@@ -47,7 +49,7 @@ const prDetailQuery = `
 query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
-      isDraft mergeable reviewDecision updatedAt headRefName
+      isDraft mergeable reviewDecision updatedAt headRefName headRefOid
       author{ login __typename }
       commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
       reviewThreads(first:50){
@@ -109,6 +111,7 @@ type ghPRDetail struct {
 	ReviewDecision string  `json:"reviewDecision"`
 	UpdatedAt      string  `json:"updatedAt"`
 	HeadRefName    string  `json:"headRefName"`
+	HeadRefOid     string  `json:"headRefOid"`
 	Author         ghActor `json:"author"`
 	Commits        struct {
 		Nodes []ghCommitNode `json:"nodes"`
@@ -181,6 +184,7 @@ func buildPRDetail(pr ghPRDetail, viewer string) prDetail {
 		Checks:         checksFromRollup(pr),
 		ReviewDecision: strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)),
 		HeadBranch:     strings.TrimSpace(pr.HeadRefName),
+		HeadSHA:        strings.TrimSpace(pr.HeadRefOid),
 		Mergeable:      normalizeMergeable(pr.Mergeable),
 		IsDraft:        pr.IsDraft,
 	}
@@ -262,12 +266,7 @@ func parseGitHubTime(s string) time.Time {
 // standalone threads query. It leaves Status.Bucket empty, since neither route
 // exposes the timeline the classification needs.
 func (c GitHubCollector) fetchPRDetailFallback(ctx context.Context, env []string, prURL, viewer string, directive userdata.Directive, opts *CollectOpts) prDetail {
-	checks, decision, headBranch, mergeable := c.fetchPRStatus(ctx, env, prURL, directive, opts)
-	return prDetail{
-		Checks:         checks,
-		ReviewDecision: decision,
-		HeadBranch:     headBranch,
-		Mergeable:      mergeable,
-		Threads:        c.fetchPRUnresolvedThreads(ctx, env, prURL, viewer, directive, opts),
-	}
+	d := c.fetchPRStatus(ctx, env, prURL, directive, opts)
+	d.Threads = c.fetchPRUnresolvedThreads(ctx, env, prURL, viewer, directive, opts)
+	return d
 }
