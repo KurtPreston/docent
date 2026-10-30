@@ -884,9 +884,13 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	snapKey := u.key.Directive + "/" + string(u.mode)
 	prevEntities := e.entitySnapshots[snapKey]
 	seeded := e.automationSeeded[snapKey]
+	prevErr := u.lastErr
 	e.mu.Unlock()
 
 	signals, err := e.reg.CollectUnit(ctx, d, u.mode, opts)
+	if err != nil && prevErr == "" && ctx.Err() == nil {
+		e.alertCollectorError(ctx, u, err, now)
+	}
 
 	var newSignals []model.Signal
 	var nextEntities map[string]model.Entity

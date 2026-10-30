@@ -16,6 +16,34 @@ to the PR comment the agent posted. Docent doesn't ship this script. Write one
 that fits your chat tool, taking the report path or PR as arguments. Delete the
 step if you don't want notifications.
 
+## Get notified when a collector needs attention
+
+Credentials expire: an Azure CLI login, a PAT, an OAuth token. When that
+happens the collector stops returning data, and rules that depend on it go
+quiet without saying why. This rule tells you when any directive starts
+failing, with the error, which usually says how to fix it (e.g. "run
+`az login`").
+
+```yaml
+automations:
+  - id: notify-collector-errors
+    name: Tell me when a collector starts failing
+    enabled: true
+    trigger:
+      type: signal
+      kind: collector_error
+      # match.text: "login|token|authoriz"  # only auth failures
+    actions:
+      - type: shell
+        command: ~/.config/docent/notify.sh
+        args: ["docent collector failing"]
+```
+
+The script gets the directive's name in `DOCENT_TITLE` and the error in
+`DOCENT_SUMMARY`. It fires once per outage; see
+[Triggers](Automations.md#triggers). Make sure the notification path doesn't
+depend on the credential that failed.
+
 ## Weekly goal-alignment report
 
 Every Friday afternoon, compare the week's activity against `goals.yaml` and

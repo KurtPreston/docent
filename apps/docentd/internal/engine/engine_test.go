@@ -40,6 +40,7 @@ type fakeCollector struct {
 	events      []model.Signal
 	stateCalls  int
 	eventsCalls int
+	eventsErr   error
 	stateScope  collectors.Scope
 }
 
@@ -51,6 +52,9 @@ func (f *fakeCollector) CollectState(_ context.Context, _ userdata.Directive, op
 
 func (f *fakeCollector) CollectEvents(_ context.Context, _ userdata.Directive, _ *collectors.CollectOpts) ([]collectors.StatusItem, error) {
 	f.eventsCalls++
+	if f.eventsErr != nil {
+		return nil, f.eventsErr
+	}
 	return f.events, nil
 }
 
