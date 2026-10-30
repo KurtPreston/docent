@@ -84,7 +84,7 @@ func adoTestCollector(now time.Time) AzurePipelinesCollector {
 
 func adoTestDirective(baseURL string) userdata.Directive {
 	return userdata.Directive{ID: "e2e", Collector: "azure-pipelines", Config: map[string]string{
-		"base_url": baseURL, "organization": "org", "project": "proj", "definitions": "7", "test_task": "Playwright",
+		"base_url": baseURL, "organization": "org", "project": "proj", "definitions": "7", "playwright_task": "Playwright",
 	}}
 }
 
@@ -175,7 +175,7 @@ func TestAzurePipelinesValidateDirective(t *testing.T) {
 	}
 
 	// Config errors are reported before any network access
-	cases := map[string]string{"definitions": "abc", "organization": "", "test_task": "("}
+	cases := map[string]string{"definitions": "abc", "organization": "", "playwright_task": "("}
 	for key, val := range cases {
 		d := adoTestDirective(srv.URL)
 		d.Config[key] = val

@@ -927,9 +927,9 @@
               "description": "owner/name the agent works in. Defaults to the run's GitHub repository.",
               "x-docent-setup-skip-prompt": true
             },
-            "test_task": {
+            "playwright_task": {
               "type": "string",
-              "description": "Regex matching the timeline task names whose logs hold Playwright output. Default: (?i)playwright|e2e|test",
+              "description": "Regex matching the timeline task names that run Playwright with its list reporter. Default: (?i)playwright|e2e|test",
               "x-docent-setup-skip-prompt": true
             },
             "branch_prefix": {

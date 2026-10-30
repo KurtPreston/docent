@@ -25,6 +25,9 @@ import (
 // retry leaves the build green and the GitHub check reporting success. Only
 // the run's log says it flaked, so the collector reads the logs rather than
 // trusting the build result.
+//
+// It only understands Playwright's `list` reporter output (plus the `github`
+// reporter's `::error` annotations); runs with other test runners yield nothing.
 type AzurePipelinesCollector struct {
 	Clock func() time.Time
 	HTTP  *http.Client
@@ -39,9 +42,9 @@ const (
 	// adoResourceID is Azure DevOps' Entra resource, the audience `az`
 	// mints tokens for.
 	adoResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
-	// adoDefaultTestTask matches the timeline tasks whose logs are parsed
-	// when config.test_task is unset.
-	adoDefaultTestTask = `(?i)playwright|e2e|test`
+	// adoDefaultPlaywrightTask matches the timeline tasks whose logs are parsed
+	// when config.playwright_task is unset.
+	adoDefaultPlaywrightTask = `(?i)playwright|e2e|test`
 	// adoMaxBuildsPerCollect bounds one poll; ADO's own page size.
 	adoMaxBuildsPerCollect = 100
 	// adoMaxErrorsLen caps the combined `errors` field of one signal.
@@ -151,14 +154,14 @@ func parseADOConfig(d userdata.Directive) (adoConfig, error) {
 		return cfg, fmt.Errorf("config.definitions is required")
 	}
 
-	// test_task narrows which timeline tasks' logs are fetched and parsed
-	expr := strings.TrimSpace(d.Config["test_task"])
+	// playwright_task narrows which timeline tasks' logs are fetched and parsed
+	expr := strings.TrimSpace(d.Config["playwright_task"])
 	if expr == "" {
-		expr = adoDefaultTestTask
+		expr = adoDefaultPlaywrightTask
 	}
 	re, err := regexp.Compile(expr)
 	if err != nil {
-		return cfg, fmt.Errorf("config.test_task: %w", err)
+		return cfg, fmt.Errorf("config.playwright_task: %w", err)
 	}
 	cfg.taskRE = re
 	return cfg, nil

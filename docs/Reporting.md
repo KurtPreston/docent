@@ -393,12 +393,14 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
 - `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.
-- `azure-pipelines` — completed Azure DevOps runs of `config.definitions`, one `test_failure` signal per Playwright spec file that failed **or flaked** (passed only on retry). Built to trigger automations; see [Azure Pipelines](#azure-pipelines).
+- `azure-pipelines` — completed Azure DevOps runs of `config.definitions`, one `test_failure` signal per Playwright spec file (Playwright only) that failed **or flaked** (passed only on retry). Built to trigger automations; see [Azure Pipelines](#azure-pipelines).
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [Slack.md](Slack.md) for token setup and required scopes.
 
 ### Azure Pipelines
 
-`azure-pipelines` watches Azure DevOps pipeline runs for failed and flaky Playwright specs. CI retries make a flaky run pass, so the build result and its GitHub check both say success. Only the run log's Playwright summary (`1 flaky`) shows the flake, so the collector reads the logs of the timeline tasks that match `config.test_task`.
+`azure-pipelines` watches Azure DevOps pipeline runs for failed and flaky Playwright specs. CI retries make a flaky run pass, so the build result and its GitHub check both say success. Only the run log's Playwright summary (`1 flaky`) shows the flake, so the collector reads the logs of the timeline tasks that match `config.playwright_task`.
+
+The collector only understands Playwright. Those tasks must run Playwright with its `list` reporter, which is the default outside CI. Add the `github` reporter too (e.g. `reporter: [["list"], ["github"]]`) to get error excerpts in the `errors` field. Runs of other test runners produce no signals.
 
 ```yaml
 directives:
@@ -409,7 +411,7 @@ directives:
       organization: my-org           # dev.azure.com/<organization>
       project: my-project
       definitions: "45"              # pipeline definition ids (definitionId= in the URL)
-      test_task: "Run Playwright"    # regex over task names; default (?i)playwright|e2e|test
+      playwright_task: "Run Playwright"  # regex over task names; default (?i)playwright|e2e|test
       repo: my-org/web               # optional; defaults to the run's GitHub repo
     events:
       poll: { interval: 5m }
