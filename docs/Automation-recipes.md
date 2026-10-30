@@ -517,3 +517,144 @@ Second, the rule matches on that `relation` label:
       command: ~/.config/docent/notify.sh
       args: [pr]
 ```
+
+## Review a team's PRs for docs drift and complexity
+
+An agent reviews every new revision of the PRs your team owns. It looks
+narrowly at two things a general review tends to miss:
+
+- Do the docs still describe what the code does?
+- Does the change add complexity it doesn't need, such as a helper that
+  duplicates an existing one or a second code path beside one that should be
+  extended instead?
+
+It can block a PR but never approves one. Approval is left to a person, or a
+bot, taking a broader look. On a teammate's PR with findings it requests
+changes, and it dismisses that review once a later revision resolves them. A
+clean PR gets nothing. You can't request changes on your own PR, so on yours
+it leaves a comment instead.
+
+First, a [watch query](Reporting.md#watching-a-set-of-prs) defines the PRs your
+team owns. These two entries share a relation, so the set is every PR that
+changes `services/api/` plus every PR that asks the team for review:
+
+```yaml
+directives:
+  - id: github
+    collector: github
+    config:
+      pr_queries:
+        - relation: api
+          watch: true
+          qualifiers: repo:my-org/my-repo draft:false
+          paths: [services/api/]
+        - relation: api
+          watch: true
+          qualifiers: repo:my-org/my-repo draft:false team-review-requested:my-org/api-owners
+```
+
+Then the rule fires on each new head commit in that set. A `transition` with
+no `from` or `to` fires on any change, including a PR first entering the set.
+The first collect after `docentd` starts only records a baseline, so PRs open
+at that point are reviewed on their next push rather than all at once.
+
+Some firings are repeats. The entity ID comes from the PR title, so renaming a
+PR fires the rule again for a revision it already reviewed, and so does a PR
+leaving the set and coming back. A head commit that briefly fails to resolve
+fires it twice more, once to empty and once back. The prompt guards against
+all of these with a marker carrying the head commit.
+
+```yaml
+- id: api-autoreview
+  name: Review the team's PRs for docs drift and complexity
+  enabled: true
+  trigger:
+    type: transition
+    source: github
+    kind: pr_review_status
+    match:
+      fields:
+        relation: api
+    when:
+      field: head_sha
+  # No `self: true` here on purpose: the rule acts on teammates' PRs, and the
+  # prompt never edits or pushes their branches.
+  actions:
+    - type: agent-inline
+      provider: copilot
+      workdir: worktree
+      prompt: |-
+        You are an autonomous, narrowly scoped PR reviewer, running in a fresh
+        worktree on the PR's head branch at the repository root.
+
+        Pull request: {{.URL}}
+        Repository:   {{.Repo}}
+        Branch:       {{.Branch}}
+        Head commit:  {{index .Fields "head_sha"}}
+        Author:       {{index .Fields "pr_author"}}
+        Your own PR:  {{index .Fields "mine"}}
+
+        Review ONLY for:
+          A. Docs drift: behavior, configuration, interfaces, or architecture
+             the PR changes without updating the docs that describe them, or
+             docs it changes that no longer match the code.
+          B. Added complexity: new helpers, services, or modules that duplicate
+             existing ones; parallel code paths where extending an existing
+             one would do; abstractions with a single use.
+        Ignore everything else (style, naming, tests, performance, general
+        bugs). Other reviewers cover it. Do NOT edit, commit, or push.
+
+        Every review or comment you post must begin with
+        "🤖 docent autoreview:" and end with the hidden marker
+        <!-- docent-autoreview sha={{index .Fields "head_sha"}} -->
+
+        STEP 1: Skip work already done. If the head commit above is empty
+        (the collector could not resolve it this time), stop with no output.
+        Otherwise list your earlier reviews and comments:
+          gh pr view {{.URL}} --json headRefOid,reviews,comments,reviewRequests
+        Stop with no output if the head is no longer {{index .Fields "head_sha"}}
+        (a newer push will fire again), or if any review or comment already
+        carries the marker for this commit. Note the newest earlier marker's
+        sha as LAST, and whether your newest review is CHANGES_REQUESTED.
+
+        STEP 2: Build context before judging. Read the docs index and any
+        architecture, module-map, or shared-helper docs for the area the PR
+        changes before searching the code. Then read the change:
+          gh pr diff {{.URL}}
+        If LAST is set and still an ancestor of HEAD, also read
+        `git diff LAST HEAD` and focus on what changed since then, but judge
+        findings against the whole PR. Search the codebase (rg) for existing
+        helpers and paths that new code might duplicate. Report only findings
+        you can back with file paths.
+
+        STEP 3: Post the verdict. Never approve.
+          - Your own PR (mine is "true"), with findings: post them with
+            `gh pr comment`. Without findings: post nothing.
+          - Someone else's PR, with findings:
+              gh pr review {{.URL}} --request-changes --body BODY
+            List each finding with file:line, what it duplicates or what doc
+            drifted, and the suggested consolidation or doc fix.
+          - Someone else's PR, without findings, where your newest review is
+            CHANGES_REQUESTED: dismiss it, quoting the marker in the message:
+              gh api -X PUT repos/OWNER/NAME/pulls/NUMBER/reviews/REVIEW_ID/dismissals \
+                -f event=DISMISS -f message=MESSAGE
+            Otherwise, post nothing.
+        A review you submit removes your team's review request when you're on
+        that team. If STEP 1's reviewRequests included a team and it's gone
+        now, request it again so the PR stays in its queue:
+          gh api -X POST repos/OWNER/NAME/pulls/NUMBER/requested_reviewers \
+            -f 'team_reviewers[]=TEAM_SLUG'
+
+        STEP 4: Your final message goes to your notification channel. Output
+        one line: SKIPPED, CLEAN, DISMISSED, or CHANGES REQUESTED / COMMENTED
+        with the number of findings, followed by one bullet per finding.
+    - type: shell
+      command: ~/.config/docent/notify.sh
+      args: [pr]
+```
+
+The reviewer is only as good as the context it starts from. In a large
+codebase it can't afford to read everything on every push, so the "duplicates
+an existing helper" check depends on docs that map the main modules and
+catalog the shared helpers. If its findings are thin or miss obvious
+duplication, write those docs first.

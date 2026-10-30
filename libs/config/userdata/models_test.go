@@ -79,6 +79,7 @@ func TestValidatePRQueries(t *testing.T) {
 		{"empty path", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Watch: true, Paths: []string{" / "}}},
 		{"absolute path", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Watch: true, Paths: []string{"/services/api"}}},
 		{"climbing path", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Watch: true, Paths: []string{"services/../secrets"}}},
+		{"paths without watch", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Paths: []string{"services/api"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

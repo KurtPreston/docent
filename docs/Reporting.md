@@ -304,11 +304,62 @@ review decision, and merge state, counts them in the dashboard's
 action-required tally, and lists them in the standup. `relation` labels the rows
 so automations can single them out via `match.fields`; it may be any lowercase
 identifier other than the built-in `authored`, `review_requested`, and
-`reviewable`.
+`reviewable`. Several entries may share a relation, and their matches are
+merged into one set.
 
 Because a PR opened on your behalf is adjacent context rather than something you
 wrote, these searches run at `involved` and `all` only. `scope: self` — which
 the `prs` mode pins — stays limited to PRs you authored.
+
+#### Watching a set of PRs
+
+Set `watch: true` to follow a set of PRs no matter who wrote them — every PR
+that changes one part of a repository, say, or every PR that asks your team
+for review. This is what an automation needs to act on a team's PRs rather
+than only your own:
+
+```yaml
+    pr_queries:
+      - relation: api
+        watch: true
+        qualifiers: repo:my-org/my-repo draft:false
+        paths: [services/api/]
+      - relation: api
+        watch: true
+        qualifiers: repo:my-org/my-repo draft:false team-review-requested:my-org/api-owners
+```
+
+The two entries share the `api` relation, so a rule matching
+`relation: api` sees the union: PRs that change `services/api/` plus PRs
+that ask `my-org/api-owners` for review.
+
+- **Ownership is settled per PR.** Your own PRs in the set stay yours
+  (`mine: "true"`, `is_self: true`); anyone else's are review candidates
+  (`reviewable: "true"`, `is_self: false`), so rules guarded by
+  `conditions.self` still keep their hands off teammates' branches. Both
+  carry the watch relation: watch queries are searched before everything
+  else, so they win the [dedupe](#prs-you-could-review) when a PR also
+  matches another search.
+- **`paths`** keeps only PRs that change a file at or under one of the listed
+  paths, matched by whole path segment (`services/api` does not match
+  `services/api-gateway/`). GitHub search cannot filter by path, so these
+  queries run as one paginated GraphQL search that also returns each PR's
+  first 100 files. A larger PR with no match there has its full file list
+  fetched. Keep the qualifiers narrow — at least a `repo:` — since every
+  open PR they match is paged through. `paths` is only valid with `watch`.
+- **Not capped.** The 50-PR limit on the [review pool](#prs-you-could-review)
+  does not apply: you asked for this set by name, so all of it is resolved.
+- **Open PRs only.** Watch queries are skipped by the
+  [recently-closed](#recently-closed-prs) search, since a teammate's merged
+  PR is not your work. Like other `pr_queries`, they run at `involved` and
+  `all` only.
+
+Every fully resolved PR row — your own, and review candidates including
+watched ones — carries `head_sha`, the PR's current head commit
+(`review_requested` rows resolve only their head branch). It changes on every push, so a
+`transition` rule on `head_sha` fires once per new revision, which is the
+natural trigger for a reviewer. See
+[Review a team's PRs for docs drift and complexity](Automation-recipes.md#review-a-teams-prs-for-docs-drift-and-complexity).
 
 ### How an open PR is classified
 

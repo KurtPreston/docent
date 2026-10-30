@@ -63,8 +63,8 @@ type Directive struct {
 // from the built-in relations.
 //
 // Watch follows the matching PRs regardless of author: the user's own stay
-// owned, anyone else's become review candidates. Paths keeps only PRs that
-// change a file at or under one of the listed repository paths.
+// owned, anyone else's become review candidates. Paths, valid only with Watch, keeps
+// only PRs that change a file at or under one of the listed repository paths.
 type PRQuery struct {
 	Relation   string   `yaml:"relation"`
 	Qualifiers string   `yaml:"qualifiers"`
@@ -340,6 +340,9 @@ func validatePRQueries(path string, queries []PRQuery) []string {
 				problems = append(problems, fmt.Sprintf("%s.watch must match the other entries for relation %q", qPath, relation))
 			}
 			watchByRelation[relation] = q.Watch
+		}
+		if len(q.Paths) > 0 && !q.Watch {
+			problems = append(problems, qPath+".paths requires watch: true")
 		}
 		problems = append(problems, validatePRQueryPaths(qPath, q.Paths)...)
 		fields := strings.Fields(q.Qualifiers)
