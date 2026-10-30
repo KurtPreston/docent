@@ -78,6 +78,14 @@ each unit after startup only seeds a baseline (so docentd knows what
 unit onward. Otherwise every signal/state already in the lookback window
 would look "new" on every restart.
 
+**Collector failures are signals too.** When a directive's collect starts
+failing, such as after its credentials expire, docentd offers rules one
+`collector_error` signal: `source` is the collector, `title` the directive's
+name, `summary` the error. Fields are `directive_id`, `mode`, and `error`. It
+fires once per outage, not on every failed poll, and again only after the
+directive recovers and fails anew. A failure on the first collect after a
+restart counts too. See the [recipe](Automation-recipes.md#get-notified-when-a-collector-needs-attention).
+
 ## Conditions
 
 Optional gates evaluated after the trigger matches, before any action runs:

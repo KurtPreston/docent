@@ -29,6 +29,38 @@ func (e *Engine) AutomationJobs(limit int) []automation.Job {
 	return e.automations.Store.List(limit)
 }
 
+// alertCollectorError offers automations a collector_error signal when a unit
+// starts failing, such as after its credentials expire. It fires once per
+// outage: the unit must have been healthy (or never run) before this collect.
+// The outage start time is part of the StableID, so cooldown dedupe doesn't
+// swallow the next outage. It must not run under e.mu.
+func (e *Engine) alertCollectorError(ctx context.Context, u *unit, err error, now time.Time) {
+	if e.automations == nil {
+		return
+	}
+	// Name the failing directive the way the dashboard does
+	d := u.directive
+	title := d.Name
+	if title == "" {
+		title = d.ID
+	}
+
+	// Describe the failure as a self signal from the directive's collector
+	sig := model.Signal{
+		StableID:    fmt.Sprintf("collector_error:%s/%s:%d", d.ID, u.mode, now.UnixMilli()),
+		DirectiveID: d.ID,
+		Source:      d.Collector,
+		Kind:        "collector_error",
+		Title:       title,
+		Summary:     err.Error(),
+		Severity:    "error",
+		ObservedAt:  now,
+		IsSelf:      true,
+		Fields:      map[string]string{"directive_id": d.ID, "mode": string(u.mode), "error": err.Error()},
+	}
+	e.evaluateAutomations(ctx, []model.Signal{sig}, nil, nil)
+}
+
 // evaluateAutomations matches newly collected signals (and, when entity
 // snapshots are available, state transitions) and dispatches actions.
 // It must not run under e.mu.
