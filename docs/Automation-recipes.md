@@ -113,7 +113,7 @@ polls stay quiet.
   enabled: true
   trigger:
     type: transition
-    source: github          # the id of your GitHub collector directive
+    source: github          # the collector name, not the directive id
     kind: pr_review_status
     when:
       field: checks
