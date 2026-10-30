@@ -40,11 +40,12 @@ type Directive struct {
 	Config         map[string]string `yaml:"config,omitempty"`
 	CredentialRefs map[string]string `yaml:"credential_refs,omitempty"`
 
-	// PRQueries: github/github-enterprise. Extra open-PR searches whose
-	// results count as the user's own work — e.g. PRs a CI bot opens on
-	// their behalf, which the built-in author/review-requested searches
-	// can't see. Each becomes its own pr_review_status relation and is
-	// only collected at involved/all scope.
+	// PRQueries: github/github-enterprise. Extra open-PR searches. By
+	// default their results count as the user's own work — e.g. PRs a CI bot
+	// opens on their behalf, which the built-in author/review-requested
+	// searches can't see. A Watch query instead follows PRs whoever wrote
+	// them. Each relation labels its pr_review_status rows, entries sharing a
+	// relation are unioned, and all are only collected at involved/all scope.
 	PRQueries []PRQuery `yaml:"pr_queries,omitempty"`
 
 	// State and Events configure the directive's collection units. A
@@ -60,9 +61,15 @@ type Directive struct {
 // positional arguments for `gh search prs`. Relation labels the resulting
 // pr_review_status rows so automations and the dashboard can tell them apart
 // from the built-in relations.
+//
+// Watch follows the matching PRs regardless of author: the user's own stay
+// owned, anyone else's become review candidates. Paths keeps only PRs that
+// change a file at or under one of the listed repository paths.
 type PRQuery struct {
-	Relation   string `yaml:"relation"`
-	Qualifiers string `yaml:"qualifiers"`
+	Relation   string   `yaml:"relation"`
+	Qualifiers string   `yaml:"qualifiers"`
+	Watch      bool     `yaml:"watch,omitempty"`
+	Paths      []string `yaml:"paths,omitempty"`
 }
 
 // ModeConfig configures one collection mode (state or events) of a directive.
@@ -312,9 +319,12 @@ var prRelationPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 // directive. Qualifiers are passed to `gh search prs` as positional
 // arguments, so a leading dash is rejected to keep a query from smuggling in
 // flags that would reshape the command.
+//
+// Entries may share a relation, which unions their results, but must then agree
+// on Watch: one relation can't be both the user's own work and a set they follow.
 func validatePRQueries(path string, queries []PRQuery) []string {
 	var problems []string
-	seen := map[string]bool{}
+	watchByRelation := map[string]bool{}
 	for i, q := range queries {
 		qPath := fmt.Sprintf("%s.pr_queries[%d]", path, i)
 		relation := strings.TrimSpace(q.Relation)
@@ -325,11 +335,13 @@ func validatePRQueries(path string, queries []PRQuery) []string {
 			problems = append(problems, fmt.Sprintf("%s.relation %q must match %s", qPath, relation, prRelationPattern))
 		case reservedPRRelations[relation]:
 			problems = append(problems, fmt.Sprintf("%s.relation %q is reserved", qPath, relation))
-		case seen[relation]:
-			problems = append(problems, fmt.Sprintf("%s.relation %q is duplicated", qPath, relation))
 		default:
-			seen[relation] = true
+			if watch, ok := watchByRelation[relation]; ok && watch != q.Watch {
+				problems = append(problems, fmt.Sprintf("%s.watch must match the other entries for relation %q", qPath, relation))
+			}
+			watchByRelation[relation] = q.Watch
 		}
+		problems = append(problems, validatePRQueryPaths(qPath, q.Paths)...)
 		fields := strings.Fields(q.Qualifiers)
 		if len(fields) == 0 {
 			problems = append(problems, qPath+".qualifiers is required")
@@ -353,4 +365,33 @@ func validationResult(problems []string) error {
 func IsValidationError(err error) bool {
 	var validationErr ValidationError
 	return errors.As(err, &validationErr)
+}
+
+// validatePRQueryPaths checks one query's path filter: each entry names a file
+// or directory relative to the repository root, so it can't be empty, absolute,
+// or climb out with "..".
+func validatePRQueryPaths(qPath string, paths []string) []string {
+	var problems []string
+	for j, p := range paths {
+		p = strings.TrimSpace(p)
+		switch {
+		case strings.Trim(p, "/") == "":
+			problems = append(problems, fmt.Sprintf("%s.paths[%d] is empty", qPath, j))
+		case strings.HasPrefix(p, "/"):
+			problems = append(problems, fmt.Sprintf("%s.paths[%d] %q must be relative to the repository root", qPath, j, p))
+		case containsDotDot(p):
+			problems = append(problems, fmt.Sprintf("%s.paths[%d] %q may not contain \"..\"", qPath, j, p))
+		}
+	}
+	return problems
+}
+
+// containsDotDot reports whether any segment of a slash-separated path is "..".
+func containsDotDot(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }

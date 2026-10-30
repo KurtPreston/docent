@@ -113,4 +113,9 @@ Design decisions (agreed):
 
 ## Obstacles
 
+- Three bare-repo tests in `libs/collectors/local_git_scope_test.go` fail when
+  the environment injects `safe.bareRepository=explicit` through
+  `GIT_CONFIG_*` variables. Workaround: run validation with
+  `GIT_CONFIG_COUNT` unset. Not a code issue.
+
 ## Found bugs

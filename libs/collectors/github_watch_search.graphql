@@ -1,0 +1,17 @@
+# Lists open PRs matching a watch query's qualifiers, with the paths each one
+# changes, so the collector can filter by path without a call per PR. The
+# caller prepends "is:pr is:open" to $q and pages with --paginate.
+query($q: String!, $endCursor: String) {
+  search(query: $q, type: ISSUE, first: 50, after: $endCursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {
+        title url isDraft createdAt updatedAt
+        author { login __typename }
+        assignees(first: 20) { nodes { login } }
+        repository { nameWithOwner }
+        files(first: 100) { totalCount nodes { path } }
+      }
+    }
+  }
+}
