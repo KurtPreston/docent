@@ -459,10 +459,9 @@ because the bot, not you, is the author:
 directives:
   - id: github
     collector: github-enterprise
-    config:
-      pr_queries:
-        - relation: backport
-          qualifiers: author:app/my-backport-bot assignee:@me
+    pr_queries:
+      - relation: backport
+        qualifiers: author:app/my-backport-bot assignee:@me
 ```
 
 Second, the rule matches on that `relation` label:
