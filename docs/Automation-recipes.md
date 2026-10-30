@@ -166,6 +166,83 @@ polls stay quiet.
       args: [pr]
 ```
 
+## Fix flaky E2E specs from Azure Pipelines
+
+CI retries hide flaky Playwright specs: the run passes, so nobody looks. This
+rule reacts to every spec that failed or flaked in an Azure Pipelines run, using
+the [`azure-pipelines` collector](Reporting.md#azure-pipelines). A write-mode
+agent decides between two responses:
+
+- **A PR broke the spec.** It comments on that PR with the evidence.
+- **The spec is flaky, or fails on the main branch.** It fixes the spec on a
+  fresh branch and opens a ready PR.
+
+Each signal covers one spec in one run, so a single rule run fixes a single
+spec. `base_ref` starts the fix branch from the run's branch, or from `main`
+for PR runs. Agents for the same fix branch take turns, so a spec that flakes
+twice in a day lands on one branch. The prompt tells the agent to check for an
+existing PR first.
+
+```yaml
+- id: fix-e2e-flakes
+  name: Fix failed and flaky E2E specs
+  enabled: true
+  trigger:
+    type: signal
+    source: web-e2e          # the id of your azure-pipelines directive
+    kind: test_failure
+  actions:
+    - type: agent-inline
+      provider: copilot
+      workdir: worktree
+      base_ref: '{{index .Fields "base_branch"}}'
+      prompt: |-
+        You are an autonomous agent keeping a Playwright E2E suite stable.
+        You are in a fresh git worktree of {{.Repo}} on branch {{.Branch}},
+        created from {{index .Fields "base_branch"}}.
+
+        Run:      {{.URL}} ({{index .Fields "result"}}, {{index .Fields "reason"}})
+        Spec:     {{index .Fields "spec_file"}} ({{index .Fields "outcome"}})
+        Failed:   {{index .Fields "failed_tests"}}
+        Flaky:    {{index .Fields "flaky_tests"}}
+        PR:       {{index .Fields "pr_url"}} (head {{index .Fields "pr_head_branch"}}, commit {{index .Fields "commit"}})
+        Errors:
+        {{index .Fields "errors"}}
+
+        Full logs: {{index .Fields "test_log_urls"}} (fetch with
+        `curl -H "Authorization: Bearer $(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv)" <url>`).
+
+        1. Decide which case this is:
+           - REGRESSION: the run is for a PR, the spec FAILED (not flaky),
+             and the PR's diff plausibly causes it (check with
+             `gh pr diff <pr_url>`).
+           - FLAKE: everything else, including any flaky outcome and any
+             failure on the main branch.
+
+        2. REGRESSION: change nothing and push nothing. Comment once on the
+           PR with the failing tests, the error, and the PR change that
+           likely causes it. Skip the comment if an equivalent one exists.
+
+        3. FLAKE:
+           a. If an open PR already fixes this spec (search with
+              `gh pr list --search "<spec file>"`), stop and report it.
+           b. Find the root cause (racy waits, animation timing, shared
+              state, order dependence, unscoped locators) and fix it in the
+              test or the app. Never just add retries, raise timeouts, or
+              skip the test.
+           c. Run the project's lint and type checks. Commit, then
+              `git push origin HEAD:refs/heads/{{.Branch}}`.
+           d. Open a ready (non-draft) PR against
+              {{index .Fields "base_branch"}} that explains the flake, with
+              a link to the run.
+
+        Begin every PR description and comment with "🤖". Finish with a
+        two-line summary: what you did, and the PR or comment URL.
+    - type: shell
+      command: ~/.config/docent/notify.sh
+      args: [e2e]
+```
+
 ## Auto-resolve merge conflicts on your PRs
 
 This follows the same pattern as the CI fixer, but the trigger is the PR's

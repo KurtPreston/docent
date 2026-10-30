@@ -173,6 +173,7 @@ Each collector honors `scope` directly — there is no post-collection filter. `
 | `github` / `github-enterprise` | `gh search prs --author <you>` and commits authored by you. | Self plus PRs reviewed by you, issues you're involved with, comments you left on either, PRs awaiting your review, any [`pr_queries`](#extra-open-pr-searches) declared on the directive, and the [review candidates](#prs-you-could-review). | `involved` plus per-repo `gh search prs/issues/commits --repo <r>` for each entry in `config.followed_repos`. |
 | `gitea` | Repos you own; issues + PRs created by you. | Self plus issues/PRs assigned to you or mentioning you (deduped). | `involved` plus per-repo issue + PR listings for each entry in `config.followed_repos`. Bare-`owner` entries fan out across all repos under that owner. |
 | `jira` | `(assignee = currentUser() OR reporter = currentUser()) AND updated >= …` | Adds `OR watcher = currentUser()`. Today's default JQL. | Wraps with `project in (…) OR …` using `config.followed_projects` (falls back to `involved` when no projects are configured). |
+| `azure-pipelines` | Nothing; CI runs aren't personal activity. | Every completed run of `config.definitions` in the window. | Same as `involved`. |
 | `google-calendar` | All scopes return all events on the secret iCal feed (the feed is your personal calendar by definition). | Same as `self`. | Same as `self`. |
 
 How each collector decides whether a row is **yours** (`is_self: true`):
@@ -392,7 +393,44 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `gitea` — repos updated under `target.owner` plus issues + PRs you created, are assigned to, or are mentioned in (defaults to the authenticated user via `/api/v1/user` when `target.owner` is empty). With `scope: all`, also pulls activity from each entry in `config.followed_repos`.
 - `jira` — issues you assign / report / watch by default (override actor coverage via `scope`, or scope to specific projects via `config.followed_projects` when `scope: all`).
 - `google-calendar` — events from a secret iCal URL.
+- `azure-pipelines` — completed Azure DevOps runs of `config.definitions`, one `test_failure` signal per Playwright spec file that failed **or flaked** (passed only on retry). Built to trigger automations; see [Azure Pipelines](#azure-pipelines).
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [Slack.md](Slack.md) for token setup and required scopes.
+
+### Azure Pipelines
+
+`azure-pipelines` watches Azure DevOps pipeline runs for failed and flaky Playwright specs. CI retries make a flaky run pass, so the build result and its GitHub check both say success. Only the run log's Playwright summary (`1 flaky`) shows the flake, so the collector reads the logs of the timeline tasks that match `config.test_task`.
+
+```yaml
+directives:
+  - id: web-e2e
+    collector: azure-pipelines
+    enabled: true
+    config:
+      organization: my-org           # dev.azure.com/<organization>
+      project: my-project
+      definitions: "45"              # pipeline definition ids (definitionId= in the URL)
+      test_task: "Run Playwright"    # regex over task names; default (?i)playwright|e2e|test
+      repo: my-org/web               # optional; defaults to the run's GitHub repo
+    events:
+      poll: { interval: 5m }
+      lookback: 1d
+```
+
+Auth uses your Azure CLI login by default. Run `az login` as the user docentd runs as; the collector calls `az account get-access-token` and caches the token until it nears expiry. To use a PAT with **Build (Read)** scope instead, set `credential_refs.token` to the name of the env var that holds it.
+
+Each signal covers one spec file in one run (`source: azure-pipelines`, `kind: test_failure`, severity `error` when a test failed and `warning` when it only flaked). Its fields:
+
+| Field | Meaning |
+|-------|---------|
+| `outcome` | `failed` if any test in the spec failed every attempt, otherwise `flaky`. |
+| `spec_file`, `failed_tests`, `flaky_tests` | The spec and its tests (newline-separated `file:line:col › title`). |
+| `errors` | The first error and code frame per test, from Playwright's `::error` annotations. |
+| `build_id`, `build_number`, `build_url`, `pipeline`, `definition_id`, `result`, `reason`, `test_log_urls` | The run. `result` stays `succeeded` for a run whose only problems are flakes. |
+| `source_branch`, `commit`, `requested_by` | What ran. For PR runs `commit` is the PR head commit, not the merge commit. |
+| `pr_number`, `pr_url`, `pr_title`, `pr_head_branch`, `pr_author` | Set only for PR runs. |
+| `repo`, `branch`, `base_branch` | Where an agent should work: a fix branch named `<branch_prefix><spec>-<yyyymmdd>` (prefix default `e2e-fix-`) off the run's branch, or off `config.base_branch` (default `main`) for PR runs. |
+
+See the [flaky E2E spec recipe](Automation-recipes.md#fix-flaky-e2e-specs-from-azure-pipelines) for an automation built on these signals.
 
 ### Nested repos (`config.scan_depth`)
 
