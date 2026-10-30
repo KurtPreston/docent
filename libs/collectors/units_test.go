@@ -53,6 +53,7 @@ func TestRegistryCapabilities(t *testing.T) {
 		{"jira", true, true},
 		{"github", true, true},
 		{"gitea", true, true},
+		{"azure-pipelines", false, true},
 	}
 	for _, tc := range cases {
 		state, events := r.Capabilities(tc.name)

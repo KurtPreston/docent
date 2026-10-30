@@ -182,6 +182,7 @@ var sourceKinds = map[string]map[string]bool{
 	"github":            {"pr_review_status": true, "pr": true, "pr_activity": true, "issue": true, "issue_activity": true},
 	"github-enterprise": {"pr_review_status": true, "pr": true, "pr_activity": true, "issue": true, "issue_activity": true},
 	"gitea":             {"pr_review_status": true, "pr": true, "pr_activity": true, "issue": true, "issue_activity": true},
+	"azure-pipelines":   {"test_failure": true, "build_failure": true},
 }
 
 // kindAliases lets a rule use a friendly `kind` and still match the concrete

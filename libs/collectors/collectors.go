@@ -319,6 +319,7 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry.Register("github", GitHubCollector{Clock: clock})
 	registry.Register("github-enterprise", GitHubCollector{Clock: clock})
 	registry.Register("gitea", GiteaCollector{Clock: clock, HTTP: nil})
+	registry.Register("azure-pipelines", AzurePipelinesCollector{Clock: clock})
 	registry.Register("jira", JiraCollector{Clock: clock, HTTP: nil})
 	registry.Register("google-calendar", GoogleCalendarCollector{Clock: clock, HTTP: nil})
 	registry.Register("slack", SlackCollector{Clock: clock, HTTP: nil})

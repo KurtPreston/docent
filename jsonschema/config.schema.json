@@ -630,6 +630,9 @@
               "$ref": "#/$defs/directive.gitea"
             },
             {
+              "$ref": "#/$defs/directive.azure-pipelines"
+            },
+            {
               "$ref": "#/$defs/directive.jira"
             },
             {
@@ -891,6 +894,89 @@
         }
       },
       "required": ["collector", "config", "credential_refs"]
+    },
+    "directive.azure-pipelines": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "azure-pipelines",
+          "x-docent-default-id": "azure-pipelines",
+          "x-docent-display-name": "Azure Pipelines"
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "organization": {
+              "type": "string",
+              "minLength": 1,
+              "x-docent-prompt": "Azure DevOps organization (dev.azure.com/<organization>)"
+            },
+            "project": {
+              "type": "string",
+              "minLength": 1,
+              "x-docent-prompt": "Azure DevOps project"
+            },
+            "definitions": {
+              "type": "string",
+              "minLength": 1,
+              "x-docent-prompt": "Comma-separated pipeline definition ids to watch (the definitionId in a pipeline URL)"
+            },
+            "repo": {
+              "type": "string",
+              "description": "owner/name the agent works in. Defaults to the run's GitHub repository.",
+              "x-docent-setup-skip-prompt": true
+            },
+            "log_parser": {
+              "type": "string",
+              "enum": ["playwright"],
+              "description": "Built-in parser for test task logs. With one set, each failing or flaky test file becomes a test_failure signal; without one, only failed runs are reported (build_failure).",
+              "x-docent-setup-skip-prompt": true
+            },
+            "log_task": {
+              "type": "string",
+              "description": "Regex matching the timeline task names whose logs log_parser reads. Default: every task.",
+              "x-docent-setup-skip-prompt": true
+            },
+            "branch_prefix": {
+              "type": "string",
+              "description": "Prefix of the fix branch name put in each test_failure signal's `branch` field. Default: test-fix-",
+              "x-docent-setup-skip-prompt": true
+            },
+            "base_branch": {
+              "type": "string",
+              "description": "Base for fix branches when the run wasn't on a branch (e.g. PR runs). Default: main",
+              "x-docent-setup-skip-prompt": true
+            },
+            "base_url": {
+              "type": "string",
+              "description": "Azure DevOps server root. Default: https://dev.azure.com",
+              "x-docent-validator": "url",
+              "x-docent-setup-skip-prompt": true
+            }
+          },
+          "required": ["organization", "project", "definitions"],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "credential_refs": {
+          "type": "object",
+          "properties": {
+            "token": {
+              "type": "string",
+              "minLength": 1,
+              "x-docent-secret": true,
+              "description": "Env var holding a PAT with Build (Read) scope. Omit to use the Azure CLI login (`az login`).",
+              "x-docent-setup-skip-prompt": true
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["collector", "config"]
     },
     "directive.jira": {
       "type": "object",
