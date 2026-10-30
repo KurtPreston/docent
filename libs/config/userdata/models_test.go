@@ -76,6 +76,10 @@ func TestValidatePRQueries(t *testing.T) {
 		{"reserved review relation", PRQuery{Relation: "review_requested", Qualifiers: "author:app/ci-bot"}},
 		{"empty qualifiers", PRQuery{Relation: "backport", Qualifiers: "   "}},
 		{"flag smuggled as qualifier", PRQuery{Relation: "backport", Qualifiers: "author:app/ci-bot --limit 500"}},
+		{"empty path", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Watch: true, Paths: []string{" / "}}},
+		{"absolute path", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Watch: true, Paths: []string{"/services/api"}}},
+		{"climbing path", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Watch: true, Paths: []string{"services/../secrets"}}},
+		{"paths without watch", PRQuery{Relation: "api", Qualifiers: "repo:o/r", Paths: []string{"services/api"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,12 +89,23 @@ func TestValidatePRQueries(t *testing.T) {
 		})
 	}
 
-	dup := withQueries(
-		PRQuery{Relation: "backport", Qualifiers: "author:app/ci-bot"},
-		PRQuery{Relation: "backport", Qualifiers: "label:backport"},
+	// A shared relation unions its entries, e.g. a path filter plus a team
+	// review request feeding one reviewer rule.
+	union := withQueries(
+		PRQuery{Relation: "api", Qualifiers: "repo:o/r draft:false", Watch: true, Paths: []string{"services/api/"}},
+		PRQuery{Relation: "api", Qualifiers: "repo:o/r team-review-requested:o/api-owners", Watch: true},
 	)
-	if err := dup.Validate(); err == nil {
-		t.Fatal("expected duplicate relation to be rejected")
+	if err := union.Validate(); err != nil {
+		t.Fatalf("shared watch relation rejected: %v", err)
+	}
+
+	// One relation can't be both the user's own work and a set they follow.
+	mixed := withQueries(
+		PRQuery{Relation: "backport", Qualifiers: "author:app/ci-bot"},
+		PRQuery{Relation: "backport", Qualifiers: "label:backport", Watch: true},
+	)
+	if err := mixed.Validate(); err == nil {
+		t.Fatal("expected a relation mixing watch and owned entries to be rejected")
 	}
 }
 

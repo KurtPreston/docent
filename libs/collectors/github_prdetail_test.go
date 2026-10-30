@@ -27,7 +27,7 @@ func decodePRDetail(t *testing.T, raw, viewer string) prDetail {
 func TestPRDetailDecodesAConsolidatedReply(t *testing.T) {
 	raw := `{"data":{"repository":{"pullRequest":{
     "isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"REVIEW_REQUIRED",
-    "updatedAt":"2026-08-05T18:00:00Z","headRefName":"SALSA-1/fix",
+    "updatedAt":"2026-08-05T18:00:00Z","headRefName":"SALSA-1/fix","headRefOid":"abc123",
     "author":{"login":"alice","__typename":"User"},
     "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]},
     "reviewThreads":{"nodes":[
@@ -52,6 +52,9 @@ func TestPRDetailDecodesAConsolidatedReply(t *testing.T) {
 	}
 	if got.HeadBranch != "SALSA-1/fix" {
 		t.Errorf("headBranch = %q", got.HeadBranch)
+	}
+	if got.HeadSHA != "abc123" {
+		t.Errorf("headSHA = %q", got.HeadSHA)
 	}
 	if got.Mergeable != "mergeable" {
 		t.Errorf("mergeable = %q", got.Mergeable)

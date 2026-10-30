@@ -526,7 +526,7 @@
         },
         "pr_queries": {
           "type": "array",
-          "description": "github/github-enterprise: extra open-PR searches whose results count as your own work (e.g. PRs a CI bot opens on your behalf). Collected only at involved/all scope.",
+          "description": "github/github-enterprise: extra open-PR searches. By default their results count as your own work (e.g. PRs a CI bot opens on your behalf); set `watch` to follow PRs regardless of who wrote them. Entries sharing a relation are unioned. Collected only at involved/all scope.",
           "items": {
             "$ref": "#/$defs/prQuery"
           }
@@ -566,12 +566,22 @@
         "relation": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_-]*$",
-          "description": "Label for the resulting pr_review_status rows. May not be 'authored' or 'review_requested'."
+          "description": "Label for the resulting pr_review_status rows. May not be 'authored', 'review_requested', or 'reviewable'. Entries may share a relation to union their results."
         },
         "qualifiers": {
           "type": "string",
           "minLength": 1,
           "description": "GitHub search syntax, split on whitespace into positional arguments for `gh search prs` (e.g. \"author:app/ci-bot assignee:@me\")."
+        },
+        "watch": {
+          "type": "boolean",
+          "description": "Follow these PRs whoever wrote them: your own stay yours, anyone else's become review candidates (not yours, so `self: true` rules skip them). Watched rows take precedence over `authored`, are never capped, and are not searched once closed. Every entry sharing a relation must agree on this."
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Watch queries only: keep only PRs that change a file at or under one of these repository paths (e.g. \"services/api/\"). Listed through one paginated GraphQL search, so qualifiers should narrow it to a repository."
         }
       }
     },

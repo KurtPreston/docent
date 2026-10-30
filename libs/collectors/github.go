@@ -59,6 +59,7 @@ type ghPRView struct {
 	StatusCheckRollup []ghCheckRollupEntry `json:"statusCheckRollup"`
 	ReviewDecision    string               `json:"reviewDecision"`
 	HeadRefName       string               `json:"headRefName"`
+	HeadRefOid        string               `json:"headRefOid"`
 	Mergeable         string               `json:"mergeable"`
 	// State is OPEN / CLOSED / MERGED. Read only for recently-closed PRs, where
 	// it is the one thing that separates a merge from an abandonment.
@@ -564,6 +565,11 @@ type prReviewSpec struct {
 	// nor a request of them, which is a third thing from mine — see
 	// buildPRReviewSpecs.
 	reviewable bool
+	// watch marks a declared watch query, whose rows settle mine/reviewable
+	// per PR (see forRow) and are exempt from the candidate cap.
+	watch bool
+	// paths keeps only PRs that change a file at or under one of these.
+	paths []string
 }
 
 // relationReviewable labels every row from the candidate pool. Unlike the other
@@ -573,6 +579,10 @@ const relationReviewable = "reviewable"
 
 // buildPRReviewSpecs plans the open-PR searches for the review-status view.
 //
+//   - declared watch queries (pr_queries with `watch`): a set of PRs followed
+//     whoever wrote them, optionally narrowed to some paths. Searched first so a
+//     user's own PR in the set carries the watch relation; ownership is then
+//     settled per PR (see forRow). Involved/all only.
 //   - authored (`--author`): the user's own PRs, at every scope.
 //   - review-requested (`--review-requested`): someone else's PR awaiting the
 //     user's review. GitHub drops you from the requested reviewers once you
@@ -593,13 +603,15 @@ const relationReviewable = "reviewable"
 // so a PR that any earlier search already found stays whatever that search said
 // it was.
 func buildPRReviewSpecs(scope Scope, user string, extra []userdata.PRQuery, followedRepos []string) []prReviewSpec {
-	specs := []prReviewSpec{{relation: "authored", args: []string{"--author", user}, mine: true}}
+	authored := prReviewSpec{relation: "authored", args: []string{"--author", user}, mine: true}
 	if scope == ScopeSelf {
-		return specs
+		return []prReviewSpec{authored}
 	}
+	// Watch queries lead so a watched PR the user wrote keeps the watch relation.
+	specs := append(watchPRReviewSpecs(extra), authored)
 	for _, q := range extra {
 		qualifiers := strings.Fields(q.Qualifiers)
-		if len(qualifiers) == 0 {
+		if q.Watch || len(qualifiers) == 0 {
 			continue
 		}
 		specs = append(specs, prReviewSpec{relation: strings.TrimSpace(q.Relation), args: qualifiers, mine: true})
@@ -628,10 +640,11 @@ func buildClosedPRSpecs(scope Scope, user string, extra []userdata.PRQuery) []pr
 		return specs
 	}
 	// Same reasoning as the open-PR path: a PR a bot opened on the user's behalf
-	// is theirs to account for, and it merges like any other.
+	// is theirs to account for, and it merges like any other. A watch query is
+	// not: the user's own PRs in it are already found by the authored search.
 	for _, q := range extra {
 		qualifiers := strings.Fields(q.Qualifiers)
-		if len(qualifiers) == 0 {
+		if q.Watch || len(qualifiers) == 0 {
 			continue
 		}
 		specs = append(specs, prReviewSpec{relation: strings.TrimSpace(q.Relation), args: qualifiers, mine: true})
@@ -801,13 +814,14 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	var found []prReviewRow
 	counts := map[string]int{}
 	order := make([]string, 0, len(specs))
+	run := ghRun{env: env, directive: directive, opts: opts}
 	for _, spec := range specs {
-		rows, err := c.listOpenPRs(ctx, env, directive, opts, spec.args...)
+		rows, err := c.listPRReviewSpec(ctx, run, spec)
 		if err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
-			found = append(found, prReviewRow{spec: spec, row: row})
+			found = append(found, prReviewRow{spec: spec.forRow(row, user), row: row})
 		}
 		if _, seen := counts[spec.relation]; !seen {
 			order = append(order, spec.relation)
@@ -1013,6 +1027,11 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 	if detail.HeadBranch != "" {
 		fields["head_branch"] = detail.HeadBranch
 	}
+	// head_sha changes on every push, so a transition rule on it fires once
+	// per new revision of a PR.
+	if detail.HeadSHA != "" {
+		fields["head_sha"] = detail.HeadSHA
+	}
 	if spec.mine || spec.reviewable {
 		fields["checks"] = detail.Checks
 		fields["review_decision"] = detail.ReviewDecision
@@ -1127,10 +1146,12 @@ func dedupePRReviewRows(rows []prReviewRow) []prReviewRow {
 // maxReviewCandidates, leaving every other row untouched and in place. Only the
 // candidates are capped because they are the only rows whose count is set by
 // how busy other people are rather than by how much the user has in flight.
+// Watched rows are exempt: the user chose that set, and a rule over it would
+// otherwise see PRs drop out and reappear as the pool around them churns.
 func capReviewCandidates(rows []prReviewRow) []prReviewRow {
 	candidates := 0
 	for _, r := range rows {
-		if r.spec.reviewable {
+		if r.spec.reviewable && !r.spec.watch {
 			candidates++
 		}
 	}
@@ -1139,7 +1160,7 @@ func capReviewCandidates(rows []prReviewRow) []prReviewRow {
 	}
 	ranked := make([]int, 0, candidates)
 	for i, r := range rows {
-		if r.spec.reviewable {
+		if r.spec.reviewable && !r.spec.watch {
 			ranked = append(ranked, i)
 		}
 	}
@@ -1160,7 +1181,7 @@ func capReviewCandidates(rows []prReviewRow) []prReviewRow {
 }
 
 // fetchPRStatus resolves the aggregate checks status, review decision, head
-// branch, and merge-conflict verdict for a single PR via `gh pr view --json
+// branch and commit, and merge-conflict verdict for a single PR via `gh pr view --json
 // ...`. checks is one of "passing", "failing", "pending", "none", or
 // "unknown" (when the call fails or the payload can't be parsed); mergeable is
 // one of "mergeable", "conflicting", or "unknown". Failures are non-fatal: an
@@ -1175,26 +1196,27 @@ func capReviewCandidates(rows []prReviewRow) []prReviewRow {
 // the metadata call means a token that can't read checks still resolves the
 // head branch (which correlation needs to anchor the PR to its repo), plus the
 // review decision and mergeability; only the checks status degrades to unknown.
-func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) (checks, reviewDecision, headBranch, mergeable string) {
+func (c GitHubCollector) fetchPRStatus(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) prDetail {
+	d := prDetail{Checks: "unknown", Mergeable: "unknown"}
 	if strings.TrimSpace(prURL) == "" {
-		return "unknown", "", "", "unknown"
+		return d
 	}
-	view, err := c.fetchPRView(ctx, env, prURL, "reviewDecision,headRefName,mergeable", directive, opts)
+	view, err := c.fetchPRView(ctx, env, prURL, "reviewDecision,headRefName,headRefOid,mergeable", directive, opts)
 	if err != nil {
-		return "unknown", "", "", "unknown"
+		return d
 	}
-	reviewDecision = strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
-	headBranch = strings.TrimSpace(view.HeadRefName)
-	mergeable = normalizeMergeable(view.Mergeable)
+	d.ReviewDecision = strings.ToUpper(strings.TrimSpace(view.ReviewDecision))
+	d.HeadBranch = strings.TrimSpace(view.HeadRefName)
+	d.HeadSHA = strings.TrimSpace(view.HeadRefOid)
+	d.Mergeable = normalizeMergeable(view.Mergeable)
 
 	// Best-effort: a permission error (or any other failure) reading the
 	// check rollup leaves checks="unknown" rather than discarding the
 	// metadata resolved above.
-	checks = "unknown"
 	if rollup, err := c.fetchPRView(ctx, env, prURL, "statusCheckRollup", directive, opts); err == nil {
-		checks = rollupChecksState(rollup.StatusCheckRollup)
+		d.Checks = rollupChecksState(rollup.StatusCheckRollup)
 	}
-	return checks, reviewDecision, headBranch, mergeable
+	return d
 }
 
 // fetchPRView runs `gh pr view <url> --json <fields>` and parses the subset of
