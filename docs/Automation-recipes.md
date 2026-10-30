@@ -189,7 +189,7 @@ existing PR first.
   enabled: true
   trigger:
     type: signal
-    source: web-e2e          # the id of your azure-pipelines directive
+    source: azure-pipelines  # the collector, not the directive id
     kind: test_failure
   actions:
     - type: agent-inline
