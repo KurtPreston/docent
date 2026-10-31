@@ -216,6 +216,9 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   `--ssh-host` to skip) and checks that docentd answers there. The tunnel honors `~/.ssh/config`
   aliases (including `ProxyCommand`, e.g. Coder workspaces), and the wizard
   verifies the connection (including the token) before finishing. Install the window manager from wsm separately.
+  To remove it, run [`scripts/uninstall-docent-macos.sh`](scripts/uninstall-docent-macos.sh),
+  which undoes all of the above and keeps `~/.config/docent` unless you pass `--purge`
+  (`--dry-run` to preview).
 - **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
   installs `docent-launcher-windows` as a hidden, auto-restarting Scheduled Task
   (at-logon + a 1-minute watchdog), and optionally `docentd` locally. Prompts
@@ -236,7 +239,7 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 - `apps/docent-tunnel/` — workstation SSH local-forward helper for a remote, loopback-only docentd
 - the local window manager lives in the separate [wsm](https://github.com/KurtPreston/wsm) repo
 - `hooks/` — Cursor hook (`docent-notify.sh`) + snippet that report sessions to `docentd`
-- `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers
+- `scripts/install-docent-{linux,macos,windows}.*` — per-OS installers; `scripts/uninstall-docent-macos.sh` removes a macOS install
 - `~/.config/docent/` — `config.yaml` (reporter/automations), `docentd.yaml` (daemon), `goals.yaml`, `.env` (`$XDG_CONFIG_HOME/docent`)
 - `~/.local/state/docent/logs/<run>/` — reporter run logs (`$XDG_STATE_HOME/docent`)
 - `~/.local/state/docent/agent-sessions/` — hosted agent sessions and their transcripts
