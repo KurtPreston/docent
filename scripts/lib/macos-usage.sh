@@ -15,14 +15,14 @@ check that docentd answers there, and ask for a token only if it requires one.
 Local installs download the latest docent release (docentd with the
 dashboard embedded), run docent-setup when needed, and register its
 LaunchAgent. Remote installs point hooks/launcher at the remote docentd URL
-you provide, installing only docent-tunnel. On a re-run it first offers to reuse
+you provide, installing docent and optionally docent-tunnel. On a re-run it first offers to reuse
 the previous install's config (the local/remote choice, plus the remote
 URL/token/tunnel host), so updating never forces you to re-pick the deployment
 or retype credentials; DOCENTD_URL still overrides.
 
 Go and Node are only needed with --from-source, which builds the binaries
 (and the dashboard, embedded via -tags embed) from this checkout instead.
-After installing a release, `docentd update` upgrades it in place.
+After installing a release, `docent update` upgrades it in place.
 
 Options:
   --hooks           Install Cursor hooks even if Cursor.app is not found

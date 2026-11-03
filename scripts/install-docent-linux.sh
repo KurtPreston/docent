@@ -70,7 +70,7 @@ earlier install is converted into a real file in place.
 
 Go and Node are only needed with --from-source, which builds the dashboard
 (Vite/React) and docentd (-tags embed) from this checkout instead. After
-installing a release, `docentd update` upgrades it in place.
+installing a release, `docent update` upgrades it in place.
 
 Options:
   --no-systemd      Skip systemd unit install (build + config only)
@@ -220,6 +220,7 @@ if [ "$SKIP_BUILD" -eq 0 ] && [ "$FROM_SOURCE" -eq 1 ]; then
 fi
 
 DOCENTD_BIN="$BIN_DIR/docentd"
+DOCENT_BIN="$BIN_DIR/docent"
 
 # stop_previous_docent_services clears the way for a reinstall: stop the
 # systemd --user unit (if any), then kill stray processes from manual runs.
@@ -312,11 +313,12 @@ stop_previous_docent_services
 if [ "$SKIP_BUILD" -eq 1 ]; then
   log "skipping install (--no-build)"
 elif [ "$FROM_SOURCE" -eq 0 ]; then
-  docent_release_install "$BIN_DIR" docentd || exit 1
+  docent_release_install "$BIN_DIR" docent docentd || exit 1
 else
   build_frontend
   log "building docentd -> $DOCENTD_BIN"
   run mkdir -p "$BIN_DIR"
+  run "$GO" build -o "$DOCENT_BIN" "$ROOT/apps/docent"
   run "$GO" build -tags embed -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
 fi
 
@@ -574,7 +576,7 @@ seed_remote_machine_settings
 # Remote-SSH window is this box even though the GUI (and the UI-kind IDE
 # extension) live on the client. Skipping it here is what let a hand-copied hook
 # rot until it was posting to a route that no longer existed, silently costing
-# all agent status while window lifecycle kept working. docentd owns the merge so
+# all agent status while window lifecycle kept working. docent owns the merge so
 # this needs no jq.
 install_cursor_hooks() {
   if [ ! -d "$HOME/.cursor" ]; then
@@ -582,7 +584,7 @@ install_cursor_hooks() {
     return 0
   fi
   log "installing Cursor agent-activity hook"
-  run "$DOCENTD_BIN" install-hooks || log "warning: hook install failed; run '$DOCENTD_BIN install-hooks' manually"
+  run "$DOCENT_BIN" install-hooks || log "warning: hook install failed; run '$DOCENT_BIN install-hooks' manually"
 }
 install_cursor_hooks
 
@@ -644,7 +646,7 @@ fi
 # --- Doctor + health ----------------------------------------------------------
 if [ "$DRY_RUN" -eq 0 ]; then
   log "running doctor"
-  "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
+  "$DOCENT_BIN" doctor -config "$CONFIG_PATH" || true
 
   if [ "$INSTALL_SYSTEMD" -eq 1 ]; then
     health_check "journalctl --user -u $SERVICE_NAME -n 50" || true
@@ -656,6 +658,7 @@ fi
 cat <<EOF
 
 Installed:
+  docent       $DOCENT_BIN
   docentd      $DOCENTD_BIN
   config       $CONFIG_DIR/   (canonical, real files)
     docentd.yaml   daemon settings
@@ -669,8 +672,9 @@ if [ "$INSTALL_SYSTEMD" -eq 1 ]; then
   service      $SERVICE_PATH
 
 Manage:
-  systemctl --user status $SERVICE_NAME
-  systemctl --user restart $SERVICE_NAME
+  $DOCENT_BIN status
+  $DOCENT_BIN restart
+  $DOCENT_BIN stop
   journalctl --user -u $SERVICE_NAME -f
   loginctl show-user $USER -p Linger   # Linger=yes => runs even when logged out
 EOF
@@ -685,8 +689,8 @@ script (e.g. a Coder template startup script or your dotfiles install script):
   $ROOT/scripts/install-docent-linux.sh --start-only
 
 Manage:
-  $ROOT/scripts/install-docent-linux.sh --start-only   # (re)start
-  pkill -x docentd                                       # stop
+  $DOCENT_BIN restart
+  $DOCENT_BIN stop
   tail -f $LOG_PATH
 EOF
 fi

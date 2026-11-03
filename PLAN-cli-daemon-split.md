@@ -237,6 +237,12 @@ for the public push and PR. The implementation and every phase remain on
 
 ## Obstacles
 
+- **Phase 4:** installer help/reporting still lived in oversized scripts.
+  Extracted those sections mechanically in a separate preparatory commit
+  before changing command references.
+- **Phase 4:** the frontend dependencies and GoReleaser executable were absent.
+  Installed frontend dependencies after the missing `tsc` failure; used
+  `go run` for GoReleaser, without adding application dependencies.
 - **Phase 3:** existing repository locks are in-process mutexes, so they cannot
   coordinate separate CLI invocations. Use an advisory per-installation file
   lock for lifecycle mutations and the full update/restart transaction.
@@ -260,6 +266,10 @@ for the public push and PR. The implementation and every phase remain on
 
 ## Found bugs
 
+- **Needs discussion; track separately:** the existing frontend dependency
+  install reports ten audit findings (four moderate, five high, one critical).
+  No dependency manifest changes are part of this CLI split; this is an audit
+  summary, not a finding of confirmed exploitability.
 - **Needs discussion; tracked separately:** existing worktree fixtures depend
   on host Git settings and canonical temporary paths. Do not fix them on this
   branch or weaken production Git safeguards.

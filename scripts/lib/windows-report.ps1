@@ -3,6 +3,7 @@
 # --- summary -----------------------------------------------------------------
 Write-Host ""
 Write-Host "Installed (docentd: $Mode):"
+Write-Host "  docent                  $DocentBin (maintenance CLI; lifecycle/update unsupported on Windows)"
 $lnNote = if ($DashboardHotkey) { "hotkey $Hotkey, dashboard $DashboardHotkey" } else { "hotkey $Hotkey" }
 Write-Host "  docent-launcher-windows apps/docent-launcher-windows/docent-launcher.ps1  ($lnNote)"
 if (-not $NoCockpit) {

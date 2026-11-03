@@ -93,7 +93,7 @@ for label in com.docent.docentd com.docent.docent-tunnel; do
 done
 
 # --- Binaries and logs --------------------------------------------------------
-remove_paths "$BIN_DIR/docentd" "$BIN_DIR/docent-tunnel" \
+remove_paths "$BIN_DIR/docent" "$BIN_DIR/docentd" "$BIN_DIR/docent-tunnel" \
   "$LOG_DIR/docentd.log" "$LOG_DIR/docent-tunnel.log"
 
 # --- Hammerspoon launcher -----------------------------------------------------

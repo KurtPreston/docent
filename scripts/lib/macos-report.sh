@@ -3,7 +3,7 @@
 if [ "$DRY_RUN" -eq 0 ]; then
   if [ "$DOCENTD_MODE" = local ]; then
     log "running doctor"
-    "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
+    "$DOCENT_BIN" doctor -config "$CONFIG_PATH" || true
 
     log "health checks"
     sleep 1
@@ -31,6 +31,7 @@ if [ "$DOCENTD_MODE" = local ]; then
   cat <<EOF
 
 Installed:
+  docent            $DOCENT_BIN
   docentd           $DOCENTD_BIN
   config            $CONFIG_DIR/
     docentd.yaml    daemon settings
@@ -42,7 +43,7 @@ LaunchAgents:
   $PLIST_DOCENTD
   logs: $LOG_DIR/docentd.log
 
-Unload: launchctl bootout gui/\$(id -u) <plist>   (or launchctl unload <plist>)
+Manage: docent status | docent restart | docent stop
 
 Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
 (it serves the window manager on http://127.0.0.1:$WSM_PORT/ and handles its own
@@ -53,6 +54,7 @@ else
     cat <<EOF
 
 Installed (remote docentd, via docent-tunnel):
+  docent            $DOCENT_BIN  (local maintenance CLI)
   docentd           127.0.0.1:$DOCENT_PORT on $SSH_HOST  (remote — reached through the local forward)
   docent-tunnel     $DOCENT_TUNNEL_BIN  (127.0.0.1:$DOCENT_PORT -> $SSH_HOST:127.0.0.1:$DOCENT_PORT)
   launcher/dash     http://127.0.0.1:$DOCENT_PORT/
@@ -74,6 +76,7 @@ EOF
     cat <<EOF
 
 Installed (remote docentd):
+  docent            $DOCENT_BIN  (local maintenance CLI)
   docentd           $DOCENTD_URL  (remote — not installed locally)
   config            $CONFIG_DIR/
     .env            DOCENT_URL, DOCENT_TOKEN

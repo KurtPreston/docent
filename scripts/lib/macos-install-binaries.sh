@@ -2,7 +2,8 @@
 
 # Download the release before stopping anything, so a failed download leaves
 # the running services alone
-RELEASE_BINS=()
+DOCENT_BIN="$BIN_DIR/docent"
+RELEASE_BINS=(docent)
 if [ "$DOCENTD_MODE" = local ]; then
   RELEASE_BINS+=(docentd docent-setup)
 fi
@@ -24,13 +25,14 @@ elif [ "$FROM_SOURCE" -eq 0 ]; then
     log "remote docentd without a tunnel — nothing to install locally"
   fi
 else
+  run mkdir -p "$BIN_DIR"
+  log "building docent"
+  run go build -o "$DOCENT_BIN" "$ROOT/apps/docent"
   if [ "$DOCENTD_MODE" = local ]; then
     run mkdir -p "$BIN_DIR"
     build_frontend
     log "building docentd (dashboard embedded via -tags embed)"
     run go build -tags embed -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
-  else
-    log "remote docentd — nothing to build locally"
   fi
   if [ "$USE_TUNNEL" = 1 ]; then
     run mkdir -p "$BIN_DIR"
@@ -38,4 +40,3 @@ else
     run go build -o "$DOCENT_TUNNEL_BIN" "$ROOT/apps/docent-tunnel"
   fi
 fi
-

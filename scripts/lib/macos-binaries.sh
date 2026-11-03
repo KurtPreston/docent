@@ -75,7 +75,7 @@ run_docent_setup_if_needed() {
 }
 
 
-# install_hooks delegates to `docentd install-hooks`, which embeds the canonical
+# install_hooks delegates to `docent install-hooks`, which embeds the canonical
 # script and merges hooks.json itself. Keeping the merge in one place (rather
 # than here in jq and again on Linux) is deliberate: the hook's whole job is
 # reporting agent activity, and a second implementation is a second way for it
@@ -86,15 +86,12 @@ run_docent_setup_if_needed() {
 install_hooks() {
   log "installing Cursor agent-activity hook"
   if [ "$DRY_RUN" -eq 1 ]; then
-    run printf '%s\n' "$DOCENTD_BIN install-hooks"
+    run printf '%s\n' "$DOCENT_BIN install-hooks"
     return 0
   fi
-  # In remote mode docentd runs on the dev box and is never built here, so the
-  # binary that owns the merge may be absent.
-  if [ ! -x "$DOCENTD_BIN" ]; then
-    echo "no docentd binary at $DOCENTD_BIN; run 'docentd install-hooks' on this Mac once one is available" >&2
-    return 0
+  if [ ! -x "$DOCENT_BIN" ]; then
+    echo "no CLI at $DOCENT_BIN; rerun the installer without --no-build" >&2
+    return 1
   fi
-  run "$DOCENTD_BIN" install-hooks || echo "hook install failed; run '$DOCENTD_BIN install-hooks' manually" >&2
+  run "$DOCENT_BIN" install-hooks || echo "hook install failed; run '$DOCENT_BIN install-hooks' manually" >&2
 }
-

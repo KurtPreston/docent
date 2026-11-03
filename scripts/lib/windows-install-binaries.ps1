@@ -1,5 +1,17 @@
 # Build the selected Windows binaries before configuring services.
 
+$DocentBin = Join-Path $BinDir 'docent.exe'
+if (-not $NoBuild) {
+    if (-not (Test-GoOk)) {
+        throw "need Go on PATH to build the docent maintenance CLI (or pass -NoBuild)."
+    }
+    Step "go build -o $DocentBin ./apps/docent" {
+        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+        & go build -o $DocentBin (Join-Path $Root 'apps\docent')
+        if ($LASTEXITCODE -ne 0) { throw "docent CLI build failed" }
+    }
+}
+
 # --- build dashboard + docentd (local only) ----------------------------------
 # The Vite output (apps\docentd\web\dist) is embedded into docentd via the
 # `embed` build tag, so the installed binary is self-contained (no -web needed).
@@ -46,4 +58,3 @@ if ($UseTunnel -and -not $NoBuild) {
 elseif ($UseTunnel) {
     Log "skipping docent-tunnel build (-NoBuild)"
 }
-

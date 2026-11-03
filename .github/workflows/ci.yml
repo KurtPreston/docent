@@ -119,3 +119,5 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: release --snapshot --clean
+      - name: Verify release archive contents
+        run: bash scripts/check-release.sh dist
