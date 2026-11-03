@@ -25,3 +25,18 @@ nothing about where a feature came from.
 Why: a generic capability serves every user and keeps docent free of special
 cases, and keeping private details out protects the people and organizations
 whose workflows inspired a feature.
+
+## CLI and daemon boundaries
+
+- **`docent` is the user interface.** Put maintenance, diagnostics, and local
+  lifecycle commands here. Running it without a command should show help.
+- **`docentd` is the foreground daemon.** Service managers and the CLI launch
+  it; it does not dispatch user commands. Diagnostic flags such as `--help`
+  and `--version` still belong on the daemon.
+- **Prefer clean breaks with explicit migrations.** When changing these
+  command boundaries, document the installer step rather than maintaining
+  compatibility aliases. Reject obsolete commands with an actionable error;
+  never interpret them as a request to start a daemon.
+
+These boundaries keep maintenance commands usable without a running daemon
+and make it clear which process owns background work.
