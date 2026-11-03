@@ -187,4 +187,9 @@ container against a snapshot or test release.
 
 ## Obstacles
 
+- **Phase 2:** the repository has an old non-version tag, `slakkr`, so
+  snapshot builds were versioned `slakkr-SNAPSHOT-<commit>`. Workaround:
+  `snapshot.version_template` is `0.0.0-SNAPSHOT-<commit>`. Tagged releases
+  use the `v*` tag on HEAD and aren't affected; GoReleaser only warns.
+
 ## Found bugs

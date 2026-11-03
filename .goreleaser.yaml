@@ -1,0 +1,66 @@
+version: 2
+
+project_name: docent
+
+before:
+  hooks:
+    # Build the dashboard so docentd can embed it (-tags embed).
+    - npm --prefix apps/docentd/web ci
+    - npm --prefix apps/docentd/web run build
+
+# Every binary is stamped through libs/buildinfo so `-version` and
+# `docentd update` know which release is running.
+builds:
+  - id: docentd
+    main: ./apps/docentd
+    binary: docentd
+    flags: [-tags=embed]
+    env: [CGO_ENABLED=0]
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/KurtPreston/docent/libs/buildinfo.Version={{.Version}}
+      - -X github.com/KurtPreston/docent/libs/buildinfo.Commit={{.Commit}}
+      - -X github.com/KurtPreston/docent/libs/buildinfo.Date={{.Date}}
+    goos: &goos [linux, darwin]
+    goarch: &goarch [amd64, arm64]
+  - id: docent-tunnel
+    main: ./apps/docent-tunnel
+    binary: docent-tunnel
+    env: [CGO_ENABLED=0]
+    ldflags: *ldflags
+    goos: *goos
+    goarch: *goarch
+  - id: docent-reporter
+    main: ./apps/docent-reporter
+    binary: docent-reporter
+    env: [CGO_ENABLED=0]
+    ldflags: *ldflags
+    goos: *goos
+    goarch: *goarch
+  - id: docent-setup
+    main: ./apps/docent-setup
+    binary: docent-setup
+    env: [CGO_ENABLED=0]
+    ldflags: *ldflags
+    goos: *goos
+    goarch: *goarch
+
+# One archive per platform holding all four binaries. The installers and
+# `docentd update` (libs/selfupdate) rely on this name and layout.
+archives:
+  - id: docent
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+# The repository carries an old non-version tag, so derive snapshot versions
+# from the commit rather than `git describe`.
+snapshot:
+  version_template: "0.0.0-SNAPSHOT-{{ .ShortCommit }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
