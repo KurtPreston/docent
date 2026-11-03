@@ -25,8 +25,12 @@ Out:
   itself with `backlog` commands, following the recipe's prompt.
 - Board syncing between machines. Users bring their own (for example, a git
   remote and a sync script run by `pull_command`).
-- Concurrency limits beyond the existing cooldown; the recipe runs one task at
-  a time by having the agent claim before working.
+- Retries. A failed run is surfaced to a human via a `-failed` label instead.
+
+Also in: a generic per-rule concurrency limit, `conditions.max_concurrent`.
+Today every matched event starts its own goroutine (`go d.runJob` in
+`libs/automation/dispatcher.go`); only per-worktree locks and per-entity
+cooldown exist, so several queued tasks would start several agents at once.
 
 ## Design
 
@@ -79,6 +83,7 @@ Recipe rule:
     when: { field: queued, to: "true" }
   conditions:
     cooldown: 30m
+    max_concurrent: 1
   actions:
     - type: agent-inline
       provider: copilot
@@ -149,23 +154,43 @@ After the pull request merges, on the automation host:
   not again on the second; rule without it keeps today's behavior.
 - Done: engine and matcher tests pass.
 
-### Phase 3: schema and validation
+### Phase 3: per-rule concurrency limit
 
-- `jsonschema/config.schema.json`: `backlog` collector config keys and
-  `trigger.include_existing`.
+- Add `conditions.max_concurrent` (int; 0 or unset = unlimited, today's
+  behavior) to the rule conditions config.
+- In the dispatcher, keep a limiter keyed by rule ID (so it survives
+  `SetRules` reloads). When a rule already has `max_concurrent` jobs running,
+  a new job waits FIFO instead of being dropped, and the job store and logs
+  show it as queued.
+- Generic: no backlog-specific code.
+- Tests: `max_concurrent: 1` runs two matched events one after the other;
+  unset keeps parallel behavior; a waiting job runs once the first finishes.
+
+### Phase 4: schema and validation
+
+- `jsonschema/config.schema.json`: `backlog` collector config keys,
+  `trigger.include_existing`, and `conditions.max_concurrent`.
 - Config validation warns when `include_existing` is set on a non-transition
   trigger.
 - Done: schema tests pass; a sample config validates.
 
-### Phase 4: docs and recipe
+### Phase 5: docs and recipe
 
 - `docs/Automations.md`: document `include_existing` in the Triggers table and
-  the restart-baseline note.
+  the restart-baseline note, and `max_concurrent` with the other conditions.
 - Collector docs (wherever collectors are listed): the `backlog` directive and
   its fields.
 - `docs/Automation-recipes.md`: "Work queue from a Backlog.md board" recipe,
   including the claim-first prompt and a brief template with `Repo:` and
-  `Branch:` header lines.
+  `Branch:` header lines. The recipe sets `max_concurrent: 1`, and its prompt
+  defines the outcomes:
+  - Claim: sync the board if the user has a sync script, set the task
+    In Progress, sync again, then start.
+  - Success: move the task to Waiting (pull request open) or Done, with a note
+    and the pull request as a reference.
+  - Failure: append a note on where it stopped, move the task back to To Do,
+    and replace the queue label with `<queue_label>-failed` (e.g.
+    `agent-failed`) so it isn't re-queued and a human sees it in triage.
 - Done: docs build/links check if any; validation passes.
 
 ## Obstacles
