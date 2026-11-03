@@ -86,6 +86,22 @@ fires once per outage, not on every failed poll, and again only after the
 directive recovers and fails anew. A failure on the first collect after a
 restart counts too. See the [recipe](Automation-recipes.md#get-notified-when-a-collector-needs-attention).
 
+**A collect that outlasts its deadline is a failure too.** Each scheduled
+collect of a unit gets 60 seconds by default. One that runs out of time
+offers a `collector_error` saying so and logs the failure. It also never
+seeds or updates the baseline, so that unit's transition rules can't fire
+until a collect finishes in time. Raise the bound per unit with
+`poll.timeout`, for example when a GitHub directive's path-filtered
+`pr_queries` page through a large repository:
+
+```yaml
+directives:
+  - id: github
+    collector: github
+    state:
+      poll: { timeout: 5m }
+```
+
 ## Conditions
 
 Optional gates evaluated after the trigger matches, before any action runs:

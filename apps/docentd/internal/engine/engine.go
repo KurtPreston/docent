@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -201,7 +202,8 @@ const (
 	onRequestTimeout    = 15 * time.Second
 	// backgroundCollectTimeout bounds a single scheduled collection so a wedged
 	// git subprocess (e.g. one hung fetching from a broken partial clone) cannot
-	// run forever and pile up across ticks.
+	// run forever and pile up across ticks. A unit whose collection is
+	// legitimately slower raises it with poll.timeout.
 	backgroundCollectTimeout = 60 * time.Second
 )
 
@@ -219,6 +221,7 @@ type unit struct {
 	collector string
 	mode      collectors.Mode
 	interval  time.Duration
+	timeout   time.Duration // bound on one scheduled collection
 	onRequest bool
 	onLoad    bool
 	lookback  time.Duration
@@ -703,12 +706,16 @@ func (e *Engine) newUnit(d userdata.Directive, mode collectors.Mode, mc *userdat
 		collector: d.Collector,
 		mode:      mode,
 		interval:  defaultPollInterval,
+		timeout:   backgroundCollectTimeout,
 		onLoad:    true,
 		lookback:  defaultLookback,
 	}
 	if mc != nil {
 		if dur, err := userdata.ParseDuration(mc.Poll.Interval); err == nil && mc.Poll.Interval != "" {
 			u.interval = dur
+		}
+		if dur, err := userdata.ParseDuration(mc.Poll.Timeout); err == nil && dur > 0 {
+			u.timeout = dur
 		}
 		u.onRequest = mc.Poll.OnRequest
 		u.onLoad = mc.Poll.OnLoad
@@ -791,7 +798,7 @@ func (e *Engine) tick(ctx context.Context, initial bool) {
 	e.mu.Unlock()
 	for _, u := range due {
 		go func(u *unit) {
-			cctx, cancel := context.WithTimeout(ctx, backgroundCollectTimeout)
+			cctx, cancel := context.WithTimeout(ctx, u.timeout)
 			defer cancel()
 			e.collectUnit(cctx, u)
 			e.mu.Lock()
@@ -888,7 +895,15 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	e.mu.Unlock()
 
 	signals, err := e.reg.CollectUnit(ctx, d, u.mode, opts)
-	if err != nil && prevErr == "" && ctx.Err() == nil {
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// A unit that always outlasts its deadline never seeds, so its
+		// transition rules never fire; name the cause instead of the
+		// subprocess error the deadline happened to surface as.
+		err = fmt.Errorf("collection did not finish within %s (raise poll.timeout): %w", time.Since(now).Round(time.Second), err)
+	}
+	// Report the start of an outage, but not a shutdown or caller cancellation
+	if err != nil && prevErr == "" && !errors.Is(ctx.Err(), context.Canceled) {
+		log.Printf("docentd: collector %s/%s failing: %v", u.key.Directive, u.mode, err)
 		e.alertCollectorError(ctx, u, err, now)
 	}
 

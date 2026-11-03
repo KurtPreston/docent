@@ -346,7 +346,13 @@ that ask `my-org/api-owners` for review.
   queries run as one paginated GraphQL search that also returns each PR's
   first 100 files. A larger PR with no match there has its full file list
   fetched. Keep the qualifiers narrow — at least a `repo:` — since every
-  open PR they match is paged through. `paths` is only valid with `watch`.
+  open PR they match is paged through. GitHub search stops at 1000 results,
+  so the search asks for the most recently updated PRs first (unless the
+  qualifiers set their own `sort:`), and anything past the cap is the
+  stalest. In a busy repository this search can take minutes, longer than
+  the 60-second default for a scheduled collect; raise the directive's
+  [`state.poll.timeout`](Automations.md#triggers) to fit it. `paths` is
+  only valid with `watch`.
 - **Not capped.** The 50-PR limit on the [review pool](#prs-you-could-review)
   does not apply: you asked for this set by name, so all of it is resolved.
 - **Open PRs only.** Watch queries are skipped by the
