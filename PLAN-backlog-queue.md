@@ -195,4 +195,18 @@ After the pull request merges, on the automation host:
 
 ## Obstacles
 
+- Phase 1: the task's file is exposed as `file` (absolute), not `path`.
+  Transition events read an entity's `path` coordinate as the work's checkout
+  (`OpenPath`), and worktree provisioning prefers the project containing it,
+  so a board that is itself a git repository would be picked as the agent's
+  repository. `task list` also omits the path, so `file` is only set for
+  viewed (queue candidate) tasks.
+- Phase 1: the Design's directive example uses `events: poll`, but the
+  collector is state-only; docs use `state: { poll: ... }`.
+- Phase 1: in the agent shell, six local-git/worktree tests fail before any
+  change here: the shell sets `safe.bareRepository=explicit` through
+  `GIT_CONFIG_*` env vars, and `TMPDIR` is a symlinked path. With those
+  removed and `TMPDIR` resolved, the full suite passes; validation is run
+  that way.
+
 ## Found bugs
