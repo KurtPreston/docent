@@ -94,6 +94,10 @@ type PollConfig struct {
 	// OnLoad collects the unit once at daemon startup so the cache isn't
 	// empty before the first interval elapses.
 	OnLoad bool `yaml:"on_load,omitempty"`
+	// Timeout bounds one background collection (e.g. "5m"). Empty keeps the
+	// engine default; raise it for a unit whose searches legitimately take
+	// longer, since a unit that never finishes never fires transition rules.
+	Timeout string `yaml:"timeout,omitempty"`
 }
 
 // ParseDuration parses a poll interval / lookback. It accepts everything
@@ -302,6 +306,9 @@ func validateModeConfig(path string, m *ModeConfig) []string {
 	var problems []string
 	if _, err := ParseDuration(m.Poll.Interval); err != nil {
 		problems = append(problems, fmt.Sprintf("%s.poll.interval %q is not a valid duration", path, m.Poll.Interval))
+	}
+	if _, err := ParseDuration(m.Poll.Timeout); err != nil {
+		problems = append(problems, fmt.Sprintf("%s.poll.timeout %q is not a valid duration", path, m.Poll.Timeout))
 	}
 	if _, err := ParseDuration(m.Lookback); err != nil {
 		problems = append(problems, fmt.Sprintf("%s.lookback %q is not a valid duration", path, m.Lookback))

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,5 +52,73 @@ func TestCollectorErrorAlertsOncePerOutage(t *testing.T) {
 	want := []string{"fake|CI runs|ci|token expired", "fake|CI runs|ci|run az login"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("alerts = %q, want %q", got, want)
+	}
+}
+
+// blockingCollector stands in for a collector whose searches outlast the unit's
+// deadline: it waits for the context to end and fails the way a killed
+// subprocess does.
+type blockingCollector struct{}
+
+func (blockingCollector) CollectState(ctx context.Context, _ userdata.Directive, _ *collectors.CollectOpts) ([]collectors.StatusItem, error) {
+	<-ctx.Done()
+	return nil, errors.New("gh api graphql: signal: killed")
+}
+
+// TestCollectorTimeoutAlerts checks that a collect cut off by its own deadline
+// is reported as a collector_error naming the timeout, while one cancelled by
+// its caller (such as a daemon shutdown) is not.
+func TestCollectorTimeoutAlerts(t *testing.T) {
+	e := newTestEngine(t)
+	e.reg.Register("slow", blockingCollector{})
+
+	// Record each collector_error the rule receives
+	var mu sync.Mutex
+	var got []string
+	e.automations = automation.NewDispatcher([]automation.Rule{{
+		ID: "notify", Enabled: true,
+		Trigger: automation.Trigger{Type: "signal", Kind: []string{"collector_error"}},
+		Actions: []automation.Action{{Type: "shell", Command: "true"}},
+	}})
+	e.automations.Registry.Register("shell", automation.RunnerFunc(func(_ context.Context, _ automation.Action, ev automation.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, ev.Signal.Fields["directive_id"]+"|"+ev.Signal.Summary)
+		return nil
+	}))
+
+	// One unit runs out of time; another is cancelled by its caller
+	timedOut := e.newUnit(userdata.Directive{ID: "gh", Collector: "slow", Enabled: true}, collectors.ModeState, nil, time.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	e.collectUnit(ctx, timedOut)
+	cancel()
+	stopped := e.newUnit(userdata.Directive{ID: "gh2", Collector: "slow", Enabled: true}, collectors.ModeState, nil, time.Now())
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	e.collectUnit(ctx, stopped)
+	time.Sleep(50 * time.Millisecond)
+
+	// Expect a single alert, for the timeout, that says what happened
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || !strings.HasPrefix(got[0], "gh|collection did not finish within") || !strings.Contains(got[0], "poll.timeout") {
+		t.Fatalf("alerts = %q, want one timeout alert for gh", got)
+	}
+	if e.automationSeeded["gh/state"] {
+		t.Fatal("a timed-out collect must not seed the transition baseline")
+	}
+}
+
+// TestNewUnitPollTimeout checks that poll.timeout overrides the default bound
+// on a scheduled collection.
+func TestNewUnitPollTimeout(t *testing.T) {
+	e := newTestEngine(t)
+	d := userdata.Directive{ID: "gh", Collector: "github", Enabled: true}
+	if u := e.newUnit(d, collectors.ModeState, nil, time.Now()); u.timeout != backgroundCollectTimeout {
+		t.Fatalf("default timeout = %s, want %s", u.timeout, backgroundCollectTimeout)
+	}
+	mc := &userdata.ModeConfig{Poll: userdata.PollConfig{Timeout: "5m"}}
+	if u := e.newUnit(d, collectors.ModeState, mc, time.Now()); u.timeout != 5*time.Minute {
+		t.Fatalf("timeout = %s, want 5m", u.timeout)
 	}
 }

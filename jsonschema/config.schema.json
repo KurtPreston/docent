@@ -600,6 +600,10 @@
         "on_load": {
           "type": "boolean",
           "description": "Collect once at daemon startup."
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Bound on one background collection (e.g. 5m). Empty keeps the 60s default; raise it for a unit whose searches take longer."
         }
       }
     },
