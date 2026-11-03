@@ -23,22 +23,6 @@ func main() {
 		fmt.Println("docentd " + buildinfo.String())
 		return
 	}
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "version":
-			fmt.Println("docentd " + buildinfo.String())
-			return
-		case "doctor":
-			runDoctor(os.Args[2:])
-			return
-		case "update":
-			runUpdate(os.Args[2:])
-			return
-		case "install-hooks":
-			runInstallHooks(os.Args[2:])
-			return
-		}
-	}
 	serve(os.Args[1:])
 }
 
@@ -51,11 +35,16 @@ func serve(args []string) {
 	port := fs.Int("port", 0, "listen port override")
 	host := fs.String("host", "", "bind address override (default 0.0.0.0 when a token is set, else 127.0.0.1)")
 	_ = fs.Parse(args)
+	if err := validateDaemonArgs(fs.Args()); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	if *port > 0 {
 		cfg.Port = *port
 	}
@@ -87,4 +76,11 @@ func serve(args []string) {
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func validateDaemonArgs(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("docentd only runs the daemon; use `docent %s` for user commands", args[0])
+	}
+	return nil
 }

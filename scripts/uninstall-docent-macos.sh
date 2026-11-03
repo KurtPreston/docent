@@ -26,7 +26,7 @@ usage() {
   cat <<'EOF'
 Usage: uninstall-docent-macos.sh [options]
 
-Removes what install-docent-macos.sh installed: the docentd and docent-tunnel
+Removes what install-docent-macos.sh installed: the docent CLI, docentd and docent-tunnel
 LaunchAgents, binaries, and logs; the Hammerspoon launcher; the Cursor
 agent-activity hook (other hooks in hooks.json are kept); and the docent IDE
 extension plus its docent.* editor settings. The window manager (wsm) is a
@@ -93,7 +93,7 @@ for label in com.docent.docentd com.docent.docent-tunnel; do
 done
 
 # --- Binaries and logs --------------------------------------------------------
-remove_paths "$BIN_DIR/docentd" "$BIN_DIR/docent-tunnel" \
+remove_paths "$BIN_DIR/docent" "$BIN_DIR/docentd" "$BIN_DIR/docent-tunnel" \
   "$LOG_DIR/docentd.log" "$LOG_DIR/docent-tunnel.log"
 
 # --- Hammerspoon launcher -----------------------------------------------------

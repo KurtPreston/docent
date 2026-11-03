@@ -1,6 +1,6 @@
 # Download a prebuilt docent release and install its binaries. Sourced by
 # install-docent-linux.sh and install-docent-macos.sh, which define log(),
-# run(), and DRY_RUN. Mirrors `docentd update` (libs/selfupdate): resolve the
+# run(), and DRY_RUN. Mirrors `docent update` (libs/selfupdate): resolve the
 # tag from the /releases/latest redirect, download docent_<os>_<arch>.tar.gz,
 # and verify it against checksums.txt.
 #
@@ -97,12 +97,12 @@ docent_release_fetch() {
   fi
   # Extract only release binaries; a retry must not reuse a partial extraction.
   local name
-  for name in docentd docent-tunnel docent-reporter docent-setup; do
+  for name in docent docentd docent-tunnel docent-reporter docent-setup; do
     rm -f "$DOCENT_RELEASE_DIR/$name" || return 1
   done
   tar -xzf "$DOCENT_RELEASE_DIR/$archive" -C "$DOCENT_RELEASE_DIR" \
-    docentd docent-tunnel docent-reporter docent-setup || return 1
-  for name in docentd docent-tunnel docent-reporter docent-setup; do
+    docent docentd docent-tunnel docent-reporter docent-setup || return 1
+  for name in docent docentd docent-tunnel docent-reporter docent-setup; do
     if [ ! -f "$DOCENT_RELEASE_DIR/$name" ] || [ ! -s "$DOCENT_RELEASE_DIR/$name" ] || [ ! -x "$DOCENT_RELEASE_DIR/$name" ] || [ -L "$DOCENT_RELEASE_DIR/$name" ]; then
       echo "release $tag has no usable $name binary" >&2
       return 1

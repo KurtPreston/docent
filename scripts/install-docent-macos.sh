@@ -52,65 +52,7 @@ SAVED_USE_TUNNEL=""
 SAVED_SSH_HOST=""
 SAVED_SSH_IDENTITY=""
 
-usage() {
-  cat <<'EOF'
-Usage: install-docent-macos.sh [options]
-
-Installs docentd (optionally, locally) with a launchd LaunchAgent, the
-Hammerspoon launcher, and Cursor hooks when Cursor.app is installed. The
-window manager itself lives in the separate wsm project -- install it from
-https://github.com/KurtPreston/wsm.
-
-On first run, asks whether docentd runs on this Mac (local) or remotely.
-Remote installs pick the SSH host from ~/.ssh/config (fzf when installed),
-check that docentd answers there, and ask for a token only if it requires one.
-Local installs download the latest docent release (docentd with the
-dashboard embedded), run docent-setup when needed, and register its
-LaunchAgent. Remote installs point hooks/launcher at the remote docentd URL
-you provide, installing only docent-tunnel. On a re-run it first offers to reuse
-the previous install's config (the local/remote choice, plus the remote
-URL/token/tunnel host), so updating never forces you to re-pick the deployment
-or retype credentials; DOCENTD_URL still overrides.
-
-Go and Node are only needed with --from-source, which builds the binaries
-(and the dashboard, embedded via -tags embed) from this checkout instead.
-After installing a release, `docentd update` upgrades it in place.
-
-Options:
-  --hooks           Install Cursor hooks even if Cursor.app is not found
-  --no-hooks        Skip ~/.cursor/hooks install
-  --extension       Install the docent IDE extension into detected editors
-  --no-extension    Skip the docent IDE extension (default is to ask on a TTY)
-  --no-hammerspoon  Skip docent.lua install (~/.hammerspoon)
-  --no-launchd      Skip launchd plist install (binaries only)
-  --version TAG     Install this release (e.g. v0.1.0) instead of the latest
-  --from-source     Build from this checkout (needs Go, and Node for local)
-  --no-build        Install nothing (reuse existing binaries in BIN_DIR)
-  --bin-dir PATH    Install binaries here (default: ~/.local/bin)
-  --ssh-host HOST   SSH host for the docent-tunnel forward to a remote docentd
-                    (default: picked from ~/.ssh/config). May be an
-                    ~/.ssh/config alias: the tunnel honors its HostName, User,
-                    IdentityFile, and ProxyCommand/ProxyJump (e.g. Coder).
-  --ssh-identity P  SSH private key for the forward (default: the IdentityFile
-                    from ~/.ssh/config, else ssh-agent)
-  --no-tunnel       Don't set up the SSH forward; hit the remote URL directly
-  --dry-run         Print actions without changing the system
-  -h, --help        Show this help
-
-Environment:
-  DOCENT_BIN_DIR       Same as --bin-dir
-  DOCENT_CONFIG_DIR    Config root (default: ~/.config/docent)
-  DOCENTD_URL          Remote docentd base URL (implies remote; with --no-tunnel,
-                       the URL to connect to directly)
-  DOCENTD_TOKEN        Bearer token for remote docentd / hooks
-  DOCENT_TUNNEL_HOST   Same as --ssh-host (implies remote mode)
-  DOCENT_TUNNEL_IDENTITY  Same as --ssh-identity
-  DOCENT_VERSION       Same as --version
-  DOCENT_REPO          GitHub repo to download releases from (default: KurtPreston/docent)
-  DOCENT_NODE          Node binary for the dashboard build (default: node; needs >= 18)
-  DOCENT_NPM           npm binary (default: npm)
-EOF
-}
+. "$ROOT/scripts/lib/macos-usage.sh"
 
 log() { printf '==> %s\n' "$*"; }
 run() {
@@ -149,25 +91,7 @@ fi
 
 # shellcheck source=lib/release.sh
 . "$ROOT/scripts/lib/release.sh"
-
-# The dashboard is a Vite/React build embedded into docentd via -tags embed.
-node_major() { "$1" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
-build_frontend() {
-  if [ "$DRY_RUN" -eq 0 ]; then
-    command -v "$NODE" >/dev/null 2>&1 || { echo "need Node >= 18 on PATH to build the dashboard (set DOCENT_NODE; e.g. 'nvm use 20' or 'brew install node')" >&2; exit 1; }
-    command -v "$NPM" >/dev/null 2>&1 || { echo "need npm on PATH to build the dashboard (set DOCENT_NPM)" >&2; exit 1; }
-    local nmajor; nmajor="$(node_major "$NODE")"
-    if [ -z "$nmajor" ] || [ "$nmajor" -lt 18 ]; then
-      echo "need Node >= 18 to build the dashboard (found $("$NODE" -v 2>/dev/null || echo none)); set DOCENT_NODE" >&2
-      exit 1
-    fi
-    log "building dashboard with Node $("$NODE" -v)"
-  else
-    log "building dashboard (requires Node >= 18)"
-  fi
-  run "$NPM" --prefix "$WEB_ROOT" ci
-  run "$NPM" --prefix "$WEB_ROOT" run build
-}
+. "$ROOT/scripts/lib/macos-binaries.sh"
 
 cursor_installed() {
   for candidate in /Applications/Cursor.app "$HOME/Applications/Cursor.app"; do
@@ -347,33 +271,6 @@ resolve_tunnel() {
       *) SSH_HOST="" ;;
     esac
   done
-}
-
-# ensure_probe_tunnel sets PROBE_TUNNEL_BIN to a docent-tunnel binary for the
-# wizard's host listing and checks: the downloaded release's, a fresh temp
-# build with --from-source, or the installed one with --no-build. Returns
-# non-zero when none is available.
-PROBE_TUNNEL_BIN=""
-ensure_probe_tunnel() {
-  [ -n "$PROBE_TUNNEL_BIN" ] && return 0
-  if [ "$SKIP_BUILD" -eq 1 ]; then
-    [ -x "$BIN_DIR/docent-tunnel" ] || return 1
-    PROBE_TUNNEL_BIN="$BIN_DIR/docent-tunnel"
-    return 0
-  fi
-  if [ "$FROM_SOURCE" -eq 0 ]; then
-    docent_release_fetch "$RELEASE_TAG" || return 1
-    [ -x "$DOCENT_RELEASE_DIR/docent-tunnel" ] || return 1
-    PROBE_TUNNEL_BIN="$DOCENT_RELEASE_DIR/docent-tunnel"
-    return 0
-  fi
-  command -v go >/dev/null 2>&1 || return 1
-  local dir
-  dir="$(mktemp -d)" || return 1
-  trap 'rm -rf "'"$dir"'"' EXIT
-  log "building docent-tunnel (for host discovery)"
-  (cd "$ROOT" && go build -o "$dir/docent-tunnel" ./apps/docent-tunnel) || return 1
-  PROBE_TUNNEL_BIN="$dir/docent-tunnel"
 }
 
 # pick_ssh_host sets SSH_HOST from the Host aliases in ~/.ssh/config, using fzf
@@ -590,32 +487,6 @@ EOF
   )
 }
 
-run_docent_setup_if_needed() {
-  local directives="$CONFIG_DIR/config.yaml"
-  if [ -f "$directives" ] && grep -q '^directives:' "$directives" 2>/dev/null; then
-    if grep -A1 '^directives:' "$directives" | grep -q '^  -'; then
-      log "directives config present at $directives"
-      return 0
-    fi
-  fi
-  log "running docent-setup to populate $directives"
-  # Prefer the installed release binary; fall back to the checkout
-  local setup=(go run "$ROOT/apps/docent-setup") hint="go run ./apps/docent-setup"
-  if [ "$FROM_SOURCE" -eq 0 ] && { [ -x "$BIN_DIR/docent-setup" ] || [ "$DRY_RUN" -eq 1 ]; }; then
-    setup=("$BIN_DIR/docent-setup")
-    hint="$BIN_DIR/docent-setup"
-  fi
-  if [ "$DRY_RUN" -eq 1 ]; then
-    run "${setup[@]}" --config-dir "$CONFIG_DIR"
-    return 0
-  fi
-  if [ -t 0 ]; then
-    "${setup[@]}" --config-dir "$CONFIG_DIR"
-  else
-    echo "No directives in $directives — run: $hint --config-dir $CONFIG_DIR" >&2
-  fi
-}
-
 resolve_docentd_location
 if [ "$DOCENTD_MODE" = remote ]; then
   if [ "$USE_TUNNEL" = 0 ]; then
@@ -692,44 +563,7 @@ stop_previous_docent_services() {
   fi
 }
 
-# Download the release before stopping anything, so a failed download leaves
-# the running services alone
-RELEASE_BINS=()
-if [ "$DOCENTD_MODE" = local ]; then
-  RELEASE_BINS+=(docentd docent-setup)
-fi
-if [ "$USE_TUNNEL" = 1 ]; then
-  RELEASE_BINS+=(docent-tunnel)
-fi
-if [ "$SKIP_BUILD" -eq 0 ] && [ "$FROM_SOURCE" -eq 0 ] && [ "${#RELEASE_BINS[@]}" -gt 0 ]; then
-  docent_release_fetch "$RELEASE_TAG" || exit 1
-fi
-
-stop_previous_docent_services
-
-if [ "$SKIP_BUILD" -eq 1 ]; then
-  log "skipping install (--no-build)"
-elif [ "$FROM_SOURCE" -eq 0 ]; then
-  if [ "${#RELEASE_BINS[@]}" -gt 0 ]; then
-    docent_release_install "$BIN_DIR" "${RELEASE_BINS[@]}" || exit 1
-  else
-    log "remote docentd without a tunnel — nothing to install locally"
-  fi
-else
-  if [ "$DOCENTD_MODE" = local ]; then
-    run mkdir -p "$BIN_DIR"
-    build_frontend
-    log "building docentd (dashboard embedded via -tags embed)"
-    run go build -tags embed -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
-  else
-    log "remote docentd — nothing to build locally"
-  fi
-  if [ "$USE_TUNNEL" = 1 ]; then
-    run mkdir -p "$BIN_DIR"
-    log "building docent-tunnel"
-    run go build -o "$DOCENT_TUNNEL_BIN" "$ROOT/apps/docent-tunnel"
-  fi
-fi
+. "$ROOT/scripts/lib/macos-install-binaries.sh"
 
 # With the tunnel binary in place, block until the remote docentd is actually
 # reachable (or the user opts to skip/abort), then persist the validated config.
@@ -885,29 +719,6 @@ if [ "$USE_TUNNEL" != 1 ]; then
   remove_unused_launch_agent com.docent.docent-tunnel "$PLIST_TUNNEL"
 fi
 
-# install_hooks delegates to `docentd install-hooks`, which embeds the canonical
-# script and merges hooks.json itself. Keeping the merge in one place (rather
-# than here in jq and again on Linux) is deliberate: the hook's whole job is
-# reporting agent activity, and a second implementation is a second way for it
-# to drift out of sync and go quiet.
-#
-# Note this only covers a Cursor GUI running on this Mac. A Remote-SSH window
-# executes its agent on the remote box, which needs its own install there.
-install_hooks() {
-  log "installing Cursor agent-activity hook"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    run printf '%s\n' "$DOCENTD_BIN install-hooks"
-    return 0
-  fi
-  # In remote mode docentd runs on the dev box and is never built here, so the
-  # binary that owns the merge may be absent.
-  if [ ! -x "$DOCENTD_BIN" ]; then
-    echo "no docentd binary at $DOCENTD_BIN; run 'docentd install-hooks' on this Mac once one is available" >&2
-    return 0
-  fi
-  run "$DOCENTD_BIN" install-hooks || echo "hook install failed; run '$DOCENTD_BIN install-hooks' manually" >&2
-}
-
 install_hammerspoon() {
   local hs_dir="$HOME/.hammerspoon"
   local init_lua="$hs_dir/init.lua"
@@ -1046,87 +857,4 @@ if [ "$INSTALL_HAMMERSPOON" -eq 1 ]; then
   install_hammerspoon
 fi
 
-if [ "$DRY_RUN" -eq 0 ]; then
-  if [ "$DOCENTD_MODE" = local ]; then
-    log "running doctor"
-    "$DOCENTD_BIN" doctor -config "$CONFIG_PATH" || true
-
-    log "health checks"
-    sleep 1
-    curl -sf "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null && echo "  docentd     http://127.0.0.1:$DOCENT_PORT/  ok" || echo "  docentd     FAIL (see $LOG_DIR/docentd.log)" >&2
-  fi
-
-  if [ "$USE_TUNNEL" = 1 ]; then
-    log "health check via docent-tunnel"
-    sleep 1
-    if curl -sf --max-time 5 "http://127.0.0.1:$DOCENT_PORT/health" >/dev/null 2>&1; then
-      echo "  docentd     http://127.0.0.1:$DOCENT_PORT/ (via docent-tunnel -> $SSH_HOST)  ok"
-    else
-      echo "  docentd     not reachable through docent-tunnel yet (see $LOG_DIR/docent-tunnel.log)" >&2
-    fi
-  fi
-
-  if curl -sf --max-time 5 "http://127.0.0.1:$WSM_PORT/health" >/dev/null 2>&1; then
-    echo "  wsm         http://127.0.0.1:$WSM_PORT/  ok"
-  else
-    echo "  wsm         not reachable on :$WSM_PORT — install it from https://github.com/KurtPreston/wsm" >&2
-  fi
-fi
-
-if [ "$DOCENTD_MODE" = local ]; then
-  cat <<EOF
-
-Installed:
-  docentd           $DOCENTD_BIN
-  config            $CONFIG_DIR/
-    docentd.yaml    daemon settings
-    config.yaml     collector directives
-    .env            secrets (optional)
-  dashboard         http://127.0.0.1:$DOCENT_PORT/
-
-LaunchAgents:
-  $PLIST_DOCENTD
-  logs: $LOG_DIR/docentd.log
-
-Unload: launchctl bootout gui/\$(id -u) <plist>   (or launchctl unload <plist>)
-
-Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
-(it serves the window manager on http://127.0.0.1:$WSM_PORT/ and handles its own
-Accessibility permission).
-EOF
-else
-  if [ "$USE_TUNNEL" = 1 ]; then
-    cat <<EOF
-
-Installed (remote docentd, via docent-tunnel):
-  docentd           127.0.0.1:$DOCENT_PORT on $SSH_HOST  (remote — reached through the local forward)
-  docent-tunnel     $DOCENT_TUNNEL_BIN  (127.0.0.1:$DOCENT_PORT -> $SSH_HOST:127.0.0.1:$DOCENT_PORT)
-  launcher/dash     http://127.0.0.1:$DOCENT_PORT/
-  config            $CONFIG_DIR/
-    .env            DOCENT_URL, DOCENT_TOKEN
-    launcher.lua    Hammerspoon overrides
-
-LaunchAgents:
-  $PLIST_TUNNEL
-  logs: $LOG_DIR/docent-tunnel.log
-
-The forward is owned by docent-tunnel (launchd KeepAlive), so it is live
-whenever you are logged in — independent of any Cursor Remote-SSH session.
-
-Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
-(it serves the window manager on http://127.0.0.1:$WSM_PORT/).
-EOF
-  else
-    cat <<EOF
-
-Installed (remote docentd):
-  docentd           $DOCENTD_URL  (remote — not installed locally)
-  config            $CONFIG_DIR/
-    .env            DOCENT_URL, DOCENT_TOKEN
-    launcher.lua    Hammerspoon overrides
-
-Window manager: install the wsm daemon from https://github.com/KurtPreston/wsm
-(it serves the window manager on http://127.0.0.1:$WSM_PORT/).
-EOF
-  fi
-fi
+. "$ROOT/scripts/lib/macos-report.sh"

@@ -1,4 +1,4 @@
-package selfupdate
+package daemoncontrol
 
 import (
 	"errors"
@@ -10,40 +10,76 @@ import (
 
 // fakeSystem records what restarting would do instead of doing it.
 type fakeSystem struct {
-	os      string
-	paths   map[string]bool
-	outputs map[string]string // "name args..." -> output; missing means the command fails
-	procs   []process
-	self    int
-	dead    bool // started processes exit immediately
-	procErr error
+	os       string
+	paths    map[string]bool
+	outputs  map[string]string // "name args..." -> output; missing means the command fails
+	procs    []process
+	self     int
+	dead     bool // started processes exit immediately
+	procErr  error
+	probeErr error
 
 	ran     []string
 	stopped []int
 	started []Launch
 }
 
-func (f *fakeSystem) goos() string                  { return f.os }
-func (f *fakeSystem) uid() int                      { return 501 }
-func (f *fakeSystem) pid() int                      { return f.self }
-func (f *fakeSystem) exists(p string) bool          { return f.paths[p] }
-func (f *fakeSystem) sleep(time.Duration)           {}
-func (f *fakeSystem) alive(int) bool                { return !f.dead }
-func (f *fakeSystem) stop(pid int) error            { f.stopped = append(f.stopped, pid); return nil }
+func (f *fakeSystem) goos() string                     { return f.os }
+func (f *fakeSystem) uid() int                         { return 501 }
+func (f *fakeSystem) pid() int                         { return f.self }
+func (f *fakeSystem) exists(p string) bool             { return f.paths[p] }
+func (f *fakeSystem) installed(p string) (bool, error) { return f.paths[p], nil }
+func (f *fakeSystem) sleep(time.Duration)              {}
+func (f *fakeSystem) alive(int) bool                   { return !f.dead }
+func (f *fakeSystem) stop(pid int) error {
+	f.stopped = append(f.stopped, pid)
+	f.procs = nil
+	return nil
+}
+func (f *fakeSystem) probe(Daemon) error            { return f.probeErr }
 func (f *fakeSystem) processes() ([]process, error) { return f.procs, f.procErr }
 
 func (f *fakeSystem) run(name string, args ...string) (string, error) {
 	cmd := name + " " + strings.Join(args, " ")
 	f.ran = append(f.ran, cmd)
+	if cmd == "systemctl --user show --property=LoadState --value docentd.service" {
+		if _, ok := f.outputs["systemctl --user show --property=ExecStart --value docentd.service"]; ok {
+			return "loaded", nil
+		}
+		if _, ok := f.outputs["systemctl --user show --property=MainPID --value docentd.service"]; ok {
+			return "loaded", nil
+		}
+		return "not-found", nil
+	}
+	if cmd == "systemctl --user show --property=ExecStart --value docentd.service" {
+		if _, ok := f.outputs[cmd]; !ok {
+			return "{ path=" + bin + " ; }", nil
+		}
+	}
 	out, ok := f.outputs[cmd]
 	if !ok {
-		return "", errors.New("exit status 1")
+		return "Could not find service", errors.New("exit status 1")
+	}
+	if strings.Contains(cmd, " start ") || strings.Contains(cmd, " restart ") || strings.Contains(cmd, " kickstart ") || strings.Contains(cmd, " bootstrap ") {
+		if !strings.HasSuffix(cmd, TunnelLabel) {
+			f.procs = []process{{PID: 4242, Exe: bin, Args: []string{bin}}}
+			f.outputs["systemctl --user show --property=MainPID --value docentd.service"] = "4242"
+			f.outputs["launchctl print gui/501/com.docent.docentd"] = "program = " + bin + "\nstate = running\npid = 4242"
+		}
+	}
+	if strings.Contains(cmd, " stop ") || strings.Contains(cmd, " bootout ") {
+		f.procs = nil
+		f.outputs["systemctl --user show --property=MainPID --value docentd.service"] = "0"
+		delete(f.outputs, "launchctl print gui/501/com.docent.docentd")
 	}
 	return out, nil
 }
 
 func (f *fakeSystem) start(l Launch) (int, error) {
 	f.started = append(f.started, l)
+	if !f.dead {
+		f.procs = []process{{PID: 4242, Exe: l.Args[0], Args: l.Args, Dir: l.Dir, Env: l.Env, Stdout: l.LogPath}}
+	}
 	return 4242, nil
 }
 
@@ -52,6 +88,7 @@ func useFake(t *testing.T, f *fakeSystem) {
 	if f.paths == nil {
 		f.paths = map[string]bool{}
 	}
+	f.paths[bin] = true
 	if f.outputs == nil {
 		f.outputs = map[string]string{}
 	}
@@ -80,8 +117,8 @@ func TestDetectActiveSystemdUnit(t *testing.T) {
 	if err := d.Restart(io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	if last := f.ran[len(f.ran)-1]; last != "systemctl --user restart docentd.service" {
-		t.Fatalf("ran %q", last)
+	if !strings.Contains(strings.Join(f.ran, "|"), "systemctl --user restart docentd.service") {
+		t.Fatalf("ran %v", f.ran)
 	}
 }
 
@@ -99,7 +136,8 @@ func TestDetectIgnoresSystemctlShimWithoutSystemd(t *testing.T) {
 func TestDetectLaunchAgentRestartsTunnelWhenUpdated(t *testing.T) {
 	f := &fakeSystem{os: "darwin"}
 	useFake(t, f)
-	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = running\nprogram = " + bin
+	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = running\npid = 13\nprogram = " + bin
+	f.procs = []process{{PID: 13, Exe: bin, Args: []string{bin}}}
 	f.outputs["launchctl print gui/501/com.docent.docent-tunnel"] = "state = running\nprogram = /home/me/.local/bin/docent-tunnel"
 	f.outputs["launchctl kickstart -k gui/501/com.docent.docentd"] = ""
 	f.outputs["launchctl kickstart -k gui/501/com.docent.docent-tunnel"] = ""
@@ -115,9 +153,10 @@ func TestDetectLaunchAgentRestartsTunnelWhenUpdated(t *testing.T) {
 	if err := d.Restart(io.Discard, true); err != nil {
 		t.Fatal(err)
 	}
-	want := "launchctl kickstart -k gui/501/com.docent.docentd|launchctl kickstart -k gui/501/com.docent.docent-tunnel"
-	if got := strings.Join(f.ran, "|"); got != want {
-		t.Fatalf("ran %q, want %q", got, want)
+	for _, command := range []string{"launchctl kickstart -k gui/501/com.docent.docentd", "launchctl kickstart -k gui/501/com.docent.docent-tunnel"} {
+		if !strings.Contains(strings.Join(f.ran, "|"), command) {
+			t.Fatalf("missing %s in %v", command, f.ran)
+		}
 	}
 }
 
@@ -172,12 +211,13 @@ func TestStartPrefersAnInstalledService(t *testing.T) {
 	f.paths[systemdRunDir] = true
 	f.paths["/home/me/.config/systemd/user/docentd.service"] = true
 	f.outputs["systemctl --user start docentd.service"] = ""
+	f.outputs["systemctl --user show --property=MainPID --value docentd.service"] = "0"
 	f.outputs["systemctl --user show --property=ExecStart --value docentd.service"] = "{ path=" + bin + " ; argv[]=" + bin + " ; }"
 
 	if err := Start(io.Discard, StartOptions{Binary: bin, ConfigDir: "/c", Home: "/home/me"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.started) != 0 || f.ran[len(f.ran)-1] != "systemctl --user start docentd.service" {
+	if len(f.started) != 0 || !strings.Contains(strings.Join(f.ran, "|"), "systemctl --user start docentd.service") {
 		t.Fatalf("ran %v, started %v", f.ran, f.started)
 	}
 
@@ -193,6 +233,12 @@ func TestDetectDoesNotStartStoppedOrUnrelatedLaunchAgents(t *testing.T) {
 			useFake(t, f)
 			f.outputs["launchctl print gui/501/com.docent.docentd"] = output
 			d, err := Detect(bin)
+			if strings.Contains(output, "/other/") {
+				if err == nil {
+					t.Fatal("unrelated LaunchAgent not rejected")
+				}
+				return
+			}
 			if err != nil || d.Manager != ManagerNone {
 				t.Fatalf("Detect = %+v, %v; want none", d, err)
 			}
@@ -206,8 +252,8 @@ func TestDetectDoesNotRestartUnrelatedSystemdService(t *testing.T) {
 	f.outputs["systemctl --user show --property=MainPID --value docentd.service"] = "99"
 	f.procs = []process{{PID: 13, Exe: bin, Args: []string{bin}}}
 	d, err := Detect(bin)
-	if err != nil || d.Manager != ManagerProcess {
-		t.Fatalf("Detect = %+v, %v; want process", d, err)
+	if err == nil {
+		t.Fatalf("Detect = %+v; should refuse an unrelated service", d)
 	}
 }
 
@@ -238,13 +284,13 @@ func TestStartLoadedButStoppedLaunchAgent(t *testing.T) {
 	plist := "/home/me/Library/LaunchAgents/com.docent.docentd.plist"
 	f.paths[plist] = true
 	f.outputs["plutil -extract ProgramArguments.0 raw -o - "+plist] = bin
-	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = not running"
+	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = not running\nprogram = " + bin
 	f.outputs["launchctl kickstart gui/501/com.docent.docentd"] = ""
 	if err := Start(io.Discard, StartOptions{Binary: bin, Home: "/home/me"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.ran[len(f.ran)-1]; got != "launchctl kickstart gui/501/com.docent.docentd" {
-		t.Fatalf("last command = %s", got)
+	if !strings.Contains(strings.Join(f.ran, "|"), "launchctl kickstart gui/501/com.docent.docentd") {
+		t.Fatalf("commands = %v", f.ran)
 	}
 }
 

@@ -1,6 +1,6 @@
-// Package selfupdate implements `docentd update`: it replaces the installed
-// docent binaries with a release published on GitHub, then restarts docentd
-// the way it was already running (see restart.go).
+// Package selfupdate implements `docent update`: it replaces the installed
+// docent binaries with a release published on GitHub. Daemon lifecycle control
+// is provided separately by libs/daemoncontrol.
 //
 // It mirrors the installers' release download: resolve the tag, fetch the
 // per-platform archive, verify it against checksums.txt, and unpack it. Each
@@ -30,9 +30,9 @@ import (
 const DefaultRepo = "KurtPreston/docent"
 
 // Binaries are the executables a release archive carries (see
-// .goreleaser.yaml). docentd is always replaced; the others only when they're
+// .goreleaser.yaml). docent is always replaced; the others only when they're
 // already installed beside it.
-var Binaries = []string{"docentd", "docent-tunnel", "docent-reporter", "docent-setup"}
+var Binaries = []string{"docent", "docentd", "docent-tunnel", "docent-reporter", "docent-setup"}
 
 // defaultDownloadBase is where releases download from. DOCENT_DOWNLOAD_BASE
 // overrides it for a mirror; tests point it at an httptest server.
@@ -41,7 +41,7 @@ var defaultDownloadBase = "https://github.com"
 // Options configures an Updater. Empty fields take their defaults.
 type Options struct {
 	Repo   string    // owner/repo; defaults to $DOCENT_REPO or DefaultRepo
-	Binary string    // the docentd to replace; defaults to the running executable
+	Binary string    // the CLI to replace; defaults to the running executable
 	Log    io.Writer // progress and warnings; defaults to io.Discard
 }
 
@@ -56,10 +56,11 @@ type Updater struct {
 
 // Result reports what an install changed.
 type Result struct {
-	Tag     string   // the release tag installed
-	Binary  string   // the docentd that was replaced
-	BinDir  string   // the directory whose binaries were replaced
-	Updated []string // binary names replaced, docentd first
+	Tag          string   // the release tag installed
+	Binary       string   // the CLI that was replaced
+	DaemonBinary string   // sibling daemon path (may not be installed)
+	BinDir       string   // the directory whose binaries were replaced
+	Updated      []string // binary names replaced, CLI first
 }
 
 // New resolves the repository and the binary to replace.
@@ -86,7 +87,7 @@ func New(opts Options) (*Updater, error) {
 	if u.binary == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			return nil, fmt.Errorf("could not locate the running docentd: %w", err)
+			return nil, fmt.Errorf("could not locate the running docent: %w", err)
 		}
 		u.binary = exe
 	}
@@ -96,8 +97,13 @@ func New(opts Options) (*Updater, error) {
 	return u, nil
 }
 
-// Binary is the path of the docentd this updater replaces.
+// Binary is the path of the CLI this updater replaces.
 func (u *Updater) Binary() string { return u.binary }
+
+// DaemonBinary is the daemon belonging to this CLI's installation.
+func (u *Updater) DaemonBinary() string {
+	return filepath.Join(filepath.Dir(u.binary), "docentd")
+}
 
 // LatestTag returns the tag of the repository's latest GitHub release, read
 // from the redirect /releases/latest serves to /releases/tag/<tag>.
@@ -118,9 +124,9 @@ func (u *Updater) LatestTag() (string, error) {
 }
 
 // Install downloads tag's archive for this platform, verifies it, and replaces
-// docentd plus any sibling docent binaries already installed.
+// the CLI plus any sibling docent binaries already installed.
 func (u *Updater) Install(tag string) (Result, error) {
-	res := Result{Tag: tag, Binary: u.binary, BinDir: filepath.Dir(u.binary)}
+	res := Result{Tag: tag, Binary: u.binary, BinDir: filepath.Dir(u.binary), DaemonBinary: u.DaemonBinary()}
 	if !SupportedPlatform() {
 		return res, fmt.Errorf("no prebuilt docent for %s (releases ship linux and darwin on amd64 and arm64)", Platform())
 	}
@@ -144,12 +150,12 @@ func (u *Updater) Install(tag string) (Result, error) {
 	targets := make(map[string]string)
 	for _, name := range Binaries {
 		target := filepath.Join(res.BinDir, name)
-		if name == "docentd" {
+		if name == "docent" {
 			target = u.binary
 		}
 		info, err := os.Lstat(target)
 		if err != nil {
-			if os.IsNotExist(err) && name != "docentd" {
+			if os.IsNotExist(err) && name != "docent" {
 				continue
 			}
 			return res, fmt.Errorf("cannot inspect %s: %w", target, err)

@@ -3,6 +3,7 @@
 package selfupdate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,14 +41,15 @@ func TestInstallerHelperInstallsVerifiedRelease(t *testing.T) {
 	runInstallerHelper(t, `
 docent_release_fetch "" || exit 1
 [ "$DOCENT_RELEASE_TAG" = v0.2.0 ]
-docent_release_install "$BINDIR" docentd docent-tunnel || exit 1
+docent_release_install "$BINDIR" docent docentd docent-tunnel || exit 1
+[ "$(cat "$BINDIR/docent")" = new-cli ]
 [ "$(cat "$BINDIR/docentd")" = new-docentd ]
 [ -x "$BINDIR/docent-tunnel" ]
 `)
 }
 
 func TestInstallerHelperRejectsIncompleteReleasesAndRetries(t *testing.T) {
-	for _, mode := range []string{"missing manifest", "missing checksum", "wrong checksum", "missing binary"} {
+	for _, mode := range []string{"missing manifest", "missing checksum", "wrong checksum", "missing binary", "missing CLI"} {
 		t.Run(mode, func(t *testing.T) {
 			rel := fullRelease("v0.2.0")
 			switch mode {
@@ -59,6 +61,8 @@ func TestInstallerHelperRejectsIncompleteReleasesAndRetries(t *testing.T) {
 				rel.checksums = func([]byte) string { return strings.Repeat("0", 64) + "  " + AssetName() }
 			case "missing binary":
 				delete(rel.files, "docent-setup")
+			case "missing CLI":
+				delete(rel.files, "docent")
 			}
 			newReleaseServer(t, rel)
 			runInstallerHelper(t, `
@@ -98,6 +102,39 @@ fi
 [ "$(cat "$BINDIR/docentd")" = old ]
 [ "$(find "$BINDIR" -name '.docentd.*' | wc -l | tr -d ' ')" = 0 ]
 `)
+		})
+	}
+
+}
+
+func TestMacInstallerSelectsLocalOrClientBinaries(t *testing.T) {
+	for _, tt := range []struct {
+		mode   string
+		tunnel int
+	}{
+		{"local", 0}, {"remote", 0}, {"remote", 1},
+	} {
+		t.Run(fmt.Sprintf("%s-%d", tt.mode, tt.tunnel), func(t *testing.T) {
+			newReleaseServer(t, fullRelease("v0.2.0"))
+			runInstallerHelper(t, fmt.Sprintf(`
+	DOCENTD_MODE=%s
+	USE_TUNNEL=%d
+	FROM_SOURCE=0
+	SKIP_BUILD=0
+	RELEASE_TAG=v0.2.0
+	BIN_DIR="$BINDIR"
+	stop_previous_docent_services() { :; }
+	. "$(dirname "$HELPER")/macos-install-binaries.sh"
+	[ "$(cat "$BINDIR/docent")" = new-cli ]
+	if [ "$DOCENTD_MODE" = local ]; then
+	  [ "$(cat "$BINDIR/docentd")" = new-docentd ]
+	else
+	  [ ! -e "$BINDIR/docentd" ]
+	fi
+	if [ "$USE_TUNNEL" = 1 ]; then
+	  [ -x "$BINDIR/docent-tunnel" ]
+	fi
+	`, tt.mode, tt.tunnel))
 		})
 	}
 }

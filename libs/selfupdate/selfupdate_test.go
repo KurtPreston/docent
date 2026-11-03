@@ -94,7 +94,7 @@ func newReleaseServer(t *testing.T, rel *release) {
 func installDir(t *testing.T, names ...string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, n := range names {
+	for _, n := range append([]string{"docent"}, names...) {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte("old"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +104,7 @@ func installDir(t *testing.T, names ...string) string {
 
 func newTestUpdater(t *testing.T, dir string) *Updater {
 	t.Helper()
-	u, err := New(Options{Repo: testRepo, Binary: filepath.Join(dir, "docentd")})
+	u, err := New(Options{Repo: testRepo, Binary: filepath.Join(dir, "docent")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func readFile(t *testing.T, path string) string {
 
 func fullRelease(tag string) *release {
 	return &release{tag: tag, files: map[string]string{
-		"docentd": "new-docentd", "docent-tunnel": "new-tunnel",
+		"docent": "new-cli", "docentd": "new-docentd", "docent-tunnel": "new-tunnel",
 		"docent-reporter": "new-reporter", "docent-setup": "new-setup", "README.md": "readme",
 	}}
 }
@@ -156,8 +156,8 @@ func TestInstallReplacesOnlyInstalledBinaries(t *testing.T) {
 	}
 
 	// docentd and the tunnel are replaced; absent binaries stay absent
-	if got := strings.Join(res.Updated, ","); got != "docentd,docent-tunnel" {
-		t.Fatalf("Updated = %s, want docentd,docent-tunnel", got)
+	if got := strings.Join(res.Updated, ","); got != "docent,docentd,docent-tunnel" {
+		t.Fatalf("Updated = %s, want docent,docentd,docent-tunnel", got)
 	}
 	if got := readFile(t, filepath.Join(dir, "docentd")); got != "new-docentd" {
 		t.Fatalf("docentd = %q", got)
@@ -194,7 +194,7 @@ func TestInstallNeedsDocentdInTheArchive(t *testing.T) {
 	if !SupportedPlatform() {
 		t.Skip("no release build for " + Platform())
 	}
-	newReleaseServer(t, &release{tag: "v0.2.0", files: map[string]string{"docent-tunnel": "x"}})
+	newReleaseServer(t, &release{tag: "v0.2.0", files: map[string]string{"docent": "cli", "docent-tunnel": "x"}})
 	_, err := newTestUpdater(t, installDir(t, "docentd")).Install("v0.2.0")
 	if err == nil || !strings.Contains(err.Error(), "no docentd") {
 		t.Fatalf("Install error = %v, want no docentd", err)
@@ -297,7 +297,7 @@ func TestInstallRollsBackWhenRenameFails(t *testing.T) {
 		}
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 2 {
+	if err != nil || len(entries) != 3 {
 		t.Fatalf("temporary files left behind: %v, %v", entries, err)
 	}
 }

@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-// script is the canonical hook, baked into the binary so an installed docentd
+// script is the canonical hook, baked into the binary so an installed docent
 // can both install and verify it without needing the source checkout.
 //
 //go:embed docent-notify.sh
@@ -108,7 +108,7 @@ func (s Status) OK() bool {
 		len(s.MissingWire) == 0 && len(s.StaleWire) == 0
 }
 
-// Summary renders the status as human-readable lines for `docentd doctor`.
+// Summary renders the status as human-readable lines for `docent doctor`.
 func (s Status) Summary() []string {
 	var out []string
 	switch s.Script {

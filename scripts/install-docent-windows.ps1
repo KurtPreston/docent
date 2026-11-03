@@ -18,7 +18,8 @@ launched through a hidden, waiting .vbs so no console window flashes). The windo
 manager (wsm) has its own installer in the wsm repo.
 
 On first run it asks whether docentd runs on THIS machine (local) or on a REMOTE
-host. Local builds docentd.exe, runs docent-setup, and registers a docentd task.
+host. Both modes build the docent.exe maintenance CLI. Local also builds
+docentd.exe, runs docent-setup, and registers a docentd task.
 Remote verifies the connection to the remote docentd (through docent-tunnel, or
 directly with -NoTunnel) -- including the bearer token -- before finishing, and
 points the launcher + dashboard at it. On a re-run it first offers to reuse the config from the last
@@ -55,7 +56,7 @@ Don't set up the SSH forward; point the launcher directly at the remote URL.
 Skip Scheduled Task registration (build/config only).
 
 .PARAMETER NoBuild
-Skip the dashboard + docentd.exe build (reuse an existing binary in BinDir).
+Skip binary and dashboard builds (reuse existing binaries in BinDir).
 
 .PARAMETER NoModules
 Deprecated no-op. The VirtualDesktop module is now installed by wsm's own
@@ -93,7 +94,7 @@ Dashboard port (default: 39787).
 Window-manager port (default: 39788).
 
 .PARAMETER BinDir
-Install docentd.exe here (default: ~\.local\bin).
+Install the selected binaries here (default: ~\.local\bin).
 
 .PARAMETER ConfigDir
 Config root (default: ~\.config\docent).
@@ -416,52 +417,7 @@ function Stop-PreviousDocentServices {
 
 Stop-PreviousDocentServices
 
-# --- build dashboard + docentd (local only) ----------------------------------
-# The Vite output (apps\docentd\web\dist) is embedded into docentd via the
-# `embed` build tag, so the installed binary is self-contained (no -web needed).
-if ($Mode -eq 'local' -and -not $NoBuild) {
-    if (-not (Test-GoOk)) {
-        Write-Error "need Go >= 1.22 on PATH to build docentd locally (install Go or pass -NoBuild / use -RemoteUrl)."
-        exit 1
-    }
-    if (-not (Test-NodeOk)) {
-        Write-Error "need Node >= 18 on PATH to build the dashboard (install Node 18+, or pass -NoBuild)."
-        exit 1
-    }
-    Log "building dashboard -> $WebRoot\dist"
-    Step "npm ci + npm run build ($WebRoot)" {
-        & npm --prefix $WebRoot ci
-        if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
-        & npm --prefix $WebRoot run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
-    }
-    Log "building docentd -> $DocentdBin (dashboard embedded via -tags embed)"
-    Step "go build -tags embed -o $DocentdBin ./apps/docentd" {
-        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-        & go build -tags embed -o $DocentdBin (Join-Path $Root 'apps\docentd')
-        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
-    }
-}
-elseif ($Mode -eq 'local') {
-    Log "skipping dashboard + docentd build (-NoBuild)"
-}
-
-# --- build docent-tunnel (remote + tunnel) -----------------------------------
-if ($UseTunnel -and -not $NoBuild) {
-    if (-not (Test-GoOk)) {
-        Write-Error "need Go >= 1.22 on PATH to build docent-tunnel for the SSH forward (install Go, or pass -NoTunnel to hit the remote URL directly)."
-        exit 1
-    }
-    Log "building docent-tunnel -> $DocentTunnelBin"
-    Step "go build -o $DocentTunnelBin ./apps/docent-tunnel" {
-        New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-        & go build -o $DocentTunnelBin (Join-Path $Root 'apps\docent-tunnel')
-        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
-    }
-}
-elseif ($UseTunnel) {
-    Log "skipping docent-tunnel build (-NoBuild)"
-}
+. (Join-Path $Root 'scripts/lib/windows-install-binaries.ps1')
 
 # --- validate remote connection ----------------------------------------------
 # Test-RemoteConnection returns $true when the launcher can actually reach the
@@ -1080,54 +1036,4 @@ function Install-DocentExtension {
 
 Install-DocentExtension
 
-# --- summary -----------------------------------------------------------------
-Write-Host ""
-Write-Host "Installed (docentd: $Mode):"
-$lnNote = if ($DashboardHotkey) { "hotkey $Hotkey, dashboard $DashboardHotkey" } else { "hotkey $Hotkey" }
-Write-Host "  docent-launcher-windows apps/docent-launcher-windows/docent-launcher.ps1  ($lnNote)"
-if (-not $NoCockpit) {
-    $deskNote = if ($CockpitDesktop) { "hotkey $CockpitHotkey, desktop '$CockpitDesktop'" } else { "hotkey $CockpitHotkey" }
-    Write-Host "  docent-cockpit          apps/docent-launcher-windows/docent-cockpit.ps1  ($deskNote)"
-}
-if ($Mode -eq 'local') {
-    Write-Host "  docentd                 $DocentdBin   (127.0.0.1:$Port)"
-    Write-Host "  dashboard               http://127.0.0.1:$Port/"
-}
-elseif ($UseTunnel) {
-    Write-Host "  docent-tunnel           $DocentTunnelBin  (127.0.0.1:$Port -> $SshHost`:127.0.0.1:$Port)"
-    Write-Host "  docentd                 127.0.0.1:$Port on $SshHost  (remote - reached via docent-tunnel)"
-    Write-Host "  dashboard               http://127.0.0.1:$Port/"
-}
-else {
-    Write-Host "  docentd                 $RemoteUrl  (remote - not installed here)"
-    Write-Host "  dashboard               $RemoteUrl/"
-}
-Write-Host "  IDE extension           $ExtensionStatus"
-
-if (-not $NoTasks) {
-    $extra = ''
-    if (-not $NoCockpit) { $extra += ', docent-cockpit' }
-    if ($Mode -eq 'local') { $extra += ', docentd' }
-    if ($UseTunnel) { $extra += ', docent-tunnel' }
-    Write-Host ""
-    Write-Host "Scheduled Tasks (hidden, at-logon + 1-min watchdog):"
-    Write-Host "  docent-launcher$extra"
-    Write-Host "  logs: $env:TEMP\docent-launcher.log$(if (-not $NoCockpit) { ", $env:TEMP\docent-cockpit.log" })$(if ($Mode -eq 'local') { ", $env:TEMP\docentd.log" })$(if ($UseTunnel) { ", $env:TEMP\docent-tunnel.log" })"
-    Write-Host ""
-    Write-Host "Manage:"
-    Write-Host "  Get-ScheduledTask docent-launcher | Get-ScheduledTaskInfo"
-    Write-Host "  Stop-ScheduledTask -TaskName docent-launcher          # watchdog relaunches within ~1 min"
-    Write-Host "  Disable-ScheduledTask -TaskName docent-launcher       # turn OFF autostart + watchdog"
-    Write-Host "  Unregister-ScheduledTask -TaskName docent-launcher -Confirm:`$false"
-}
-
-Write-Host ""
-Write-Host "Notes:"
-Write-Host "  - The window manager is the separate wsm daemon; install it from"
-Write-Host "    https://github.com/KurtPreston/wsm (it serves :$WsmPort and needs your"
-Write-Host "    interactive desktop to enumerate/focus Cursor windows)."
-Write-Host "  - The dashboard focuses windows directly via the local wsm at"
-Write-Host "    http://127.0.0.1:$WsmPort (the browser's localhost), so focus works even when docentd is remote."
-Write-Host "  - For a REMOTE docentd to also *list* this machine's windows, give docentd a"
-Write-Host "    'wsm' directive whose base_url reaches this host's :$WsmPort (e.g. over a reverse SSH"
-Write-Host "    tunnel) -- i.e. the local wsm daemon. Local docentd auto-adds that directive."
+. (Join-Path $Root 'scripts\lib\windows-report.ps1')

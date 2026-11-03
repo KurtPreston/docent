@@ -1,4 +1,4 @@
-package selfupdate
+package daemoncontrol
 
 import (
 	"fmt"
@@ -21,6 +21,7 @@ func TestBackgroundDaemonHelper(t *testing.T) {
 }
 
 func TestReadProcPreservesBackgroundLaunch(t *testing.T) {
+	useUnmanagedSystem(t)
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

@@ -9,7 +9,7 @@ before:
     - npm --prefix apps/docentd/web run build
 
 # Every binary is stamped through libs/buildinfo so `-version` and
-# `docentd update` know which release is running.
+# `docent update` know which release is running.
 builds:
   - id: docentd
     main: ./apps/docentd
@@ -23,6 +23,13 @@ builds:
       - -X github.com/KurtPreston/docent/libs/buildinfo.Date={{.Date}}
     goos: &goos [linux, darwin]
     goarch: &goarch [amd64, arm64]
+  - id: docent
+    main: ./apps/docent
+    binary: docent
+    env: [CGO_ENABLED=0]
+    ldflags: *ldflags
+    goos: *goos
+    goarch: *goarch
   - id: docent-tunnel
     main: ./apps/docent-tunnel
     binary: docent-tunnel
@@ -45,8 +52,8 @@ builds:
     goos: *goos
     goarch: *goarch
 
-# One archive per platform holding all four binaries. The installers and
-# `docentd update` (libs/selfupdate) rely on this name and layout.
+# One archive per platform holding all five binaries. The installers and
+# `docent update` (libs/selfupdate) rely on this name and layout.
 archives:
   - id: docent
     formats: [tar.gz]
