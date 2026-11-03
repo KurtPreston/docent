@@ -79,7 +79,7 @@
         "when": { "$ref": "#/$defs/automationWhen" },
         "include_existing": {
           "type": "boolean",
-          "description": "Transition triggers only: on the first collect after startup, fire for entities already in the target state instead of only recording them as the baseline. Relies on conditions.cooldown or dedupe_key to avoid re-firing after a restart."
+          "description": "Transition triggers only: on the first collect after startup, fire for entities already in the target state instead of only recording them as the baseline. Cooldowns don't survive a restart, so every restart fires again for entities still in that state; have the action move the entity out of it (e.g. claim the task)."
         },
         "cron": {
           "type": "string",

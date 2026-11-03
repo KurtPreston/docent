@@ -211,6 +211,10 @@ After the pull request merges, on the automation host:
 - Phase 4: config validation had no warning channel, only errors.
   `automation.RuleWarnings` returns non-fatal notes; the daemon logs them at
   startup and `docentd doctor` prints them as `WARN` without failing.
+- Phase 5: the `include_existing` schema description from Phase 4 said
+  cooldowns prevent re-firing after a restart, but job history and dedupe
+  stamps are in memory. Corrected the description; the docs and recipe rely
+  on claiming (moving the task out of To Do) to stop repeats instead.
 
 ## Found bugs
 

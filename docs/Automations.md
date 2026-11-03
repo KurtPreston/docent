@@ -58,7 +58,7 @@ automations:
 | Type | Fires when | Key fields |
 |------|-----------|------------|
 | `signal` (default) | A newly-collected signal matches the filters. | `source` (collector, e.g. `github`), `kind` (one or a list; friendly aliases like `pr` match `pr_review_status`/`pr_activity`, `ticket`/`issue` are interchangeable), `match.text` (regex against title+summary), `match.ticket_key` (require a JIRA key to be extractable), `match.fields` (exact field equality). |
-| `transition` | An entity's state field changes value between two collects. | `source`, `kind`, `when.field` (required), `when.from` / `when.to` (either can be the sentinel `me`, meaning "belongs to you", e.g. `assignee: me` on an assignment). Empty `from`/`to` matches any value. `when.change: increase` / `decrease` fires only when a numeric field goes up / down (an empty value reads as 0), e.g. `unresolved_mine_latest` (the time of the newest review comment awaiting your reply) increasing means new review feedback. `match.fields` narrows which entities are eligible, as it does for signals — an entity's state carries every field of the signal it came from. |
+| `transition` | An entity's state field changes value between two collects. | `source`, `kind`, `when.field` (required), `when.from` / `when.to` (either can be the sentinel `me`, meaning "belongs to you", e.g. `assignee: me` on an assignment). Empty `from`/`to` matches any value. `when.change: increase` / `decrease` fires only when a numeric field goes up / down (an empty value reads as 0), e.g. `unresolved_mine_latest` (the time of the newest review comment awaiting your reply) increasing means new review feedback. `match.fields` narrows which entities are eligible, as it does for signals — an entity's state carries every field of the signal it came from. `include_existing: true` also fires on the first collect after a restart for entities already in the `when.to` state (see below). |
 | `schedule` | A time is reached. | `cron` (5-field `min hour dom month dow`, local time, supports `*`, ranges, lists, `*/N` steps) **or** `at` (`"HH:MM"`, local time) with an optional `weekday` name to restrict to one day. |
 
 Signal and transition rules are evaluated right after each collector run, so
@@ -78,6 +78,17 @@ each unit after startup only seeds a baseline (so docentd knows what
 unit onward. Otherwise every signal/state already in the lookback window
 would look "new" on every restart.
 
+Set **`trigger.include_existing: true`** on a `transition` rule to fire for
+entities that are already in the target state on that first collect, instead
+of only recording them. A work queue needs this: a task queued while docentd
+was down should still run. The first collect fires the rule for every entity
+whose `when.field` already equals `when.to` (and that passes `match.fields`
+and `when.from`), as though it had just appeared; later collects work as
+usual. Cooldowns are kept in memory, so each restart fires again for entities
+still in that state. Pair it with an action that moves the entity out of the
+state, such as claiming a queued task. The option has no effect on other
+trigger types, and `docentd doctor` warns when it is set on one.
+
 **Collector failures are signals too.** When a directive's collect starts
 failing, such as after its credentials expire, docentd offers rules one
 `collector_error` signal: `source` is the collector, `title` the directive's
@@ -94,6 +105,7 @@ Optional gates evaluated after the trigger matches, before any action runs:
 - **`repos: [...]`** — restrict to listed repos.
 - **`cooldown: "30m"`** (or `"7d"`, etc.) — suppress re-firing the same dedupe key within the window.
 - **`dedupe_key: "..."`** — override the default dedupe key (`rule ID + signal/entity stable ID`, or `rule ID + from->to` for transitions).
+- **`max_concurrent: N`** — run at most N of this rule's jobs at once. Further jobs wait in firing order with status `queued` and start as running ones finish. A cooldown counts from when the job was queued, not when it started. `0` or unset means no limit. Use `1` for a work queue, so agents take tasks one at a time.
 
 ## Action types
 
@@ -281,6 +293,7 @@ rule has a **Run** button that fires it immediately via `POST
 - **Bypass cooldown** entirely.
 - Accept an optional JSON body (`title`, `url`, `repo`, `branch`, `ticket`, `openPath`, `from`, `to`, `source`, `kind`, `fields`) that synthesizes an event, so signal/transition rules can be exercised without waiting for a real one.
 - Run synchronously (the request waits up to 15 minutes) and return `{ ok, job }`.
+- Ignore `max_concurrent`, so they start even while the rule's queue is full.
 
 `GET /api/automations` (`?limit=N`, default 50) returns the rule list plus
 job history; `GET /api/automations/{id}` returns one rule's definition. Job
@@ -316,6 +329,8 @@ hosting sessions in `docentd` worth doing.
 - **Cron and `at` use local time**, not UTC.
 - **Manual Run bypasses cooldown** and works on disabled rules — don't be surprised if a "disabled" rule still fires when you click Run.
 - **No hot reload** — edits to `automations:` in `config.yaml` take effect on the next `docentd` restart.
+- **Queued jobs don't survive a restart** — jobs waiting on `max_concurrent` are in memory. A `transition` rule with `include_existing: true` picks their entities up again on the next start.
+- **Each action gets its own time budget** — a `shell` action times out after 5 minutes, an `agent-inline` run after 30, and any other action after 15, counted from when that action starts rather than from the start of the job.
 - **Action chains keep going after a failure** — a later action still runs (and can see `.ActionError` / `DOCENT_ACTION_ERROR`), but the job is recorded as failed overall.
 - **`agent` actions ignore `post:` steps** — they start a session, which is interactive by nature; see [`agent` vs `agent-inline`](#agent-vs-agent-inline) above.
 - **Kind aliases** — e.g. a rule with `kind: pr` also matches the concrete entity kind `pr_review_status`/`pr_activity`; `ticket`/`issue`/`issue_activity` are similarly interchangeable.

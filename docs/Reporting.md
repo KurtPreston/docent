@@ -437,7 +437,8 @@ On an interactive terminal, docent-reporter prints `Press 'c' to abort pending c
 
 ## Collectors
 
-All collectors run in **date range** mode (`since` → `until`). Implemented:
+All collectors run in **date range** mode (`since` → `until`), except
+`backlog`, which reports a board's current state. Implemented:
 
 - `local-git` — commits + reflog under `code_home` or explicit `paths`. Scope picks commits by author, by local-branch membership, or every commit on every ref. See [Nested repos](#nested-repos-configscan_depth) if your working trees sit a level deeper.
 - `github` / `github-enterprise` — PRs authored / reviewed, issues you're involved with, comments, and commits for `target.username` (or the authenticated `gh` user when `target.username` is empty). Open-PR status also covers anything matched by [`pr_queries`](#extra-open-pr-searches) and the [PRs you could review](#prs-you-could-review). With `scope: all`, also pulls cross-repo activity from `config.followed_repos`.
@@ -446,6 +447,7 @@ All collectors run in **date range** mode (`since` → `until`). Implemented:
 - `google-calendar` — events from a secret iCal URL.
 - `azure-pipelines` — completed Azure DevOps runs of `config.definitions`: a `build_failure` signal per failed run and, with a [log parser](#log-parsers), a `test_failure` signal per test file that failed **or flaked** (passed only on retry). Built to trigger automations; see [Azure Pipelines](#azure-pipelines).
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [Slack.md](Slack.md) for token setup and required scopes.
+- `backlog` — the tasks on a [Backlog.md](https://github.com/MrLesk/Backlog.md) board, read through the `backlog` CLI. State only: `docentd` polls it to drive automations such as a [work queue](Automation-recipes.md#work-queue-from-a-backlogmd-board), and event-mode reports skip it. See [Backlog.md boards](#backlogmd-boards).
 
 ### Azure Pipelines
 
@@ -505,6 +507,58 @@ Every signal has `source: azure-pipelines` and carries these run fields:
 **`kind: build_failure`** covers a failed or partially succeeded run with no test findings, such as a failing build step or a run without a parser. Its `branch` is the branch that ran (the PR head branch for PR runs).
 
 See the [flaky E2E test recipe](Automation-recipes.md#fix-flaky-e2e-tests-from-azure-pipelines) for an automation built on these signals.
+
+### Backlog.md boards
+
+`backlog` lists a [Backlog.md](https://github.com/MrLesk/Backlog.md) board's
+tasks so automations can react to them. It runs the `backlog` CLI (install it
+with `npm i -g backlog.md`) with `BACKLOG_CWD` set to the board, and never
+writes to the board itself.
+
+```yaml
+directives:
+  - id: tasks
+    name: Task board
+    collector: backlog
+    enabled: true
+    config:
+      board: ~/tasks              # directory holding the board's backlog/ (required)
+      command: backlog            # optional, default backlog
+      pull_command: ~/bin/sync-tasks  # optional, run in the board before each collect
+      statuses: To Do, In Progress    # optional, default every status
+      queue_label: agent          # optional; enables the queued field
+      queue_status: To Do         # optional, default To Do
+    state:
+      poll: { interval: 5m, on_load: true }
+```
+
+It is a state collector, so give it a `state:` poll, not `events:`. Each
+collect runs `backlog task list --json`, then `backlog task view <id> --json`
+for each task carrying `queue_label` in `queue_status`, to read its plan.
+Archived tasks are skipped. When `pull_command` fails, the collect fails, so a
+stale board never looks current.
+
+Every task becomes one item with `source: backlog`, `kind: task`, the task's
+title, and these fields:
+
+| Field | Meaning |
+|-------|---------|
+| `id`, `status`, `priority`, `project` | As on the board, e.g. `TASK-12` and `To Do`. |
+| `labels` | Comma-separated labels. |
+| `due_date` | The due date, when set. |
+| `ready` | Backlog.md's `isReady` for the task (it accounts for the task's dependencies). |
+| `queued` | `true` when the task has `queue_label`, is in `queue_status`, and is ready; otherwise `false`. Always `false` without `queue_label`. |
+
+Tasks carrying `queue_label` in `queue_status` also get:
+
+| Field | Meaning |
+|-------|---------|
+| `file` | Absolute path of the task's Markdown file. |
+| `plan` | The task's Implementation Plan text. |
+| header fields | Each `Key: value` line at the top of the plan, before the first other line, as a lower-cased field (spaces and dashes become `_`). A plan starting `Repo: my-org/my-repo` and `Branch: fix-login` sets `repo` and `branch`, which is what `workdir: worktree` uses to pick the checkout. Headers never replace the fields above. |
+
+`docentd doctor` checks that `board` is a directory and that the command is on
+`PATH`.
 
 ### Nested repos (`config.scan_depth`)
 
