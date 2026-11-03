@@ -2,6 +2,7 @@ package daemoncontrol
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -16,11 +17,13 @@ type system interface {
 	uid() int
 	pid() int
 	exists(path string) bool
+	installed(path string) (bool, error)
 	run(name string, args ...string) (string, error)
 	processes() ([]process, error)
 	stop(pid int) error
 	start(l Launch) (int, error)
 	alive(pid int) bool
+	probe(d Daemon) error
 	sleep(d time.Duration)
 }
 
@@ -50,6 +53,20 @@ func (realSystem) sleep(d time.Duration) { time.Sleep(d) }
 func (realSystem) exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func (realSystem) installed(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return false, fmt.Errorf("%s is not an executable file", path)
+	}
+	return true, nil
 }
 
 func (realSystem) run(name string, args ...string) (string, error) {

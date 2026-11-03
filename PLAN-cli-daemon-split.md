@@ -237,6 +237,13 @@ for the public push and PR. The implementation and every phase remain on
 
 ## Obstacles
 
+- **Phase 3:** existing repository locks are in-process mutexes, so they cannot
+  coordinate separate CLI invocations. Use an advisory per-installation file
+  lock for lifecycle mutations and the full update/restart transaction.
+- **Phase 3:** macOS unmanaged process inspection cannot recover argv/environment.
+  Status and stop remain available; restart refuses the unsafe relaunch.
+  Managed readiness uses the LaunchAgent arguments where available and reports
+  explicitly when only process identity/startup survival can be verified.
 - **Phase 1:** the default local suite reproduced the six known worktree
   fixture failures. Validation uses a canonical TMPDIR and command-local Git
   configuration as documented above; production behavior is unchanged.

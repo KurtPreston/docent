@@ -44,11 +44,16 @@ func (a app) run(args []string) int {
 		err = a.installHooks(args[1:])
 	case "update":
 		err = a.runUpdate(args[1:])
+	case "start", "stop", "restart", "status":
+		err = a.lifecycle(args[0], args[1:])
 	default:
 		err = usageError{fmt.Errorf("unknown command %q; run docent --help", args[0])}
 	}
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return 0
+	}
+	if errors.Is(err, errStopped) {
+		return 3
 	}
 	fmt.Fprintln(a.err, "docent:", err)
 	var usage usageError
@@ -59,7 +64,7 @@ func (a app) run(args []string) int {
 }
 
 func (a app) help() {
-	fmt.Fprintln(a.out, "Usage: docent <command> [options]\n\nCommands:\n  version        Show the installed version\n  doctor         Validate local configuration and hooks\n  install-hooks  Install or check local agent hooks\n  update         Update installed release binaries")
+	fmt.Fprintln(a.out, "Usage: docent <command> [options]\n\nCommands:\n  version        Show the installed version\n  doctor         Validate local configuration and hooks\n  install-hooks  Install or check local agent hooks\n  update         Update installed release binaries\n  start          Start the local daemon if stopped\n  stop           Stop the local daemon\n  restart        Restart or start the local daemon\n  status         Inspect the local daemon (exit 3 if stopped)")
 }
 
 type usageError struct{ error }

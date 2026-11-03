@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -13,11 +14,12 @@ import (
 )
 
 type updateOptions struct {
-	target    string
-	force     bool
-	check     bool
-	restart   string
-	configDir string
+	target         string
+	force          bool
+	check          bool
+	restart        string
+	configDir      string
+	configOverride bool
 }
 
 func (a app) runUpdate(args []string) error {
@@ -31,6 +33,11 @@ func (a app) runUpdate(args []string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config-dir" {
+			o.configOverride = true
+		}
+	})
 	if o.restart != "auto" && o.restart != "never" {
 		return usageError{fmt.Errorf("--restart must be auto or never")}
 	}
@@ -38,7 +45,10 @@ func (a app) runUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	return a.update(u, o)
+	if o.check {
+		return a.update(u, o)
+	}
+	return daemoncontrol.WithLock(u.Binary(), func() error { return a.update(u, o) })
 }
 
 func (a app) update(u *selfupdate.Updater, o updateOptions) error {
@@ -74,6 +84,15 @@ func (a app) update(u *selfupdate.Updater, o updateOptions) error {
 		if err != nil {
 			return err
 		}
+		if o.configOverride {
+			inspected, err := daemoncontrol.Inspect(u.DaemonBinary())
+			if err != nil {
+				return err
+			}
+			if inspected.Running || inspected.Manager != daemoncontrol.ManagerNone {
+				return usageError{fmt.Errorf("--config-dir cannot override an existing daemon or service")}
+			}
+		}
 	}
 	res, err := u.Install(tag)
 	if err != nil {
@@ -108,7 +127,7 @@ func (a app) restartAfterUpdate(o updateOptions, daemon daemoncontrol.Daemon, re
 	if answer != "y" && answer != "yes" {
 		return nil
 	}
-	return daemoncontrol.Start(a.out, daemoncontrol.StartOptions{Binary: res.DaemonBinary, ConfigDir: o.configDir})
+	return daemoncontrol.Start(a.out, daemoncontrol.StartOptions{Binary: res.DaemonBinary, ConfigDir: o.configDir, ConfigOverride: o.configOverride})
 }
 
 func contains(list []string, name string) bool {
