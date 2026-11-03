@@ -453,7 +453,7 @@ func (s *Server) staticOrIndex(w http.ResponseWriter, r *http.Request) {
 		// stale hook posting to a renamed endpoint therefore loses every event
 		// in total silence, which is exactly how agent status went missing for
 		// weeks. Log it so the next drift is visible in the daemon log.
-		log.Printf("WARNING: %s %s has no route — if this is a docent reporter it is dropping every event; run `docentd install-hooks` on the host running it", r.Method, r.URL.Path)
+		log.Printf("WARNING: %s %s has no route — if this is a docent reporter it is dropping every event; run `docent install-hooks` on the host running it", r.Method, r.URL.Path)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
