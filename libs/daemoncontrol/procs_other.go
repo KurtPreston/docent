@@ -1,6 +1,6 @@
 //go:build !linux && !windows
 
-package selfupdate
+package daemoncontrol
 
 import (
 	"path/filepath"

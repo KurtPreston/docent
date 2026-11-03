@@ -1,4 +1,4 @@
-package selfupdate
+package daemoncontrol
 
 import (
 	"fmt"

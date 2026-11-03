@@ -237,6 +237,11 @@ for the public push and PR. The implementation and every phase remain on
 
 ## Obstacles
 
+- **Phase 1:** the default local suite reproduced the six known worktree
+  fixture failures. Validation uses a canonical TMPDIR and command-local Git
+  configuration as documented above; production behavior is unchanged.
+- **Phase 1:** PowerShell is not installed on this host. Windows installer
+  extraction is mechanical; native PowerShell validation remains unavailable.
 - Existing Go `internal` boundaries prevent a separate CLI from importing
   daemon config directly; Phase 1 creates shared packages instead of coupling
   the CLI to the daemon application.

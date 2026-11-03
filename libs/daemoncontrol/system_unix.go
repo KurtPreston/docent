@@ -1,6 +1,6 @@
 //go:build !windows
 
-package selfupdate
+package daemoncontrol
 
 import (
 	"errors"
