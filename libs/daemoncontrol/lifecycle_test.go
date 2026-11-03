@@ -127,3 +127,15 @@ func TestHealthUsesEffectiveConfiguration(t *testing.T) {
 		t.Fatalf("environment config: %s %v", url, err)
 	}
 }
+
+func TestRestartDoesNotStopDaemonWithMissingExecutable(t *testing.T) {
+	f := &fakeSystem{os: "linux", procs: []process{{PID: 13, Exe: bin, Args: []string{bin}}}}
+	useFake(t, f)
+	f.paths[bin] = false
+	if err := Restart(io.Discard, StartOptions{Binary: bin}); err == nil {
+		t.Fatal("restart accepted a missing executable")
+	}
+	if len(f.stopped) != 0 {
+		t.Fatal("stopped the only running copy of a missing binary")
+	}
+}

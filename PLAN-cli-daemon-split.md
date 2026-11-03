@@ -266,6 +266,9 @@ for the public push and PR. The implementation and every phase remain on
 
 ## Found bugs
 
+- **Folded into this effort:** restart now refuses to stop a live process whose
+  executable was removed, rather than discovering it cannot relaunch only after
+  stopping the remaining process.
 - **Needs discussion; track separately:** the existing frontend dependency
   install reports ten audit findings (four moderate, five high, one critical).
   No dependency manifest changes are part of this CLI split; this is an audit

@@ -117,6 +117,9 @@ func (d Daemon) Restart(log io.Writer, tunnelUpdated bool) error {
 		if !current.Running || current.Manager != d.Manager || joinPIDs(current.PIDs) != joinPIDs(d.PIDs) {
 			return fmt.Errorf("daemon identity changed since inspection; refusing to restart")
 		}
+		if !current.Installed {
+			return fmt.Errorf("daemon executable is missing; reinstall it before restarting")
+		}
 	}
 	if err := d.restartable(); err != nil {
 		return err
