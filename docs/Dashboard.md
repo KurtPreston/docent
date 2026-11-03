@@ -435,7 +435,8 @@ so a released binary is self-contained. Requires **Node >= 18**.
   Point the proxy at a non-default docentd with `DOCENTD_URL=http://host:port npm run dev`.
 
 - **Release** (embedded) — build the SPA, then compile docentd with the `embed`
-  tag so `dist/` is baked in (this is what the installers do):
+  tag so `dist/` is baked in (this is what published releases and
+  `--from-source` installs do):
 
   ```bash
   ( cd apps/docentd/web && npm ci && npm run build )   # -> apps/docentd/web/dist

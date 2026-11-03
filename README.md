@@ -191,8 +191,15 @@ what you're after.
 
 ## Installation
 
-Per-OS installers build the relevant binaries, write config into
+Per-OS installers put the docent binaries in `~/.local/bin`, write config into
 `~/.config/docent/`, and register background services. Re-running is idempotent.
+
+On Linux and macOS the installers download the latest
+[release](https://github.com/KurtPreston/docent/releases) for your platform and
+check it against the release's `checksums.txt`, so neither Go nor Node is
+needed. Pass `--version vX.Y.Z` (or set `DOCENT_VERSION`) to pin a release, or
+`--from-source` to build from your checkout instead (needs Go, plus Node >= 18
+to build the dashboard). The Windows installer still builds from source.
 
 The window manager itself is installed separately from the
 [wsm](https://github.com/KurtPreston/wsm) repo (its own macOS/Windows installers).
@@ -228,6 +235,44 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   `-SshHost` to skip). The tunnel honors `~/.ssh/config`
   aliases (including `ProxyCommand`), and the wizard verifies the connection (including the token) before finishing.
   Install the window manager from wsm separately.
+
+### Updating
+
+`docentd update` replaces an installed release with the latest one, along with
+any other docent binaries (`docent-tunnel`, `docent-setup`, `docent-reporter`)
+installed beside it, and then restarts docentd the way it's running: through
+its systemd unit or launchd agent, or by relaunching a background process with
+the same arguments and log. If docentd isn't running, it asks whether to start
+it.
+
+```sh
+docentd version            # what's installed
+docentd update --check     # is a newer release out?
+docentd update             # install it and restart docentd
+docentd update --version v0.1.0 --restart=never
+```
+
+A docentd built from source reports version `dev`, and `update` won't replace
+it unless you pass `--force`; pull and re-run the installer instead.
+`DOCENT_REPO` (default `KurtPreston/docent`) and `DOCENT_DOWNLOAD_BASE` (default
+`https://github.com`) point the installers and `update` at a fork or mirror.
+
+### Releasing
+
+Pushing a `vX.Y.Z` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml):
+it builds and tests, then [GoReleaser](.goreleaser.yaml) builds the dashboard
+and publishes `docent_<os>_<arch>.tar.gz` archives for Linux and macOS (amd64
+and arm64) with `checksums.txt`. Each archive holds `docentd` (dashboard
+embedded), `docent-tunnel`, `docent-reporter`, and `docent-setup`, stamped with
+the tag's version.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+To try the release build locally without publishing anything, run
+`go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean`
+and look in `dist/`.
 
 ## Layout
 
