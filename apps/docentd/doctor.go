@@ -8,6 +8,7 @@ import (
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
 	"github.com/KurtPreston/docent/libs/automation"
+	"github.com/KurtPreston/docent/libs/buildinfo"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/cursorhooks"
 )
@@ -19,6 +20,7 @@ func runDoctor(args []string) {
 			cfgPath = args[i+1]
 		}
 	}
+	fmt.Printf("docentd %s\n", buildinfo.String())
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)

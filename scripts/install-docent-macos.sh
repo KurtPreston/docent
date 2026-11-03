@@ -33,6 +33,8 @@ INSTALL_HAMMERSPOON=1
 INSTALL_LAUNCHD=1
 INSTALL_EXTENSION="${INSTALL_EXTENSION:-ask}"
 SKIP_BUILD=0
+FROM_SOURCE=0
+RELEASE_TAG="${DOCENT_VERSION:-}"
 DRY_RUN=0
 DOCENTD_MODE=""  # local | remote (resolved after arg parse)
 DOCENTD_URL="${DOCENTD_URL:-}"
@@ -62,13 +64,17 @@ https://github.com/KurtPreston/wsm.
 On first run, asks whether docentd runs on this Mac (local) or remotely.
 Remote installs pick the SSH host from ~/.ssh/config (fzf when installed),
 check that docentd answers there, and ask for a token only if it requires one.
-Local installs build the dashboard (Vite/React) + docentd (dashboard embedded
-into the binary via -tags embed), run docent-setup when needed, and register
-its LaunchAgent. Remote installs point hooks/launcher at the remote docentd
-URL you provide (nothing is built locally). On a re-run it first offers to reuse
+Local installs download the latest docent release (docentd with the
+dashboard embedded), run docent-setup when needed, and register its
+LaunchAgent. Remote installs point hooks/launcher at the remote docentd URL
+you provide, installing only docent-tunnel. On a re-run it first offers to reuse
 the previous install's config (the local/remote choice, plus the remote
 URL/token/tunnel host), so updating never forces you to re-pick the deployment
 or retype credentials; DOCENTD_URL still overrides.
+
+Go and Node are only needed with --from-source, which builds the binaries
+(and the dashboard, embedded via -tags embed) from this checkout instead.
+After installing a release, `docentd update` upgrades it in place.
 
 Options:
   --hooks           Install Cursor hooks even if Cursor.app is not found
@@ -77,7 +83,9 @@ Options:
   --no-extension    Skip the docent IDE extension (default is to ask on a TTY)
   --no-hammerspoon  Skip docent.lua install (~/.hammerspoon)
   --no-launchd      Skip launchd plist install (binaries only)
-  --no-build        Skip go build (reuse existing binaries in BIN_DIR)
+  --version TAG     Install this release (e.g. v0.1.0) instead of the latest
+  --from-source     Build from this checkout (needs Go, and Node for local)
+  --no-build        Install nothing (reuse existing binaries in BIN_DIR)
   --bin-dir PATH    Install binaries here (default: ~/.local/bin)
   --ssh-host HOST   SSH host for the docent-tunnel forward to a remote docentd
                     (default: picked from ~/.ssh/config). May be an
@@ -97,6 +105,8 @@ Environment:
   DOCENTD_TOKEN        Bearer token for remote docentd / hooks
   DOCENT_TUNNEL_HOST   Same as --ssh-host (implies remote mode)
   DOCENT_TUNNEL_IDENTITY  Same as --ssh-identity
+  DOCENT_VERSION       Same as --version
+  DOCENT_REPO          GitHub repo to download releases from (default: KurtPreston/docent)
   DOCENT_NODE          Node binary for the dashboard build (default: node; needs >= 18)
   DOCENT_NPM           npm binary (default: npm)
 EOF
@@ -120,6 +130,8 @@ while [ $# -gt 0 ]; do
     --no-hammerspoon) INSTALL_HAMMERSPOON=0 ;;
     --no-launchd) INSTALL_LAUNCHD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
+    --from-source) FROM_SOURCE=1 ;;
+    --version) shift; RELEASE_TAG="${1:?--version requires a tag}" ;;
     --bin-dir) shift; BIN_DIR="${1:?--bin-dir requires a path}" ;;
     --ssh-host) shift; SSH_HOST="${1:?--ssh-host requires a host}" ;;
     --ssh-identity) shift; SSH_IDENTITY="${1:?--ssh-identity requires a path}" ;;
@@ -131,7 +143,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-command -v go >/dev/null 2>&1 || { echo "go is required on PATH" >&2; exit 1; }
+if [ "$FROM_SOURCE" -eq 1 ] && [ "$SKIP_BUILD" -eq 0 ]; then
+  command -v go >/dev/null 2>&1 || { echo "go is required on PATH for --from-source" >&2; exit 1; }
+fi
+
+# shellcheck source=lib/release.sh
+. "$ROOT/scripts/lib/release.sh"
 
 # The dashboard is a Vite/React build embedded into docentd via -tags embed.
 node_major() { "$1" -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'; }
@@ -240,7 +257,7 @@ resolve_docentd_location() {
   [ -n "$DOCENTD_MODE" ] && return 0
   echo ""
   echo "Where does docentd run?"
-  echo "  1) This Mac (build + launchd docentd locally) [default]"
+  echo "  1) This Mac (install + launchd docentd locally) [default]"
   echo "  2) Remote machine (configure hooks/launcher for a remote docentd)"
   printf "Choice [1]: "
   read -r choice
@@ -333,14 +350,21 @@ resolve_tunnel() {
 }
 
 # ensure_probe_tunnel sets PROBE_TUNNEL_BIN to a docent-tunnel binary for the
-# wizard's host listing and checks: a fresh temp build, or the installed one
-# with --no-build. Returns non-zero when neither is available.
+# wizard's host listing and checks: the downloaded release's, a fresh temp
+# build with --from-source, or the installed one with --no-build. Returns
+# non-zero when none is available.
 PROBE_TUNNEL_BIN=""
 ensure_probe_tunnel() {
   [ -n "$PROBE_TUNNEL_BIN" ] && return 0
   if [ "$SKIP_BUILD" -eq 1 ]; then
     [ -x "$BIN_DIR/docent-tunnel" ] || return 1
     PROBE_TUNNEL_BIN="$BIN_DIR/docent-tunnel"
+    return 0
+  fi
+  if [ "$FROM_SOURCE" -eq 0 ]; then
+    docent_release_fetch "$RELEASE_TAG" || return 1
+    [ -x "$DOCENT_RELEASE_DIR/docent-tunnel" ] || return 1
+    PROBE_TUNNEL_BIN="$DOCENT_RELEASE_DIR/docent-tunnel"
     return 0
   fi
   command -v go >/dev/null 2>&1 || return 1
@@ -575,14 +599,20 @@ run_docent_setup_if_needed() {
     fi
   fi
   log "running docent-setup to populate $directives"
+  # Prefer the installed release binary; fall back to the checkout
+  local setup=(go run "$ROOT/apps/docent-setup") hint="go run ./apps/docent-setup"
+  if [ "$FROM_SOURCE" -eq 0 ] && { [ -x "$BIN_DIR/docent-setup" ] || [ "$DRY_RUN" -eq 1 ]; }; then
+    setup=("$BIN_DIR/docent-setup")
+    hint="$BIN_DIR/docent-setup"
+  fi
   if [ "$DRY_RUN" -eq 1 ]; then
-    run go run "$ROOT/apps/docent-setup" --config-dir "$CONFIG_DIR"
+    run "${setup[@]}" --config-dir "$CONFIG_DIR"
     return 0
   fi
   if [ -t 0 ]; then
-    go run "$ROOT/apps/docent-setup" --config-dir "$CONFIG_DIR"
+    "${setup[@]}" --config-dir "$CONFIG_DIR"
   else
-    echo "No directives in $directives — run: go run ./apps/docent-setup --config-dir $CONFIG_DIR" >&2
+    echo "No directives in $directives — run: $hint --config-dir $CONFIG_DIR" >&2
   fi
 }
 
@@ -662,9 +692,30 @@ stop_previous_docent_services() {
   fi
 }
 
+# Download the release before stopping anything, so a failed download leaves
+# the running services alone
+RELEASE_BINS=()
+if [ "$DOCENTD_MODE" = local ]; then
+  RELEASE_BINS+=(docentd docent-setup)
+fi
+if [ "$USE_TUNNEL" = 1 ]; then
+  RELEASE_BINS+=(docent-tunnel)
+fi
+if [ "$SKIP_BUILD" -eq 0 ] && [ "$FROM_SOURCE" -eq 0 ] && [ "${#RELEASE_BINS[@]}" -gt 0 ]; then
+  docent_release_fetch "$RELEASE_TAG" || exit 1
+fi
+
 stop_previous_docent_services
 
-if [ "$SKIP_BUILD" -eq 0 ]; then
+if [ "$SKIP_BUILD" -eq 1 ]; then
+  log "skipping install (--no-build)"
+elif [ "$FROM_SOURCE" -eq 0 ]; then
+  if [ "${#RELEASE_BINS[@]}" -gt 0 ]; then
+    docent_release_install "$BIN_DIR" "${RELEASE_BINS[@]}" || exit 1
+  else
+    log "remote docentd without a tunnel — nothing to install locally"
+  fi
+else
   if [ "$DOCENTD_MODE" = local ]; then
     run mkdir -p "$BIN_DIR"
     build_frontend
@@ -678,8 +729,6 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     log "building docent-tunnel"
     run go build -o "$DOCENT_TUNNEL_BIN" "$ROOT/apps/docent-tunnel"
   fi
-else
-  log "skipping build (--no-build)"
 fi
 
 # With the tunnel binary in place, block until the remote docentd is actually

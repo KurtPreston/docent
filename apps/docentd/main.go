@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -14,13 +15,24 @@ import (
 	"github.com/KurtPreston/docent/apps/docentd/internal/registry"
 	"github.com/KurtPreston/docent/apps/docentd/internal/server"
 	"github.com/KurtPreston/docent/apps/docentd/web"
+	"github.com/KurtPreston/docent/libs/buildinfo"
 )
 
 func main() {
+	if buildinfo.IsVersionArg(os.Args[1:]) {
+		fmt.Println("docentd " + buildinfo.String())
+		return
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "version":
+			fmt.Println("docentd " + buildinfo.String())
+			return
 		case "doctor":
 			runDoctor(os.Args[2:])
+			return
+		case "update":
+			runUpdate(os.Args[2:])
 			return
 		case "install-hooks":
 			runInstallHooks(os.Args[2:])
@@ -70,6 +82,7 @@ func serve(args []string) {
 	if !config.IsLoopbackHost(bindHost) && cfg.Token == "" {
 		log.Printf("WARNING: docentd is bound to %s with NO token set — data endpoints are exposed unauthenticated. Set a token (DOCENT_TOKEN or token: in docentd.yaml) or bind 127.0.0.1.", bindHost)
 	}
+	log.Printf("docentd %s", buildinfo.String())
 	log.Printf("docentd serving on http://%s/ (auth: %s)", addr, authState)
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatal(err)

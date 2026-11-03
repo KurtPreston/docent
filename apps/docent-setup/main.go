@@ -8,10 +8,15 @@ import (
 	"path/filepath"
 
 	"github.com/KurtPreston/docent/apps/docent-setup/internal/setup"
+	"github.com/KurtPreston/docent/libs/buildinfo"
 	"github.com/KurtPreston/docent/libs/config/docentconfig"
 )
 
 func main() {
+	if buildinfo.IsVersionArg(os.Args[1:]) {
+		fmt.Println("docent-setup " + buildinfo.String())
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "check" {
 		os.Exit(runCheck(os.Args[2:]))
 	}

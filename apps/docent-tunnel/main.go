@@ -25,9 +25,14 @@ import (
 	"syscall"
 
 	"github.com/KurtPreston/docent/apps/docent-tunnel/internal/forward"
+	"github.com/KurtPreston/docent/libs/buildinfo"
 )
 
 func main() {
+	if buildinfo.IsVersionArg(os.Args[1:]) {
+		fmt.Println("docent-tunnel " + buildinfo.String())
+		return
+	}
 	var cfg forward.Config
 	var check, useSSHConfig, listHosts bool
 	var token, checkPath string
