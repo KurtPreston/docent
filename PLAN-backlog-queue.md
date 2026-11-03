@@ -210,3 +210,8 @@ After the pull request merges, on the automation host:
   that way.
 
 ## Found bugs
+
+- Several Go files on `main` aren't gofmt-clean (for example
+  `apps/docentd/internal/engine/engine.go`, `cockpit.go`,
+  `apps/docent-reporter/internal/cli/app.go`, `libs/agentsession/manager.go`,
+  `libs/runlog/runlog.go`). Unrelated to this effort; left for its own branch.

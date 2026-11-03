@@ -86,6 +86,27 @@ func (e *Engine) evaluateAutomations(ctx context.Context, newSignals []model.Sig
 	}
 }
 
+// evaluateExistingEntities runs on a state unit's first collect, which
+// otherwise only seeds the baseline. Transition rules with
+// trigger.include_existing are matched against an empty previous snapshot, so
+// every entity already in their when.to state fires once. It must not run
+// under e.mu.
+func (e *Engine) evaluateExistingEntities(ctx context.Context, nextEntities map[string]model.Entity) {
+	if e.automations == nil || len(nextEntities) == 0 {
+		return
+	}
+	rules := automation.IncludeExistingRules(e.automations.EnabledRules())
+	if len(rules) == 0 {
+		return
+	}
+	opts := automation.MatchOpts{CorrCfg: e.corrCfg}
+	events := automation.MatchTransitions(rules, map[string]model.Entity{}, nextEntities, opts)
+	if len(events) > 0 {
+		e.enrichEvents(events)
+		e.automations.HandleEvents(ctx, events)
+	}
+}
+
 func (e *Engine) enrichEvents(events []automation.Event) {
 	e.mu.Lock()
 	workItems := e.lastWorkItems

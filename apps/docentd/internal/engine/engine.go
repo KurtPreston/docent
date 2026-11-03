@@ -927,9 +927,14 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 
 	// Skip firing on the first successful collect of a unit (seeded==false
 	// here): startup/restart would otherwise replay the whole lookback
-	// window (events) or every current item (state) as "new".
-	if err == nil && seeded && e.automations != nil {
-		e.evaluateAutomations(ctx, newSignals, prevEntities, nextEntities)
+	// window (events) or every current item (state) as "new". Rules that opt
+	// in with trigger.include_existing still see entities already matching.
+	if err == nil && e.automations != nil {
+		if seeded {
+			e.evaluateAutomations(ctx, newSignals, prevEntities, nextEntities)
+		} else {
+			e.evaluateExistingEntities(ctx, nextEntities)
+		}
 	}
 }
 

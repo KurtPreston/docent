@@ -29,6 +29,11 @@ type Trigger struct {
 	Kind   KindSpec `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Match  Match    `yaml:"match,omitempty" json:"match,omitempty"`
 	When   When     `yaml:"when,omitempty" json:"when,omitempty"`
+	// IncludeExisting makes a transition rule also fire for entities that
+	// already match when.to on a unit's first collect after the daemon starts,
+	// which otherwise only records the baseline. A work queue uses it so an
+	// item queued while the daemon was down still runs.
+	IncludeExisting bool `yaml:"include_existing,omitempty" json:"include_existing,omitempty"`
 
 	// Schedule fields (cron-like or time-of-day).
 	// Cron is a 5-field cron expression (min hour dom month dow), e.g. "0 4 * * *".
