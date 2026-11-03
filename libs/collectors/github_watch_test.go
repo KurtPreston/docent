@@ -2,6 +2,9 @@ package collectors
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,5 +166,61 @@ func TestParseWatchSearchPages(t *testing.T) {
 	}
 	if _, err := parseWatchSearchPages([]byte(`{"data":`)); err == nil {
 		t.Error("expected truncated output to fail")
+	}
+}
+
+// TestWatchSearchQSortsByUpdated checks that a watch search asks for the most
+// recently updated PRs first, so GitHub's 1000-result cap drops the stalest,
+// unless the query already picks an order.
+func TestWatchSearchQSortsByUpdated(t *testing.T) {
+	if got, want := watchSearchQ([]string{"repo:my-org/my-repo", "draft:false"}), "is:pr is:open repo:my-org/my-repo draft:false sort:updated-desc"; got != want {
+		t.Fatalf("q = %q, want %q", got, want)
+	}
+	if got, want := watchSearchQ([]string{"repo:my-org/my-repo", "sort:created-asc"}), "is:pr is:open repo:my-org/my-repo sort:created-asc"; got != want {
+		t.Fatalf("q = %q, want %q", got, want)
+	}
+}
+
+// TestFilterTouchingListsOnlyLargeMisses checks that a PR is kept when its
+// listed paths match, that only a PR with more paths than the search showed is
+// listed in full, and that matches keep the search's order.
+func TestFilterTouchingListsOnlyLargeMisses(t *testing.T) {
+	node := func(url string, total int, paths ...string) watchSearchNode {
+		n := watchSearchNode{URL: url}
+		n.Files.TotalCount = total
+		for _, p := range paths {
+			n.Files.Nodes = append(n.Files.Nodes, struct {
+				Path string `json:"path"`
+			}{p})
+		}
+		return n
+	}
+	nodes := []watchSearchNode{
+		node("u/1", 1, "services/api/a.go"),   // match in the search
+		node("u/2", 1, "web/a.ts"),            // small miss, ruled out as-is
+		node("u/3", 500, "web/b.ts"),          // large miss, match in full list
+		node("u/4", 500, "web/c.ts"),          // large miss, no match in full list
+		node("u/5", 300, "services/api/b.go"), // large but already matching
+	}
+	full := map[string][]string{"u/3": {"web/b.ts", "services/api/c.go"}, "u/4": {"web/c.ts"}}
+
+	// Record which PRs were listed in full
+	var mu sync.Mutex
+	var listed []string
+	rows := filterTouching(nodes, []string{"services/api"}, func(url string) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		listed = append(listed, url)
+		return full[url]
+	})
+
+	// Expect matches in search order, and full listings only for large misses
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.URL)
+	}
+	sort.Strings(listed)
+	if strings.Join(got, ",") != "u/1,u/3,u/5" || strings.Join(listed, ",") != "u/3,u/4" {
+		t.Fatalf("rows = %v, listed = %v", got, listed)
 	}
 }

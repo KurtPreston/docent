@@ -10,6 +10,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
 )
@@ -109,7 +110,7 @@ type watchSearchNode struct {
 // listOpenPRsTouching runs a path-filtered watch query: every page of the
 // GraphQL search, then the PRs that change a file under one of its paths.
 func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spec prReviewSpec) ([]ghSearchActivityRow, error) {
-	q := "is:pr is:open " + strings.Join(spec.args, " ")
+	q := watchSearchQ(spec.args)
 	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
 	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
 	if err != nil {
@@ -120,19 +121,68 @@ func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spe
 		return nil, fmt.Errorf("parse search %q: %w", q, err)
 	}
 
-	// The search returns at most 100 paths per PR; a larger PR that shows no
-	// match among them is listed in full before it is ruled out.
-	var rows []ghSearchActivityRow
-	for _, n := range nodes {
-		paths := n.filePaths()
-		if !touchesWatchPaths(paths, spec.paths) && n.Files.TotalCount > len(paths) {
-			paths = c.listPRFiles(ctx, run, n.URL)
+	return filterTouching(nodes, spec.paths, func(url string) []string {
+		return c.listPRFiles(ctx, run, url)
+	}), nil
+}
+
+// watchSearchQ builds the search string for a watch query. GitHub search
+// returns at most 1000 results, so unless the query picks its own order the
+// most recently updated PRs come first and any cut falls on the stalest ones.
+func watchSearchQ(args []string) string {
+	q := "is:pr is:open " + strings.Join(args, " ")
+	for _, a := range args {
+		if strings.HasPrefix(a, "sort:") {
+			return q
 		}
-		if touchesWatchPaths(paths, spec.paths) {
+	}
+	return q + " sort:updated-desc"
+}
+
+// filterTouching keeps the search nodes that change a file under one of paths,
+// in search order. The search returns at most 100 paths per PR; a larger PR
+// that shows no match among them is listed in full with listFiles before it is
+// ruled out. Those listings are independent round trips, and a busy repository
+// can need dozens, so they run concurrently.
+func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) []string) []ghSearchActivityRow {
+	keep := make([]bool, len(nodes))
+	var full []int
+	for i, n := range nodes {
+		shown := n.filePaths()
+		switch {
+		case touchesWatchPaths(shown, paths):
+			keep[i] = true
+		case n.Files.TotalCount > len(shown):
+			full = append(full, i)
+		}
+	}
+
+	// List the large PRs' files on a bounded pool of workers
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < prDetailWorkers && w < len(full); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				keep[i] = touchesWatchPaths(listFiles(nodes[i].URL), paths)
+			}
+		}()
+	}
+	for _, i := range full {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+
+	// Return the matches in the order the search gave them
+	var rows []ghSearchActivityRow
+	for i, n := range nodes {
+		if keep[i] {
 			rows = append(rows, n.searchRow())
 		}
 	}
-	return rows, nil
+	return rows
 }
 
 // parseWatchSearchPages decodes `gh api graphql --paginate` output, which is one
