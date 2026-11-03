@@ -51,7 +51,7 @@ usage() {
   cat <<'EOF'
 Usage: install-docent-linux.sh [options]
 
-Downloads the latest docent release (docentd with the dashboard embedded)
+Downloads the latest docent release (docent CLI and docentd with the dashboard embedded)
 into ~/.local/bin, lays down config under ~/.config/docent, and registers a systemd --user service that serves the
 dashboard on 127.0.0.1:39787. Lingering is enabled by default so docentd keeps
 running — and scheduled automations still fire — even when you're logged out
@@ -75,8 +75,8 @@ installing a release, `docent update` upgrades it in place.
 Options:
   --no-systemd      Skip systemd unit install (build + config only)
   --version TAG     Install this release (e.g. v0.1.0) instead of the latest
-  --from-source     Build docentd from this checkout (needs Go and Node)
-  --no-build        Install nothing (reuse the existing binary in BIN_DIR)
+  --from-source     Build the CLI and daemon from this checkout (needs Go and Node)
+  --no-build        Install nothing (reuse existing binaries in BIN_DIR)
   --start-only      Only (re)start the installed docentd (via systemd if it's
                     running, else as a background process), then exit. Use
                     this from a container/workspace startup script.
@@ -87,7 +87,7 @@ Options:
   --extension       Install the docent IDE extension into detected editors
   --no-extension    Skip the docent IDE extension (default is to ask on a TTY)
   --port N          Dashboard port (default: 39787)
-  --bin-dir PATH    Install binary here (default: ~/.local/bin)
+  --bin-dir PATH    Install binaries here (default: ~/.local/bin)
   --dry-run         Print actions without changing the system
   -h, --help        Show this help
 

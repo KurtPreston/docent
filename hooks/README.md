@@ -46,8 +46,8 @@ Focus actions go to wsm; session list comes from docentd `/api/workitems`.
 ## doctor
 
 ```
-docentd doctor
-# or: go run ./apps/docentd doctor
+docent doctor
+# or: go run ./apps/docent doctor
 ```
 
 Config lives in `~/.config/docent/` (`docentd.yaml`, `config.yaml`, `.env`). Override with `DOCENT_CONFIG` or `DOCENT_CONFIG_DIR`.

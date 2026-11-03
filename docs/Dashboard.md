@@ -402,11 +402,11 @@ environment variables describing the work item (`DOCENT_BRANCH`,
 yet), tries in order: a `grove`-managed worktree, a local `cursor
 --new-window`, then a remote wsm `/open` over the SSH host — customize freely.
 
-### `docentd doctor`
+### `docent doctor`
 
 ```sh
-docentd doctor
-# or: go run ./apps/docentd doctor
+docent doctor
+# or: go run ./apps/docent doctor
 ```
 
 Loads the config the daemon would (`docentd.yaml` and `config.yaml`, or the
@@ -416,6 +416,10 @@ validates each enabled directive (`FAIL` lines exit non-zero), reports whether
 the Cursor agent hooks are installed on this host, and prints a `WARN` line for
 each automation setting that has no effect, such as `include_existing` on a
 non-transition trigger.
+
+Use `docent start`, `stop`, `restart`, and `status` to control a local installed
+daemon. These do not connect to a remote daemon; see the
+[CLI and migration guide](../README.md#cli-and-local-daemon-control).
 
 ## Dashboard frontend (build)
 

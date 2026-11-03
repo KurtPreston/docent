@@ -4,7 +4,7 @@ usage() {
   cat <<'EOF'
 Usage: install-docent-macos.sh [options]
 
-Installs docentd (optionally, locally) with a launchd LaunchAgent, the
+Installs the docent CLI, docentd (optionally, locally) with a launchd LaunchAgent, the
 Hammerspoon launcher, and Cursor hooks when Cursor.app is installed. The
 window manager itself lives in the separate wsm project -- install it from
 https://github.com/KurtPreston/wsm.

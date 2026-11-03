@@ -18,7 +18,8 @@ launched through a hidden, waiting .vbs so no console window flashes). The windo
 manager (wsm) has its own installer in the wsm repo.
 
 On first run it asks whether docentd runs on THIS machine (local) or on a REMOTE
-host. Local builds docentd.exe, runs docent-setup, and registers a docentd task.
+host. Both modes build the docent.exe maintenance CLI. Local also builds
+docentd.exe, runs docent-setup, and registers a docentd task.
 Remote verifies the connection to the remote docentd (through docent-tunnel, or
 directly with -NoTunnel) -- including the bearer token -- before finishing, and
 points the launcher + dashboard at it. On a re-run it first offers to reuse the config from the last
@@ -55,7 +56,7 @@ Don't set up the SSH forward; point the launcher directly at the remote URL.
 Skip Scheduled Task registration (build/config only).
 
 .PARAMETER NoBuild
-Skip the dashboard + docentd.exe build (reuse an existing binary in BinDir).
+Skip binary and dashboard builds (reuse existing binaries in BinDir).
 
 .PARAMETER NoModules
 Deprecated no-op. The VirtualDesktop module is now installed by wsm's own
@@ -93,7 +94,7 @@ Dashboard port (default: 39787).
 Window-manager port (default: 39788).
 
 .PARAMETER BinDir
-Install docentd.exe here (default: ~\.local\bin).
+Install the selected binaries here (default: ~\.local\bin).
 
 .PARAMETER ConfigDir
 Config root (default: ~\.config\docent).

@@ -563,7 +563,7 @@ Tasks carrying `queue_label` in `queue_status` also get:
 | `plan` | The task's Implementation Plan text. |
 | header fields | Each `Key: value` line at the top of the plan, before the first other line, as a lower-cased field (spaces and dashes become `_`). A plan starting `Repo: my-org/my-repo` and `Branch: fix-login` sets `repo` and `branch`, which is what `workdir: worktree` uses to pick the checkout. Headers never replace the fields above. |
 
-`docentd doctor` checks that `board` is a directory and that the command is on
+`docent doctor` checks that `board` is a directory and that the command is on
 `PATH`.
 
 ### Nested repos (`config.scan_depth`)

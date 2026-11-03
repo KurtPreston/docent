@@ -87,7 +87,7 @@ and `when.from`), as though it had just appeared; later collects work as
 usual. Cooldowns are kept in memory, so each restart fires again for entities
 still in that state. Pair it with an action that moves the entity out of the
 state, such as claiming a queued task. The option has no effect on other
-trigger types, and `docentd doctor` warns when it is set on one.
+trigger types, and `docent doctor` warns when it is set on one.
 
 **Collector failures are signals too.** When a directive's collect starts
 failing, such as after its credentials expire, docentd offers rules one

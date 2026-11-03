@@ -4,7 +4,7 @@ package daemoncontrol
 
 import "errors"
 
-// Releases and `docentd update` don't support Windows yet.
+// Releases, updates, and lifecycle commands don't support Windows yet.
 var errWindows = errors.New("restarting docentd isn't supported on Windows")
 
 func (realSystem) stop(int) error                { return errWindows }

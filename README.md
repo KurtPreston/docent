@@ -1,6 +1,6 @@
 # docent
 
-Monorepo suite containing local-first tooling for developer activity: **docentd** (live dashboard + session focus + automations) and **docent-reporter** (collectors → AI → Markdown reports). The local window manager it drives now lives in the separate [wsm](https://github.com/KurtPreston/wsm) project.
+Monorepo suite containing local-first tooling for developer activity: **docent** (maintenance and local lifecycle CLI), **docentd** (live dashboard + session focus + automations), and **docent-reporter** (collectors → AI → Markdown reports). The local window manager it drives now lives in the separate [wsm](https://github.com/KurtPreston/wsm) project.
 
 ## Monorepo layout
 
@@ -8,6 +8,7 @@ Monorepo suite containing local-first tooling for developer activity: **docentd*
 libs/           shared Go packages (model, collectors, correlation, ai,
                 automation, goals, report, workitem, sessionmanager, config, …)
 apps/
+  docent/               user commands: maintenance, diagnostics, local daemon control
   docentd/              merged daemon (collectors, dashboard, automations, agent sessions, session ingest)
   docent-launcher-*/    hotkey + webview launchers
   docent-reporter/      stateless CLI reporter (was `slakkr`)
@@ -203,10 +204,11 @@ to build the dashboard). The Windows installer still builds from source.
 
 The window manager itself is installed separately from the
 [wsm](https://github.com/KurtPreston/wsm) repo (its own macOS/Windows installers).
-The docent installers below set up `docentd`, the launcher, and Cursor hooks.
+The docent installers below set up `docent`, the local or remote daemon
+connection, the launcher, and Cursor hooks.
 
 - **Linux** — [`scripts/install-docent-linux.sh`](scripts/install-docent-linux.sh):
-  installs `docentd` only (the dashboard/collector daemon) as a `systemd --user`
+  installs the `docent` CLI and `docentd` (the dashboard/collector daemon) as a `systemd --user`
   service, and enables lingering (`loginctl enable-linger`) by default so docentd
   keeps running — and scheduled automations still fire — even when you're logged
   out (pass `--no-linger` to opt out). Where systemd isn't running (e.g.
@@ -215,7 +217,7 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   There is no window manager on Linux —
   install wsm on the Windows/macOS host that connects here.
 - **macOS** — [`scripts/install-docent-macos.sh`](scripts/install-docent-macos.sh):
-  installs `docentd` (optionally, locally via `launchd`), the Hammerspoon launcher
+  installs `docent`, `docentd` (optionally, locally via `launchd`), the Hammerspoon launcher
   by default, and Cursor hooks when Cursor.app is installed (`--no-hooks` /
   `--no-hammerspoon` to skip). In remote mode it also installs `docent-tunnel` as a
   `launchd` `KeepAlive` agent by default (`--no-tunnel` to hit the remote URL
@@ -227,6 +229,7 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   which undoes all of the above and keeps `~/.config/docent` unless you pass `--purge`
   (`--dry-run` to preview).
 - **Windows** — [`scripts/install-docent-windows.ps1`](scripts/install-docent-windows.ps1):
+  builds `docent.exe` for maintenance (Go required, including remote-only installs),
   installs `docent-launcher-windows` as a hidden, auto-restarting Scheduled Task
   (at-logon + a 1-minute watchdog), and optionally `docentd` locally. Prompts
   whether `docentd` runs locally or on a remote host; in remote mode it also
@@ -236,13 +239,52 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
   aliases (including `ProxyCommand`), and the wizard verifies the connection (including the token) before finishing.
   Install the window manager from wsm separately.
 
+### CLI and local daemon control
+
+Run `docent` without arguments for help. User commands never implicitly start
+the daemon; `docentd` remains the foreground process used by service managers.
+Its old subcommands fail with migration guidance. `docentd --help` and
+`docentd --version` remain available.
+
+```sh
+docent doctor                  # offline configuration and hook diagnostics
+docent install-hooks --check   # inspect hooks without changing them
+docent install-hooks           # install local hooks
+docent status                  # running/stopped, manager, and PID
+docent start                   # no-op if already running
+docent restart                 # restart running, or start stopped
+docent stop                    # no-op if already stopped
+```
+
+Lifecycle commands are **local only**, targeting the daemon beside the resolved
+CLI executable, never an arbitrary binary on PATH or a remote SSH host.
+Remote-only clients receive the CLI and selected tools, not a local daemon.
+`status` is read-only: exit **0** means running, **3** stopped/not-installed,
+and **1** an inspection error. Invalid command arguments exit **2**.
+
+Installed systemd user services and macOS LaunchAgents keep their launch
+settings. `stop` unloads a LaunchAgent to prevent KeepAlive from reviving it,
+retaining its plist for `start`. Linux without a service uses a detached process;
+`start --config-dir DIR` selects configuration only for a new unmanaged daemon.
+Explicit overrides for existing services or running instances are rejected.
+Hand-started macOS processes can be inspected/stopped, but cannot be safely
+restarted automatically; install a LaunchAgent or launch `docentd` manually.
+
+Mutating commands share an installation lock. Start/restart verify process
+identity and health when the endpoint can be resolved; otherwise they explicitly
+report that only startup survival was checked. Ambiguous instances and unrelated
+services are refused. Windows supports maintenance commands, but not release
+updates or these lifecycle commands yet.
+
 ### Updating
 
-`docentd update` replaces an installed release with the latest one, along with
-any other docent binaries (`docent-tunnel`, `docent-setup`, `docent-reporter`)
+`docent update` replaces the CLI with the latest release, along with the local
+daemon and other docent binaries (`docent-tunnel`, `docent-setup`, `docent-reporter`)
 installed beside it. Checksum verification is required; missing manifests or
 entries abort the update. All replacements are staged first, and a failed
-replacement rolls back binaries already replaced.
+replacement rolls back binaries already replaced. Archives without the CLI
+are rejected before replacement. Client-only updates never install or offer
+to start a local daemon.
 
 It then restarts the matching daemon through systemd or launchd, or relaunches
 a single Linux background process with the same arguments, directory,
@@ -256,41 +298,59 @@ Use `--restart=never` and restart those instances yourself. Service-managed
 macOS installs use launchd normally.
 
 ```sh
-docentd version            # what's installed
-docentd update --check     # is a newer release out?
-docentd update             # install it and restart docentd
-docentd update --version v0.1.0 --restart=never
+docent version            # what's installed
+docent update --check     # is a newer release out?
+docent update             # install it and restart an already-running daemon
+docent update --version v0.2.0 --restart=never
 ```
 
-A docentd built from source reports version `dev`, and `update` won't replace
+A CLI built from source reports version `dev`, and `update` won't replace
 it unless you pass `--force`; pull and re-run the installer instead.
-For installations predating the `update` command, pull this checkout and run
-the platform installer once after the first release is published. An old binary
-cannot bootstrap itself with a command it does not yet have.
 `DOCENT_REPO` (default `KurtPreston/docent`) and `DOCENT_DOWNLOAD_BASE` (default
 `https://github.com`) point the installers and `update` at a fork or mirror.
+
+### Migrating from v0.1.0
+
+This is an intentional v0.x command-interface break. The old `docentd update`
+does not know how to install the new CLI: **do not use it to migrate**. Once
+v0.2.0 is published, update the checkout and rerun the applicable installer,
+preserving any existing installation options:
+
+```sh
+bash scripts/install-docent-linux.sh --version v0.2.0
+# or:
+bash scripts/install-docent-macos.sh --version v0.2.0
+docent version
+docent status
+```
+
+Installers can restart existing services. Configuration formats, paths, ports,
+and service names remain unchanged. Future updates use `docent update`.
+Setup and reporting remain separate commands.
 
 ### Releasing
 
 Pushing a `vX.Y.Z` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml):
 it builds and tests, then [GoReleaser](.goreleaser.yaml) builds the dashboard
 and publishes `docent_<os>_<arch>.tar.gz` archives for Linux and macOS (amd64
-and arm64) with `checksums.txt`. Each archive holds `docentd` (dashboard
+and arm64) with `checksums.txt`. Each archive holds `docent`, `docentd` (dashboard
 embedded), `docent-tunnel`, `docent-reporter`, and `docent-setup`, stamped with
 the tag's version.
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin refs/tags/v0.2.0:refs/tags/v0.2.0
 ```
 
 To try the release build locally without publishing anything, run
 `go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean`
-and look in `dist/`.
+and look in `dist/`. Run `bash scripts/check-release.sh dist` to verify every
+platform archive contains all five binaries; CI performs this check too.
 
 ## Layout
 
 - `libs/` — shared packages: `model`, `collectors`, `correlation`, `workitem` (grouping + status classification), `ai`, `config`, `automation` (automations engine), `goals`, `report` (shared reporter/dashboard/automations pipeline), `sessionmanager`, `wmclient`, `webhook`, `runlog`, …
 - `apps/docent-reporter/` — reporter CLI
+- `apps/docent/` — maintenance CLI and local daemon lifecycle
 - `apps/docent-setup/` — config wizard + `check`
 - `apps/docentd/` — daemon + dashboard (Vite/React SPA in `apps/docentd/web`, embedded via `-tags embed`)
 - `apps/docent-launcher-macos/`, `apps/docent-launcher-windows/` — hotkey launchers
