@@ -231,3 +231,6 @@ After the pull request merges, on the automation host:
   tests `TestDispatcherCooldown` (unsynchronized `calls++` from the job
   goroutine) and `TestAgentRunnerCopilot` (a buffer shared between exec copy
   goroutines). Test-only and unrelated; left for their own branch.
+- `docs/Dashboard.md` said `docentd doctor` prints where the config resolves
+  from; it doesn't. It validates directives and checks the Cursor hooks.
+  Rewritten in the docs review, alongside the new automation warnings.

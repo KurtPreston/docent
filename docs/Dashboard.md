@@ -409,9 +409,13 @@ docentd doctor
 # or: go run ./apps/docentd doctor
 ```
 
-Prints where `docentd` resolves its config from (`docentd.yaml`,
-`config.yaml`, `.env`), honoring the same `DOCENT_CONFIG` /
-`DOCENT_CONFIG_DIR` overrides the daemon itself uses.
+Loads the config the daemon would (`docentd.yaml` and `config.yaml`, or the
+file passed as `-config`, honoring the same `DOCENT_CONFIG` /
+`DOCENT_CONFIG_DIR` overrides) and checks it without starting the daemon. It
+validates each enabled directive (`FAIL` lines exit non-zero), reports whether
+the Cursor agent hooks are installed on this host, and prints a `WARN` line for
+each automation setting that has no effect, such as `include_existing` on a
+non-transition trigger.
 
 ## Dashboard frontend (build)
 
