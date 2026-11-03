@@ -46,6 +46,9 @@ _rel_platform() {
 _rel_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "need sha256sum or shasum to verify docent" >&2
+    return 1
   fi
 }
 
@@ -65,33 +68,59 @@ docent_release_fetch() {
     tag="$(printf '%s\n' "$loc" | sed -n 's#.*/releases/tag/\([^/?]*\).*#\1#p')"
     [ -n "$tag" ] || { echo "could not find a docent release in $repo (pass --version, or --from-source)" >&2; return 1; }
   fi
-  DOCENT_RELEASE_TAG="$tag"
   local archive="docent_${platform}.tar.gz" base="$host/$repo/releases/download/$tag"
   if [ "$DRY_RUN" -eq 1 ]; then
     log "[dry-run] would download $base/$archive and verify it against checksums.txt"
+    DOCENT_RELEASE_TAG="$tag"
     return 0
   fi
 
-  # Download into a staging dir removed when the installer exits
-  DOCENT_RELEASE_DIR="$(mktemp -d)"
-  trap 'rm -rf "$DOCENT_RELEASE_DIR"' EXIT
+  # Failed probes may retry; reuse their staging directory, not their result.
+  if [ -z "$DOCENT_RELEASE_DIR" ]; then
+    DOCENT_RELEASE_DIR="$(mktemp -d)" || return 1
+    trap 'rm -rf "$DOCENT_RELEASE_DIR"' EXIT
+  fi
   log "downloading docent $tag ($platform)"
   _rel_fetch_to "$base/$archive" "$DOCENT_RELEASE_DIR/$archive" \
     || { echo "could not download $base/$archive" >&2; return 1; }
 
-  # Verify against checksums.txt when it and a sha256 tool are available
+  # Verification is mandatory, including when a probe calls us in an if/||.
   local want got
-  if _rel_fetch_to "$base/checksums.txt" "$DOCENT_RELEASE_DIR/checksums.txt" 2>/dev/null; then
-    want="$(awk -v f="$archive" '$2 == f || $2 == "*" f { print $1; exit }' "$DOCENT_RELEASE_DIR/checksums.txt")"
-    got="$(_rel_sha256 "$DOCENT_RELEASE_DIR/$archive")"
-    if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
-      echo "checksum mismatch for $archive (expected $want, got $got)" >&2
+  _rel_fetch_to "$base/checksums.txt" "$DOCENT_RELEASE_DIR/checksums.txt" \
+    || { echo "could not download checksums.txt for $tag" >&2; return 1; }
+  want="$(awk -v f="$archive" '$2 == f || $2 == "*" f { print tolower($1); exit }' "$DOCENT_RELEASE_DIR/checksums.txt")" || return 1
+  [ -n "$want" ] || { echo "no checksum listed for $archive" >&2; return 1; }
+  got="$(_rel_sha256 "$DOCENT_RELEASE_DIR/$archive")" || return 1
+  if [ "$want" != "$got" ]; then
+    echo "checksum mismatch for $archive (expected $want, got $got)" >&2
+    return 1
+  fi
+  # Extract only release binaries; a retry must not reuse a partial extraction.
+  local name
+  for name in docentd docent-tunnel docent-reporter docent-setup; do
+    rm -f "$DOCENT_RELEASE_DIR/$name" || return 1
+  done
+  tar -xzf "$DOCENT_RELEASE_DIR/$archive" -C "$DOCENT_RELEASE_DIR" \
+    docentd docent-tunnel docent-reporter docent-setup || return 1
+  for name in docentd docent-tunnel docent-reporter docent-setup; do
+    if [ ! -f "$DOCENT_RELEASE_DIR/$name" ] || [ ! -s "$DOCENT_RELEASE_DIR/$name" ] || [ ! -x "$DOCENT_RELEASE_DIR/$name" ] || [ -L "$DOCENT_RELEASE_DIR/$name" ]; then
+      echo "release $tag has no usable $name binary" >&2
       return 1
     fi
-  else
-    echo "warning: no checksums.txt for $tag; skipping verification" >&2
+  done
+  DOCENT_RELEASE_TAG="$tag"
+}
+
+_rel_install_binary() {
+  local bindir="$1" name="$2" tmp
+  tmp="$(mktemp "$bindir/.$name.XXXXXX")" || return 1
+  if ! cp "$DOCENT_RELEASE_DIR/$name" "$tmp" \
+    || ! chmod 0755 "$tmp" \
+    || ! mv -f "$tmp" "$bindir/$name"; then
+    rm -f "$tmp"
+    echo "could not install $name in $bindir" >&2
+    return 1
   fi
-  tar -xzf "$DOCENT_RELEASE_DIR/$archive" -C "$DOCENT_RELEASE_DIR"
 }
 
 # docent_release_install BIN_DIR NAME... installs binaries from the fetched
@@ -99,16 +128,23 @@ docent_release_fetch() {
 # binary is never written in place.
 docent_release_install() {
   local bindir="$1" name; shift
-  run mkdir -p "$bindir"
+  run mkdir -p "$bindir" || return 1
+  if [ "$DRY_RUN" -eq 0 ]; then
+    [ -n "$DOCENT_RELEASE_TAG" ] || { echo "no verified release downloaded" >&2; return 1; }
+    for name in "$@"; do
+      [ -f "$DOCENT_RELEASE_DIR/$name" ] || { echo "release has no $name binary" >&2; return 1; }
+      if [ -e "$bindir/$name" ] && [ ! -f "$bindir/$name" ]; then
+        echo "cannot replace $bindir/$name: not a regular file" >&2
+        return 1
+      fi
+    done
+  fi
   for name in "$@"; do
     if [ "$DRY_RUN" -eq 1 ]; then
       run install -m 0755 "<staging>/$name" "$bindir/$name"
       continue
     fi
-    [ -f "$DOCENT_RELEASE_DIR/$name" ] || { echo "docent $DOCENT_RELEASE_TAG has no $name binary" >&2; return 1; }
-    cp "$DOCENT_RELEASE_DIR/$name" "$bindir/.$name.new"
-    chmod 0755 "$bindir/.$name.new"
-    mv -f "$bindir/.$name.new" "$bindir/$name"
+    _rel_install_binary "$bindir" "$name" || return 1
     log "installed $name $DOCENT_RELEASE_TAG -> $bindir/$name"
   done
 }

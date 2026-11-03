@@ -140,43 +140,99 @@ func (u *Updater) Install(tag string) (Result, error) {
 		return res, err
 	}
 
-	// Replace docentd, then whichever other binaries are installed beside it
+	// Validate every installed target before replacing any binary.
+	targets := make(map[string]string)
 	for _, name := range Binaries {
 		target := filepath.Join(res.BinDir, name)
 		if name == "docentd" {
 			target = u.binary
-		} else if _, err := os.Stat(target); err != nil {
-			continue
 		}
-		content, ok := bins[name]
-		if !ok {
-			if name == "docentd" {
-				return res, fmt.Errorf("release archive %s has no docentd binary", archive)
+		info, err := os.Lstat(target)
+		if err != nil {
+			if os.IsNotExist(err) && name != "docentd" {
+				continue
 			}
-			fmt.Fprintf(u.log, "warning: %s has no %s; leaving the installed one\n", archive, name)
-			continue
+			return res, fmt.Errorf("cannot inspect %s: %w", target, err)
 		}
-		if err := replaceFile(target, content, 0o755); err != nil {
-			return res, err
+		if !info.Mode().IsRegular() {
+			return res, fmt.Errorf("cannot replace %s: expected a regular file", target)
 		}
-		res.Updated = append(res.Updated, name)
+		if len(bins[name]) == 0 {
+			return res, fmt.Errorf("release archive %s has no %s binary", archive, name)
+		}
+		targets[name] = target
+	}
+	if err := installFiles(targets, bins, os.Rename); err != nil {
+		return res, err
+	}
+	for _, name := range Binaries {
+		if _, ok := targets[name]; ok {
+			res.Updated = append(res.Updated, name)
+		}
 	}
 	return res, nil
 }
 
-// verify checks the archive against the release's checksums.txt. A missing
-// checksums file or entry warns and proceeds, matching the installers, but a
-// mismatched checksum is fatal.
+// installFiles stages all binaries before changing any target, retaining the
+// old files until every rename succeeds so an error can be rolled back.
+func installFiles(targets map[string]string, bins map[string][]byte, rename func(string, string) error) error {
+	staged := make(map[string]string)
+	backups := make(map[string]string)
+	defer func() {
+		for _, path := range staged {
+			_ = os.Remove(path)
+		}
+		for _, path := range backups {
+			_ = os.Remove(path)
+		}
+	}()
+	for _, name := range Binaries {
+		target, ok := targets[name]
+		if !ok {
+			continue
+		}
+		path, err := stageFile(target, bins[name])
+		if err != nil {
+			return err
+		}
+		staged[name] = path
+		backup := path + ".old"
+		if err := os.Link(target, backup); err != nil {
+			return fmt.Errorf("cannot retain %s for rollback: %w", target, err)
+		}
+		backups[name] = backup
+	}
+	var replaced []string
+	for _, name := range Binaries {
+		path, ok := staged[name]
+		if !ok {
+			continue
+		}
+		if err := rename(path, targets[name]); err != nil {
+			for _, previous := range replaced {
+				if restoreErr := rename(backups[previous], targets[previous]); restoreErr != nil {
+					err = fmt.Errorf("%w; rollback failed for %s (old binary at %s): %v",
+						err, targets[previous], backups[previous], restoreErr)
+					delete(backups, previous)
+				}
+			}
+			return fmt.Errorf("could not replace %s: %w", targets[name], err)
+		}
+		replaced = append(replaced, name)
+	}
+	return nil
+}
+
+// verify requires the release checksum; an unavailable or incomplete manifest
+// must never turn a verified update into an unverified one.
 func (u *Updater) verify(tag, archive string, data []byte) error {
 	sums, err := u.get(u.releaseURL(tag, "checksums.txt"))
 	if err != nil {
-		fmt.Fprintf(u.log, "warning: no checksums.txt for %s; skipping verification\n", tag)
-		return nil
+		return fmt.Errorf("could not download checksums.txt for %s: %w", tag, err)
 	}
 	want := checksumFor(string(sums), archive)
 	if want == "" {
-		fmt.Fprintf(u.log, "warning: no checksum listed for %s; skipping verification\n", archive)
-		return nil
+		return fmt.Errorf("no checksum listed for %s", archive)
 	}
 	if got := sha256hex(data); !strings.EqualFold(want, got) {
 		return fmt.Errorf("checksum mismatch for %s (expected %s, got %s)", archive, want, got)
@@ -278,38 +334,33 @@ func isBinaryName(name string) bool {
 	return false
 }
 
-// replaceFile atomically swaps target for data by renaming a sibling temp file
-// over it. The sibling keeps the rename on one filesystem.
-func replaceFile(target string, data []byte, mode os.FileMode) error {
+// stageFile writes a sibling temporary file without replacing the target.
+func stageFile(target string, data []byte) (string, error) {
 	dir := filepath.Dir(target)
 	tmp, err := os.CreateTemp(dir, ".docent-update-*")
 	if err != nil {
-		return fmt.Errorf("cannot stage update in %s: %w", dir, err)
+		return "", fmt.Errorf("cannot stage update in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	renamed := false
+	ready := false
 	defer func() {
-		if !renamed {
+		if !ready {
 			_ = os.Remove(tmpName)
 		}
 	}()
 
-	// Write, set permissions, then rename into place
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return fmt.Errorf("could not write update: %w", err)
+		return "", fmt.Errorf("could not write update: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("could not write update: %w", err)
+		return "", fmt.Errorf("could not write update: %w", err)
 	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return fmt.Errorf("could not set update permissions: %w", err)
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		return "", fmt.Errorf("could not set update permissions: %w", err)
 	}
-	if err := os.Rename(tmpName, target); err != nil {
-		return fmt.Errorf("could not replace %s (check write permission on its directory): %w", target, err)
-	}
-	renamed = true
-	return nil
+	ready = true
+	return tmpName, nil
 }
 
 // checksumFor finds file's sha256 in a `sha256  name` list, as sha256sum and

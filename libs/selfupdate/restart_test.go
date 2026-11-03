@@ -16,6 +16,7 @@ type fakeSystem struct {
 	procs   []process
 	self    int
 	dead    bool // started processes exit immediately
+	procErr error
 
 	ran     []string
 	stopped []int
@@ -29,7 +30,7 @@ func (f *fakeSystem) exists(p string) bool          { return f.paths[p] }
 func (f *fakeSystem) sleep(time.Duration)           {}
 func (f *fakeSystem) alive(int) bool                { return !f.dead }
 func (f *fakeSystem) stop(pid int) error            { f.stopped = append(f.stopped, pid); return nil }
-func (f *fakeSystem) processes() ([]process, error) { return f.procs, nil }
+func (f *fakeSystem) processes() ([]process, error) { return f.procs, f.procErr }
 
 func (f *fakeSystem) run(name string, args ...string) (string, error) {
 	cmd := name + " " + strings.Join(args, " ")
@@ -65,10 +66,14 @@ func TestDetectActiveSystemdUnit(t *testing.T) {
 	f := &fakeSystem{os: "linux"}
 	useFake(t, f)
 	f.paths[systemdRunDir] = true
-	f.outputs["systemctl --user is-active docentd.service"] = "active\n"
+	f.procs = []process{{PID: 13, Exe: bin, Args: []string{bin}}}
+	f.outputs["systemctl --user show --property=MainPID --value docentd.service"] = "13\n"
 	f.outputs["systemctl --user restart docentd.service"] = ""
 
-	d := Detect(bin)
+	d, err := Detect(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.Manager != ManagerSystemd {
 		t.Fatalf("Manager = %s, want systemd", d.Manager)
 	}
@@ -86,20 +91,23 @@ func TestDetectIgnoresSystemctlShimWithoutSystemd(t *testing.T) {
 	useFake(t, f)
 	f.outputs["systemctl --user is-active docentd.service"] = "active\n"
 
-	if d := Detect(bin); d.Manager != ManagerNone {
-		t.Fatalf("Manager = %s, want none", d.Manager)
+	if d, err := Detect(bin); err != nil || d.Manager != ManagerNone {
+		t.Fatalf("Detect = %+v, %v; want none", d, err)
 	}
 }
 
 func TestDetectLaunchAgentRestartsTunnelWhenUpdated(t *testing.T) {
 	f := &fakeSystem{os: "darwin"}
 	useFake(t, f)
-	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = running"
-	f.outputs["launchctl print gui/501/com.docent.docent-tunnel"] = "state = running"
+	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = running\nprogram = " + bin
+	f.outputs["launchctl print gui/501/com.docent.docent-tunnel"] = "state = running\nprogram = /home/me/.local/bin/docent-tunnel"
 	f.outputs["launchctl kickstart -k gui/501/com.docent.docentd"] = ""
 	f.outputs["launchctl kickstart -k gui/501/com.docent.docent-tunnel"] = ""
 
-	d := Detect(bin)
+	d, err := Detect(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.Manager != ManagerLaunchd || !d.TunnelAgent {
 		t.Fatalf("Detect = %+v, want launchd with tunnel", d)
 	}
@@ -124,7 +132,10 @@ func TestDetectBackgroundProcessAndRelaunch(t *testing.T) {
 			Dir: "/c", Env: []string{"DOCENT_TOKEN=x"}, Stdout: "/c/docentd.log"},
 	}
 
-	d := Detect(bin)
+	d, err := Detect(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.Manager != ManagerProcess || len(d.PIDs) != 1 || d.PIDs[0] != 13 {
 		t.Fatalf("Detect = %+v, want process pid 13", d)
 	}
@@ -161,12 +172,90 @@ func TestStartPrefersAnInstalledService(t *testing.T) {
 	f.paths[systemdRunDir] = true
 	f.paths["/home/me/.config/systemd/user/docentd.service"] = true
 	f.outputs["systemctl --user start docentd.service"] = ""
+	f.outputs["systemctl --user show --property=ExecStart --value docentd.service"] = "{ path=" + bin + " ; argv[]=" + bin + " ; }"
 
 	if err := Start(io.Discard, StartOptions{Binary: bin, ConfigDir: "/c", Home: "/home/me"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.started) != 0 || f.ran[0] != "systemctl --user start docentd.service" {
+	if len(f.started) != 0 || f.ran[len(f.ran)-1] != "systemctl --user start docentd.service" {
 		t.Fatalf("ran %v, started %v", f.ran, f.started)
+	}
+
+}
+
+func TestDetectDoesNotStartStoppedOrUnrelatedLaunchAgents(t *testing.T) {
+	for _, output := range []string{
+		"state = not running\nprogram = " + bin,
+		"state = running\nprogram = /other/docentd",
+	} {
+		t.Run(output, func(t *testing.T) {
+			f := &fakeSystem{os: "darwin"}
+			useFake(t, f)
+			f.outputs["launchctl print gui/501/com.docent.docentd"] = output
+			d, err := Detect(bin)
+			if err != nil || d.Manager != ManagerNone {
+				t.Fatalf("Detect = %+v, %v; want none", d, err)
+			}
+		})
+	}
+}
+
+func TestDetectDoesNotRestartUnrelatedSystemdService(t *testing.T) {
+	f := &fakeSystem{os: "linux", paths: map[string]bool{systemdRunDir: true}}
+	useFake(t, f)
+	f.outputs["systemctl --user show --property=MainPID --value docentd.service"] = "99"
+	f.procs = []process{{PID: 13, Exe: bin, Args: []string{bin}}}
+	d, err := Detect(bin)
+	if err != nil || d.Manager != ManagerProcess {
+		t.Fatalf("Detect = %+v, %v; want process", d, err)
+	}
+}
+
+func TestDetectRefusesUnsafeRelaunch(t *testing.T) {
+	p := process{PID: 13, Exe: bin, Args: []string{bin}}
+	tests := []struct {
+		name string
+		fake fakeSystem
+	}{
+		{"enumeration failure", fakeSystem{os: "linux", procErr: errors.New("unreadable")}},
+		{"multiple instances", fakeSystem{os: "linux", procs: []process{p, {PID: 14, Exe: bin, Args: []string{bin}}}}},
+		{"macOS plain process", fakeSystem{os: "darwin", procs: []process{p}}},
+		{"incomplete metadata", fakeSystem{os: "linux", procs: []process{{PID: 13, Exe: bin, Args: []string{bin}, LaunchError: errors.New("environ unreadable")}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useFake(t, &tt.fake)
+			if _, err := Detect(bin); err == nil || !strings.Contains(err.Error(), "--restart=never") {
+				t.Fatalf("Detect error = %v", err)
+			}
+		})
+	}
+}
+
+func TestStartLoadedButStoppedLaunchAgent(t *testing.T) {
+	f := &fakeSystem{os: "darwin"}
+	useFake(t, f)
+	plist := "/home/me/Library/LaunchAgents/com.docent.docentd.plist"
+	f.paths[plist] = true
+	f.outputs["plutil -extract ProgramArguments.0 raw -o - "+plist] = bin
+	f.outputs["launchctl print gui/501/com.docent.docentd"] = "state = not running"
+	f.outputs["launchctl kickstart gui/501/com.docent.docentd"] = ""
+	if err := Start(io.Discard, StartOptions{Binary: bin, Home: "/home/me"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.ran[len(f.ran)-1]; got != "launchctl kickstart gui/501/com.docent.docentd" {
+		t.Fatalf("last command = %s", got)
+	}
+}
+
+func TestStartRejectsUnrelatedService(t *testing.T) {
+	f := &fakeSystem{os: "linux"}
+	useFake(t, f)
+	f.paths[systemdRunDir] = true
+	f.paths["/home/me/.config/systemd/user/docentd.service"] = true
+	f.outputs["systemctl --user show --property=ExecStart --value docentd.service"] = "{ path=/other/docentd ; }"
+	if err := Start(io.Discard, StartOptions{Binary: bin, Home: "/home/me"}); err == nil {
+		t.Fatal("started unrelated service")
 	}
 }
 

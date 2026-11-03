@@ -1,10 +1,12 @@
 package selfupdate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // processes lists this user's processes from /proc. Processes it can't read,
@@ -18,6 +20,14 @@ func (realSystem) processes() ([]process, error) {
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != uint32(os.Getuid()) {
 			continue
 		}
 		if p, ok := readProc(filepath.Join("/proc", e.Name()), pid); ok {
@@ -43,13 +53,29 @@ func readProc(dir string, pid int) (process, bool) {
 		Args: splitNul(cmdline),
 	}
 
-	// Optional details used to relaunch it the same way
-	p.Dir, _ = os.Readlink(filepath.Join(dir, "cwd"))
-	if env, err := os.ReadFile(filepath.Join(dir, "environ")); err == nil {
-		p.Env = splitNul(env)
+	// A failed metadata read is not permission to silently use new settings.
+	p.Dir, err = os.Readlink(filepath.Join(dir, "cwd"))
+	if err != nil {
+		p.LaunchError = fmt.Errorf("read working directory: %w", err)
+		return p, true
 	}
-	if out, err := os.Readlink(filepath.Join(dir, "fd", "1")); err == nil && isLogFile(out) {
+	env, err := os.ReadFile(filepath.Join(dir, "environ"))
+	if err != nil {
+		p.LaunchError = fmt.Errorf("read environment: %w", err)
+		return p, true
+	}
+	p.Env = splitNul(env)
+	out, err := os.Readlink(filepath.Join(dir, "fd", "1"))
+	if err != nil {
+		p.LaunchError = fmt.Errorf("read log destination: %w", err)
+	} else if out == "/dev/null" || isLogFile(out) {
 		p.Stdout = out
+	} else {
+		p.LaunchError = fmt.Errorf("cannot reopen output destination %s", out)
+	}
+	stderr, err := os.Readlink(filepath.Join(dir, "fd", "2"))
+	if err != nil || stderr != out {
+		p.LaunchError = fmt.Errorf("cannot preserve separate or unreadable stderr; redirect both streams to the same log")
 	}
 	return p, true
 }
@@ -65,5 +91,18 @@ func isLogFile(target string) bool {
 }
 
 func splitNul(b []byte) []string {
+	if len(b) == 0 {
+		return []string{}
+	}
 	return strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+}
+
+// Zombies still answer kill(pid, 0), but have already released their resources.
+func processIsZombie(pid int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	end := strings.LastIndex(string(data), ") ")
+	return end >= 0 && strings.HasPrefix(string(data[end+2:]), "Z ")
 }

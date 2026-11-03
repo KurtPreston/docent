@@ -240,10 +240,20 @@ The docent installers below set up `docentd`, the launcher, and Cursor hooks.
 
 `docentd update` replaces an installed release with the latest one, along with
 any other docent binaries (`docent-tunnel`, `docent-setup`, `docent-reporter`)
-installed beside it, and then restarts docentd the way it's running: through
-its systemd unit or launchd agent, or by relaunching a background process with
-the same arguments and log. If docentd isn't running, it asks whether to start
-it.
+installed beside it. Checksum verification is required; missing manifests or
+entries abort the update. All replacements are staged first, and a failed
+replacement rolls back binaries already replaced.
+
+It then restarts the matching daemon through systemd or launchd, or relaunches
+a single Linux background process with the same arguments, directory,
+environment, and shared stdout/stderr log. A stopped service is not treated as
+a running daemon: starting it requires confirmation. Without a terminal,
+the command prints startup instructions instead.
+
+Automatic restarts are refused when process settings cannot be preserved,
+when several instances use the same binary, or for hand-started macOS daemons.
+Use `--restart=never` and restart those instances yourself. Service-managed
+macOS installs use launchd normally.
 
 ```sh
 docentd version            # what's installed
@@ -254,6 +264,9 @@ docentd update --version v0.1.0 --restart=never
 
 A docentd built from source reports version `dev`, and `update` won't replace
 it unless you pass `--force`; pull and re-run the installer instead.
+For installations predating the `update` command, pull this checkout and run
+the platform installer once after the first release is published. An old binary
+cannot bootstrap itself with a command it does not yet have.
 `DOCENT_REPO` (default `KurtPreston/docent`) and `DOCENT_DOWNLOAD_BASE` (default
 `https://github.com`) point the installers and `update` at a fork or mirror.
 

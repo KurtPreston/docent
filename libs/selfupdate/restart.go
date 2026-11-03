@@ -60,42 +60,55 @@ func (d Daemon) Describe() string {
 	return "not running"
 }
 
-// Detect finds how the docentd at binary is running. Call it before replacing
-// the binary: afterwards, a running process's executable no longer matches.
-func Detect(binary string) Daemon {
-	// A systemd unit that's active
-	if sys.exists(systemdRunDir) {
-		out, err := sys.run("systemctl", "--user", "is-active", SystemdUnit)
-		if err == nil && trimmed(out) == "active" {
-			return Daemon{Manager: ManagerSystemd}
-		}
-	}
-
-	// A loaded LaunchAgent on macOS
+// Detect finds only the daemon using binary. Ambiguous or incomplete process
+// metadata must not lead to stopping a daemon we cannot faithfully relaunch.
+func Detect(binary string) (Daemon, error) {
 	if sys.goos() == "darwin" {
-		if _, err := sys.run("launchctl", "print", launchdTarget(LaunchdLabel)); err == nil {
-			_, terr := sys.run("launchctl", "print", launchdTarget(TunnelLabel))
-			return Daemon{Manager: ManagerLaunchd, TunnelAgent: terr == nil}
+		out, err := sys.run("launchctl", "print", launchdTarget(LaunchdLabel))
+		if err == nil && sameFile(serviceValue(out, "program"), binary) && serviceValue(out, "state") == "running" {
+			tunnel, terr := sys.run("launchctl", "print", launchdTarget(TunnelLabel))
+			tunnelRunning := terr == nil && serviceValue(tunnel, "state") == "running" &&
+				sameFile(serviceValue(tunnel, "program"), filepath.Join(filepath.Dir(binary), "docent-tunnel"))
+			return Daemon{Manager: ManagerLaunchd, TunnelAgent: tunnelRunning}, nil
 		}
 	}
 
-	// A plain process running this binary as the daemon
-	procs, _ := sys.processes()
+	procs, err := sys.processes()
+	if err != nil {
+		return Daemon{}, fmt.Errorf("cannot inspect running daemons: %w; use --restart=never to update without restarting", err)
+	}
 	var d Daemon
+	var launchErr error
 	for _, p := range procs {
-		if p.PID == sys.pid() || !sameFile(p.Exe, binary) || isSubcommand(p.Args) {
+		if p.PID == sys.pid() || !sameFile(p.Exe, binary) || len(p.Args) == 0 || isSubcommand(p.Args) {
 			continue
 		}
 		if len(d.PIDs) == 0 {
 			d.Launch = Launch{Args: append([]string{binary}, p.Args[1:]...), Dir: p.Dir, Env: p.Env, LogPath: p.Stdout}
+			launchErr = p.LaunchError
 		}
 		d.PIDs = append(d.PIDs, p.PID)
 	}
-	if len(d.PIDs) > 0 {
-		d.Manager = ManagerProcess
-		return d
+	if len(d.PIDs) == 0 {
+		return Daemon{Manager: ManagerNone}, nil
 	}
-	return Daemon{Manager: ManagerNone}
+	if len(d.PIDs) > 1 {
+		return Daemon{}, fmt.Errorf("multiple daemons use %s; use --restart=never and restart each instance manually", binary)
+	}
+	if sys.exists(systemdRunDir) {
+		out, err := sys.run("systemctl", "--user", "show", "--property=MainPID", "--value", SystemdUnit)
+		if err == nil && trimmed(out) == strconv.Itoa(d.PIDs[0]) {
+			return Daemon{Manager: ManagerSystemd}, nil
+		}
+	}
+	if sys.goos() != "linux" {
+		return Daemon{}, fmt.Errorf("cannot preserve a hand-started daemon's arguments and environment on %s; use --restart=never and restart it manually", sys.goos())
+	}
+	if launchErr != nil {
+		return Daemon{}, fmt.Errorf("cannot preserve daemon pid %d: %w; use --restart=never", d.PIDs[0], launchErr)
+	}
+	d.Manager = ManagerProcess
+	return d, nil
 }
 
 // Restart restarts a running daemon the way it was running. tunnelUpdated
@@ -149,10 +162,20 @@ func Start(log io.Writer, opts StartOptions) error {
 	// An installed but stopped systemd unit or LaunchAgent
 	unit := filepath.Join(home, ".config", "systemd", "user", SystemdUnit)
 	if sys.exists(systemdRunDir) && sys.exists(unit) {
+		if err := checkSystemdBinary(opts.Binary); err != nil {
+			return err
+		}
 		return runLogged(log, "systemctl", "--user", "start", SystemdUnit)
 	}
 	plist := filepath.Join(home, "Library", "LaunchAgents", LaunchdLabel+".plist")
 	if sys.goos() == "darwin" && sys.exists(plist) {
+		program, err := sys.run("plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", plist)
+		if err != nil || !sameFile(trimmed(program), opts.Binary) {
+			return fmt.Errorf("cannot start %s: its executable does not match %s", plist, opts.Binary)
+		}
+		if _, err := sys.run("launchctl", "print", launchdTarget(LaunchdLabel)); err == nil {
+			return runLogged(log, "launchctl", "kickstart", launchdTarget(LaunchdLabel))
+		}
 		return runLogged(log, "launchctl", "bootstrap", "gui/"+strconv.Itoa(sys.uid()), plist)
 	}
 

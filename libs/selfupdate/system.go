@@ -26,12 +26,13 @@ type system interface {
 
 // process is a running program as seen by Detect.
 type process struct {
-	PID    int
-	Exe    string   // resolved executable path
-	Args   []string // argv
-	Dir    string   // working directory, when known
-	Env    []string // environment, when readable
-	Stdout string   // file stdout writes to, when it's a regular file
+	PID         int
+	Exe         string   // resolved executable path
+	Args        []string // argv
+	Dir         string   // working directory, when known
+	Env         []string // environment, when readable
+	Stdout      string   // file stdout writes to, when it's a regular file
+	LaunchError error    // essential relaunch metadata could not be read
 }
 
 var sys system = realSystem{}

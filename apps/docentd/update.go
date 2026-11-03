@@ -72,7 +72,10 @@ func update(o updateOptions) error {
 	// Note how docentd runs before replacing the binary it runs from
 	daemon := selfupdate.Daemon{Manager: selfupdate.ManagerNone}
 	if o.restart == "auto" {
-		daemon = selfupdate.Detect(u.Binary())
+		daemon, err = selfupdate.Detect(u.Binary())
+		if err != nil {
+			return err
+		}
 	}
 	res, err := u.Install(tag)
 	if err != nil {

@@ -17,9 +17,10 @@ const testRepo = "owner/docent"
 
 // release is a fake GitHub release served by newReleaseServer.
 type release struct {
-	tag       string
-	files     map[string]string // archive entry name -> content
-	checksums func(archive []byte) string
+	tag         string
+	files       map[string]string // archive entry name -> content
+	checksums   func(archive []byte) string
+	noChecksums bool
 }
 
 // buildArchive packs files into a tar.gz like GoReleaser's archives.
@@ -67,10 +68,15 @@ func newReleaseServer(t *testing.T, rel *release) {
 		base := "/" + testRepo + "/releases/download/" + rel.tag + "/"
 		mux.HandleFunc(base+AssetName(), func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(archive) })
 		mux.HandleFunc(base+"checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+			if rel.noChecksums {
+				http.NotFound(w, r)
+				return
+			}
 			sums := fmt.Sprintf("%s  %s\n", sha256hex(archive), AssetName())
 			if rel.checksums != nil {
 				sums = rel.checksums(archive)
 			}
+
 			_, _ = w.Write([]byte(sums))
 		})
 	}
@@ -219,5 +225,79 @@ func TestChecksumFor(t *testing.T) {
 	}
 	if got := checksumFor(sums, "missing"); got != "" {
 		t.Fatalf("checksumFor(missing) = %q", got)
+	}
+}
+
+func TestInstallRequiresChecksum(t *testing.T) {
+	for _, missingFile := range []bool{false, true} {
+		t.Run(fmt.Sprint(missingFile), func(t *testing.T) {
+			rel := fullRelease("v0.2.0")
+			rel.noChecksums = missingFile
+			rel.checksums = func([]byte) string { return "" }
+			newReleaseServer(t, rel)
+			dir := installDir(t, "docentd")
+			if _, err := newTestUpdater(t, dir).Install(rel.tag); err == nil {
+				t.Fatal("installed without a checksum")
+			}
+			if got := readFile(t, filepath.Join(dir, "docentd")); got != "old" {
+				t.Fatalf("docentd changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestInstallPreflightsSiblingBinaries(t *testing.T) {
+	for _, invalidTarget := range []bool{false, true} {
+		t.Run(fmt.Sprint(invalidTarget), func(t *testing.T) {
+			rel := fullRelease("v0.2.0")
+			dir := installDir(t, "docentd")
+			if invalidTarget {
+				if err := os.Mkdir(filepath.Join(dir, "docent-tunnel"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(filepath.Join(dir, "docent-tunnel"), []byte("old"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				delete(rel.files, "docent-tunnel")
+			}
+			newReleaseServer(t, rel)
+			if _, err := newTestUpdater(t, dir).Install(rel.tag); err == nil {
+				t.Fatal("installed despite invalid sibling")
+			}
+			if got := readFile(t, filepath.Join(dir, "docentd")); got != "old" {
+				t.Fatalf("partially updated docentd: %q", got)
+			}
+		})
+	}
+}
+
+func TestInstallRollsBackWhenRenameFails(t *testing.T) {
+	dir := installDir(t, "docentd", "docent-tunnel")
+	targets := map[string]string{
+		"docentd":       filepath.Join(dir, "docentd"),
+		"docent-tunnel": filepath.Join(dir, "docent-tunnel"),
+	}
+	calls := 0
+	rename := func(from, to string) error {
+		calls++
+		if calls == 2 {
+			return fmt.Errorf("simulated rename failure")
+		}
+		return os.Rename(from, to)
+	}
+	bins := map[string][]byte{"docentd": []byte("new"), "docent-tunnel": []byte("new")}
+	err := installFiles(targets, bins, rename)
+	if err == nil || !strings.Contains(err.Error(), "simulated rename failure") {
+		t.Fatalf("installFiles error = %v", err)
+	}
+	for _, path := range targets {
+		if got := readFile(t, path); got != "old" {
+			t.Fatalf("%s was not restored: %q", path, got)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("temporary files left behind: %v, %v", entries, err)
 	}
 }

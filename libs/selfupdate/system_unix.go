@@ -4,6 +4,7 @@ package selfupdate
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,21 +24,31 @@ func (s realSystem) stop(pid int) error {
 	}
 
 	// Wait for it to exit, then force it
-	deadline := time.Now().Add(stopTimeout)
-	for time.Now().Before(deadline) {
-		if !s.alive(pid) {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	if s.waitStopped(pid) {
+		return nil
 	}
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
+	if !s.waitStopped(pid) {
+		return fmt.Errorf("pid %d did not exit after SIGKILL", pid)
+	}
 	return nil
 }
 
+func (s realSystem) waitStopped(pid int) bool {
+	deadline := time.Now().Add(stopTimeout)
+	for time.Now().Before(deadline) {
+		if !s.alive(pid) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
 func (realSystem) alive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+	return syscall.Kill(pid, 0) == nil && !processIsZombie(pid)
 }
 
 // start launches l in its own session, detached from this terminal, with

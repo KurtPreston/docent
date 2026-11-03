@@ -8,11 +8,10 @@ import (
 	"strings"
 )
 
-// processes lists processes with ps. Unlike /proc, ps can't report a
-// process's working directory, environment, or log file, so a relaunch
-// inherits this process's environment and discards output.
+// processes identifies executables with ps. Its flattened argv is unsuitable
+// for relaunching, so Detect refuses automatic restarts outside launchd.
 func (s realSystem) processes() ([]process, error) {
-	out, err := s.run("ps", "-axww", "-o", "pid=,args=")
+	out, err := s.run("ps", "-U", strconv.Itoa(s.uid()), "-ww", "-o", "pid=,comm=")
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +25,10 @@ func (s realSystem) processes() ([]process, error) {
 		if err != nil {
 			continue
 		}
-		procs = append(procs, process{PID: pid, Exe: fields[1], Args: fields[1:]})
+		exe := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0]))
+		procs = append(procs, process{PID: pid, Exe: exe, Args: []string{exe}})
 	}
 	return procs, nil
 }
+
+func processIsZombie(int) bool { return false }
