@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,13 +41,14 @@ func TestReadProcPreservesBackgroundLaunch(t *testing.T) {
 			t.Errorf("stop helper: %v", err)
 		}
 	})
+	waitForBackgroundHelper(t, pid, want.LogPath)
 	p, ok := readProc(filepath.Join("/proc", strconv.Itoa(pid)), pid)
 	if !ok || p.LaunchError != nil {
-		t.Fatalf("readProc = %+v, %v", p, ok)
+		t.Fatalf("readProc failed: found=%v, launch error=%v; %s", ok, p.LaunchError, procDiagnostics(pid))
 	}
 	if !reflect.DeepEqual(p.Args, want.Args) || !reflect.DeepEqual(p.Env, want.Env) ||
 		p.Dir != want.Dir || p.Stdout != want.LogPath {
-		t.Fatalf("launch metadata changed: %+v", p)
+		t.Fatal("launch arguments, environment, working directory, or log destination changed")
 	}
 
 	// Exercise detection and a real restart using only this test executable.
@@ -74,8 +76,36 @@ func TestReadProcPreservesBackgroundLaunch(t *testing.T) {
 	restarted, err := Detect(binary)
 	if err != nil || len(restarted.PIDs) != 1 || restarted.PIDs[0] == pid ||
 		!reflect.DeepEqual(restarted.Launch, want) {
-		t.Fatalf("restart did not preserve launch settings: %+v, %v", restarted, err)
+		t.Fatalf("restart did not preserve launch settings: pids=%v, error=%v", restarted.PIDs, err)
 	}
+}
+
+// Starting a process does not guarantee its runtime has finished initializing.
+// Wait for the child itself before asserting its /proc metadata.
+func waitForBackgroundHelper(t *testing.T, pid int, logPath string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		output, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read helper log: %v", err)
+		}
+		if strings.Contains(string(output), "ready\n") {
+			return
+		}
+		if !(realSystem{}).alive(pid) || time.Now().After(deadline) {
+			t.Fatalf("helper did not become ready: log=%q; %s", output, procDiagnostics(pid))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func procDiagnostics(pid int) string {
+	dir := filepath.Join("/proc", strconv.Itoa(pid))
+	exe, exeErr := os.Readlink(filepath.Join(dir, "exe"))
+	cmdline, cmdErr := os.ReadFile(filepath.Join(dir, "cmdline"))
+	return fmt.Sprintf("exe=%q, exe error=%v, cmdline bytes=%d, cmdline error=%v",
+		exe, exeErr, len(cmdline), cmdErr)
 }
 
 func TestReadProcReportsMissingEnvironment(t *testing.T) {
