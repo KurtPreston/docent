@@ -31,6 +31,9 @@ func main() {
 		case "doctor":
 			runDoctor(os.Args[2:])
 			return
+		case "update":
+			runUpdate(os.Args[2:])
+			return
 		case "install-hooks":
 			runInstallHooks(os.Args[2:])
 			return

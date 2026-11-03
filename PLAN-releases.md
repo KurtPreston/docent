@@ -191,5 +191,13 @@ container against a snapshot or test release.
   snapshot builds were versioned `slakkr-SNAPSHOT-<commit>`. Workaround:
   `snapshot.version_template` is `0.0.0-SNAPSHOT-<commit>`. Tagged releases
   use the `v*` tag on HEAD and aren't affected; GoReleaser only warns.
+- **Phase 3:** the end-to-end test needed a local release host, and the
+  updater only knew github.com. Workaround: added a `DOCENT_DOWNLOAD_BASE`
+  override, which also serves mirrors. Tested in an Alpine container to keep
+  this Mac's own docentd LaunchAgent out of reach.
+- **Phase 3:** macOS has no /proc, so a docentd started outside launchd is
+  found with `ps` and relaunched without its old working directory,
+  environment, or log file. The macOS installer always uses launchd, so this
+  only affects hand-started daemons.
 
 ## Found bugs
