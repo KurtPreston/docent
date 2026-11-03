@@ -44,14 +44,15 @@ NODE="${DOCENT_NODE:-node}"
 # NPM is derived from $NODE's toolchain at build time (see build_frontend) unless
 # the user pins DOCENT_NPM, so we never pair a modern node with an ancient npm.
 NPM="${DOCENT_NPM:-}"
+FROM_SOURCE=0
+RELEASE_TAG="${DOCENT_VERSION:-}"
 
 usage() {
   cat <<'EOF'
 Usage: install-docent-linux.sh [options]
 
-Builds the dashboard (Vite/React) and docentd (with the built dashboard
-embedded into the binary via -tags embed), lays down config under
-~/.config/docent, and registers a systemd --user service that serves the
+Downloads the latest docent release (docentd with the dashboard embedded)
+into ~/.local/bin, lays down config under ~/.config/docent, and registers a systemd --user service that serves the
 dashboard on 127.0.0.1:39787. Lingering is enabled by default so docentd keeps
 running — and scheduled automations still fire — even when you're logged out
 (pass --no-linger to opt out).
@@ -67,9 +68,15 @@ run they are seeded from the repo's userdata/ (or the bundled examples) when
 missing; an existing config is left untouched. A leftover symlink from an
 earlier install is converted into a real file in place.
 
+Go and Node are only needed with --from-source, which builds the dashboard
+(Vite/React) and docentd (-tags embed) from this checkout instead. After
+installing a release, `docentd update` upgrades it in place.
+
 Options:
   --no-systemd      Skip systemd unit install (build + config only)
-  --no-build        Skip go build (reuse existing binary in BIN_DIR)
+  --version TAG     Install this release (e.g. v0.1.0) instead of the latest
+  --from-source     Build docentd from this checkout (needs Go and Node)
+  --no-build        Install nothing (reuse the existing binary in BIN_DIR)
   --start-only      Only (re)start the installed docentd (via systemd if it's
                     running, else as a background process), then exit. Use
                     this from a container/workspace startup script.
@@ -88,6 +95,8 @@ Environment:
   DOCENT_BIN_DIR     Same as --bin-dir
   DOCENT_CONFIG_DIR  Config root (default: ~/.config/docent)
   DOCENT_PORT        Same as --port
+  DOCENT_VERSION     Same as --version
+  DOCENT_REPO        GitHub repo to download releases from (default: KurtPreston/docent)
   DOCENT_GO          Path to a Go >= 1.22 toolchain (auto-detected otherwise)
   DOCENT_NODE        Node binary for the dashboard build (default: node; needs >= 18)
   DOCENT_NPM         npm binary (default: npm from $DOCENT_NODE's toolchain; needs >= 7)
@@ -107,6 +116,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-systemd) INSTALL_SYSTEMD=0 ;;
     --no-build) SKIP_BUILD=1 ;;
+    --from-source) FROM_SOURCE=1 ;;
+    --version) shift; RELEASE_TAG="${1:?--version requires a tag}" ;;
     --start-only) START_ONLY=1; SKIP_BUILD=1 ;;
     --linger) ENABLE_LINGER=1 ;;
     --no-linger) ENABLE_LINGER=0 ;;
@@ -200,7 +211,10 @@ build_frontend() {
   run "$NODE" "$NPM_BIN" --prefix "$WEB_ROOT" run build
 }
 
-if [ "$SKIP_BUILD" -eq 0 ]; then
+# shellcheck source=lib/release.sh
+. "$ROOT/scripts/lib/release.sh"
+
+if [ "$SKIP_BUILD" -eq 0 ] && [ "$FROM_SOURCE" -eq 1 ]; then
   choose_go
   log "using Go $(go_version "$GO") ($GO)"
 fi
@@ -284,18 +298,26 @@ if [ "$START_ONLY" -eq 1 ]; then
   exit 0
 fi
 
+# Download the release before stopping anything, so a failed download leaves
+# the running docentd alone
+if [ "$SKIP_BUILD" -eq 0 ] && [ "$FROM_SOURCE" -eq 0 ]; then
+  docent_release_fetch "$RELEASE_TAG" || exit 1
+fi
+
 stop_previous_docent_services
 
-# --- Build --------------------------------------------------------------------
-# The Vite output (apps/docentd/web/dist) is embedded into docentd with the
-# `embed` build tag, so the installed binary is self-contained (no -web needed).
-if [ "$SKIP_BUILD" -eq 0 ]; then
+# --- Install ------------------------------------------------------------------
+# Releases and source builds both embed the Vite output (apps/docentd/web/dist)
+# into docentd with the `embed` build tag, so the binary is self-contained.
+if [ "$SKIP_BUILD" -eq 1 ]; then
+  log "skipping install (--no-build)"
+elif [ "$FROM_SOURCE" -eq 0 ]; then
+  docent_release_install "$BIN_DIR" docentd || exit 1
+else
   build_frontend
   log "building docentd -> $DOCENTD_BIN"
   run mkdir -p "$BIN_DIR"
   run "$GO" build -tags embed -o "$DOCENTD_BIN" "$ROOT/apps/docentd"
-else
-  log "skipping build (--no-build)"
 fi
 
 # --- Config -------------------------------------------------------------------

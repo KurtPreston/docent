@@ -199,5 +199,13 @@ container against a snapshot or test release.
   found with `ps` and relaunched without its old working directory,
   environment, or log file. The macOS installer always uses launchd, so this
   only affects hand-started daemons.
+- **Phase 4:** BusyBox wget (Alpine) has no `--max-redirect`, so the
+  installers' wget fallback couldn't read the `/releases/latest` redirect.
+  Workaround: `wget -S --spider`, which BusyBox and GNU wget both support and
+  which prints each redirect's Location while following it.
+- **Phase 4:** the macOS installer can't be run for real on this Mac without
+  touching its own docentd LaunchAgent. Workaround: dry runs under macOS's
+  bash 3.2 for local, remote, and `--from-source`, and a real Linux installer
+  run in a Go-less Alpine container.
 
 ## Found bugs
