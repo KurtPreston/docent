@@ -215,3 +215,12 @@ After the pull request merges, on the automation host:
   `apps/docentd/internal/engine/engine.go`, `cockpit.go`,
   `apps/docent-reporter/internal/cli/app.go`, `libs/agentsession/manager.go`,
   `libs/runlog/runlog.go`). Unrelated to this effort; left for its own branch.
+- `Dispatcher.runJob` gave the whole job one 15-minute context. An
+  `agent-inline` action runs on its own 30-minute budget, so after a long
+  agent run a following `shell` notifier started with an already-expired
+  context and failed at once: the recipe's notify step would never report a
+  long run. Folded into Phase 3: each action now gets its own 15-minute budget.
+- `go test -race ./libs/automation/` reports pre-existing data races in the
+  tests `TestDispatcherCooldown` (unsynchronized `calls++` from the job
+  goroutine) and `TestAgentRunnerCopilot` (a buffer shared between exec copy
+  goroutines). Test-only and unrelated; left for their own branch.

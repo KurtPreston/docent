@@ -97,6 +97,9 @@ type Conditions struct {
 	// Cooldown is a duration string (e.g. "30m") suppressing re-fires for the
 	// same (rule, stableID) within that window.
 	Cooldown string `yaml:"cooldown,omitempty" json:"cooldown,omitempty"`
+	// MaxConcurrent caps how many of this rule's jobs run at once; more wait
+	// their turn in order. 0 (the default) is unlimited.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty"`
 }
 
 // Action is one side-effect to run when a rule matches.

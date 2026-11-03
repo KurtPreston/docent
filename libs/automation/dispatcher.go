@@ -34,7 +34,8 @@ type Dispatcher struct {
 	Store    *Store
 	Log      *log.Logger
 
-	mu sync.Mutex
+	mu     sync.Mutex
+	limits ruleLimiter
 }
 
 // NewDispatcher builds a dispatcher with the given rules and a default registry/store.
@@ -89,9 +90,32 @@ func (d *Dispatcher) handleOne(ctx context.Context, ev Event, now time.Time) {
 		d.logf("automation %s skipped (cooldown) key=%s", ev.Rule.ID, key)
 		return
 	}
-	d.Store.Start(id, ev.Rule.ID, key, now)
-	// Detach from the caller's context so a short rebuild doesn't cancel work.
-	go d.runJob(id, ev)
+	// Without a limit, start right away. Detach from the caller's context so
+	// a short rebuild doesn't cancel work.
+	max := ev.Rule.Conditions.MaxConcurrent
+	if max <= 0 {
+		d.Store.Start(id, ev.Rule.ID, key, now)
+		go d.runJob(id, ev)
+		return
+	}
+
+	// With max_concurrent, take a slot or wait in line for one
+	wait := d.limits.acquire(ev.Rule.ID, max)
+	if wait == nil {
+		d.Store.Start(id, ev.Rule.ID, key, now)
+	} else {
+		d.Store.Queue(id, ev.Rule.ID, key, now)
+		d.logf("automation %s queued (max_concurrent=%d) key=%s", ev.Rule.ID, max, key)
+	}
+	go func() {
+		defer d.limits.release(ev.Rule.ID)
+		if wait != nil {
+			<-wait
+			d.Store.Run(id, time.Now())
+			d.logf("automation %s started after waiting key=%s", ev.Rule.ID, key)
+		}
+		d.runJob(id, ev)
+	}()
 }
 
 // RunRuleNow runs a rule's actions immediately, bypassing cooldown/dedupe, and
@@ -129,14 +153,19 @@ func (d *Dispatcher) RunRuleNow(ctx context.Context, ev Event) Job {
 	return Job{ID: id, RuleID: ev.Rule.ID}
 }
 
+// actionTimeout bounds each action of a dispatched job. It is per action, not
+// per job: an agent-inline action can run longer than this on its own budget,
+// and a notifier after it must still get its full time.
+const actionTimeout = 15 * time.Minute
+
 func (d *Dispatcher) runJob(id string, ev Event) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
 	var lastErr error
 	var priorErrs []string
 	for _, action := range ev.Rule.Actions {
 		ev.PriorActionError = strings.Join(priorErrs, "; ")
+		ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
 		out, err := d.Registry.RunOutput(ctx, action, ev)
+		cancel()
 		if out = strings.TrimSpace(out); out != "" {
 			ev.PriorAgentOutput = out
 		}
