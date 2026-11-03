@@ -41,6 +41,9 @@ func ValidateRules(rules []Rule) error {
 				problems = append(problems, fmt.Sprintf("%s.conditions.cooldown %q is not a valid duration", path, r.Conditions.Cooldown))
 			}
 		}
+		if r.Conditions.MaxConcurrent < 0 {
+			problems = append(problems, fmt.Sprintf("%s.conditions.max_concurrent %d must be 0 (no limit) or more", path, r.Conditions.MaxConcurrent))
+		}
 		if len(r.Actions) == 0 {
 			problems = append(problems, path+".actions must contain at least one action")
 		}
@@ -52,6 +55,24 @@ func ValidateRules(rules []Rule) error {
 		return nil
 	}
 	return ValidationError{Problems: problems}
+}
+
+// RuleWarnings lists settings that are valid but have no effect, such as
+// include_existing on a trigger that isn't a transition. Unlike ValidateRules
+// problems, warnings don't stop the config from loading.
+func RuleWarnings(rules []Rule) []string {
+	var warnings []string
+	for i, r := range rules {
+		// include_existing only changes how transition rules treat the baseline
+		typ := strings.TrimSpace(r.Trigger.Type)
+		if r.Trigger.IncludeExisting && typ != "transition" {
+			if typ == "" {
+				typ = "signal"
+			}
+			warnings = append(warnings, fmt.Sprintf("automations[%d] (%s): trigger.include_existing has no effect on a %s trigger; it only applies to transition triggers", i, r.ID, typ))
+		}
+	}
+	return warnings
 }
 
 // ParseDuration accepts time.ParseDuration forms plus a trailing "d" for days.

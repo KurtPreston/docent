@@ -120,6 +120,18 @@ func MatchTransitions(rules []Rule, prev, next map[string]model.Entity, opts Mat
 	return out
 }
 
+// IncludeExistingRules returns the transition rules that set
+// trigger.include_existing, the only rules evaluated on a unit's first collect.
+func IncludeExistingRules(rules []Rule) []Rule {
+	var out []Rule
+	for _, r := range rules {
+		if r.Trigger.IncludeExisting && strings.TrimSpace(r.Trigger.Type) == "transition" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func matchSignalRule(rule Rule, sig *model.Signal, opts MatchOpts, now time.Time) (Event, bool) {
 	tr := rule.Trigger
 	if src := strings.TrimSpace(tr.Source); src != "" && !strings.EqualFold(src, sig.Source) {

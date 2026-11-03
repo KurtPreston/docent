@@ -326,6 +326,7 @@ func NewRegistry(clock func() time.Time) *Registry {
 	registry.Register("wsm", WSMCollector{Clock: clock})
 	registry.Register("cursor", CursorCollector{Clock: clock})
 	registry.Register("webhook", WebhookCollector{Clock: clock})
+	registry.Register("backlog", BacklogCollector{Clock: clock})
 	return registry
 }
 

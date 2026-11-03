@@ -77,6 +77,10 @@
         },
         "match": { "$ref": "#/$defs/automationMatch" },
         "when": { "$ref": "#/$defs/automationWhen" },
+        "include_existing": {
+          "type": "boolean",
+          "description": "Transition triggers only: on the first collect after startup, fire for entities already in the target state instead of only recording them as the baseline. Cooldowns don't survive a restart, so every restart fires again for entities still in that state; have the action move the entity out of it (e.g. claim the task)."
+        },
         "cron": {
           "type": "string",
           "description": "5-field cron expression (min hour dom month dow)"
@@ -132,6 +136,11 @@
         "cooldown": {
           "type": "string",
           "description": "Duration suppressing re-fires (e.g. 30m)"
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Most jobs of this rule that run at once. Extra jobs wait in order with status queued. 0 or unset means no limit."
         }
       }
     },
@@ -663,6 +672,9 @@
             },
             {
               "$ref": "#/$defs/directive.cursor"
+            },
+            {
+              "$ref": "#/$defs/directive.backlog"
             }
           ]
         }
@@ -1297,6 +1309,57 @@
         }
       },
       "required": ["collector"]
+    },
+    "directive.backlog": {
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "const": "backlog",
+          "x-docent-display-name": "Backlog.md board"
+        },
+        "config": {
+          "type": "object",
+          "required": ["board"],
+          "properties": {
+            "board": {
+              "type": "string",
+              "description": "Backlog.md board directory, passed to the CLI as BACKLOG_CWD. A leading ~ expands to your home directory.",
+              "x-docent-prompt": "Backlog.md board directory (e.g. ~/tasks)",
+              "x-docent-validator": "dir-exists"
+            },
+            "command": {
+              "type": "string",
+              "description": "Backlog CLI command, split on whitespace (default backlog).",
+              "x-docent-prompt": "Backlog CLI command (default backlog)"
+            },
+            "pull_command": {
+              "type": "string",
+              "description": "Optional shell command run in the board directory before each collect, such as a sync script. A failure fails the collect.",
+              "x-docent-setup-skip-prompt": true
+            },
+            "statuses": {
+              "type": "string",
+              "description": "Comma-separated statuses to collect (default all). Archived tasks are always skipped.",
+              "x-docent-setup-skip-prompt": true
+            },
+            "queue_label": {
+              "type": "string",
+              "description": "Label marking a task as queued for automation. Unset means no task is queued.",
+              "x-docent-setup-skip-prompt": true
+            },
+            "queue_status": {
+              "type": "string",
+              "description": "Status a labeled task must have to count as queued (default To Do).",
+              "x-docent-setup-skip-prompt": true
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["collector", "config"]
     }
   }
 }

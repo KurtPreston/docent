@@ -7,6 +7,7 @@ import (
 
 	"github.com/KurtPreston/docent/apps/docentd/internal/config"
 	"github.com/KurtPreston/docent/apps/docentd/internal/engine"
+	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/collectors"
 	"github.com/KurtPreston/docent/libs/cursorhooks"
 )
@@ -27,6 +28,7 @@ func runDoctor(args []string) {
 	reg := collectors.NewRegistry(nil)
 	opts := &collectors.ValidateOpts{UserdataDir: cfg.ConfigDir}
 	issues := reg.Validate(context.Background(), cfg.Directives, opts)
+	reportRuleWarnings(cfg.Automations)
 	hooksOK := reportHooks()
 	if len(issues) == 0 {
 		if hooksOK {
@@ -54,6 +56,14 @@ func runDoctor(args []string) {
 	}
 	// Only non-fatal warnings remain; report success but leave them visible.
 	fmt.Println("doctor: no blocking issues (warnings above are non-fatal)")
+}
+
+// reportRuleWarnings prints automation settings that load but do nothing.
+// They are non-fatal, so doctor still passes.
+func reportRuleWarnings(rules []automation.Rule) {
+	for _, w := range automation.RuleWarnings(rules) {
+		fmt.Printf("WARN %s\n", w)
+	}
 }
 
 // reportHooks checks the Cursor agent-activity hook and prints its state.

@@ -685,3 +685,130 @@ codebase it can't afford to read everything on every push, so the "duplicates
 an existing helper" check depends on docs that map the main modules and
 catalog the shared helpers. If its findings are thin or miss obvious
 duplication, write those docs first.
+
+## Work queue from a Backlog.md board
+
+Queue coding tasks on a [Backlog.md](https://github.com/MrLesk/Backlog.md)
+board by labeling them, and an agent works through them one at a time. The
+agent claims each task before it starts, and when it stops it moves the task
+to where a person will see the outcome: Waiting with a pull request to review,
+Done, or back to To Do marked as failed.
+
+First, a [`backlog` directive](Reporting.md#backlogmd-boards) reads the board.
+If you sync the board between machines, run your sync script as
+`pull_command` so docent sees tasks you queued elsewhere:
+
+```yaml
+directives:
+  - id: tasks
+    name: Task board
+    collector: backlog
+    enabled: true
+    config:
+      board: ~/tasks
+      pull_command: ~/bin/sync-tasks   # optional
+      queue_label: agent
+    state:
+      poll: { interval: 5m, on_load: true }
+```
+
+A task is queued when it has the `agent` label, is in To Do, and Backlog.md reports
+it as ready (`isReady`). Its Implementation Plan is the agent's brief, and it
+must start with `Repo:` and `Branch:` lines naming the repository and the
+branch to work on. Docent reads those lines to pick the checkout, the same way
+it does for a pull request:
+
+```markdown
+Repo: my-org/my-repo
+Branch: fix-login-timeout
+
+Raise the login timeout to 30 seconds and cover it with a test.
+1. Change the default in the auth config.
+2. Add a test for the slow-login path.
+3. Open a draft pull request.
+```
+
+The rule fires when a task becomes queued. `include_existing` also picks up
+tasks that were queued while `docentd` was down, and `max_concurrent: 1` runs
+one agent at a time, holding the rest as `queued` jobs on the Automations page:
+
+```yaml
+- id: backlog-agent-queue
+  name: Work through queued tasks
+  enabled: true
+  trigger:
+    type: transition
+    source: backlog         # the collector name, not the directive id
+    kind: task
+    include_existing: true
+    when:
+      field: queued
+      to: "true"
+  conditions:
+    cooldown: 1d
+    max_concurrent: 1
+  actions:
+    - type: agent-inline
+      provider: copilot
+      workdir: worktree
+      prompt: |-
+        You are an autonomous coding agent working one task from a
+        Backlog.md board. You are in a fresh git worktree of {{.Repo}} on
+        branch {{.Branch}}. Run every board command with
+        BACKLOG_CWD=~/tasks, for example:
+          BACKLOG_CWD=~/tasks backlog task view {{index .Fields "id"}} --plain
+
+        Task: {{index .Fields "id"}}: {{.Title}}
+
+        STEP 1, CLAIM, before anything else:
+          ~/bin/sync-tasks   (skip if you have no sync script)
+          BACKLOG_CWD=~/tasks backlog task edit {{index .Fields "id"}} -s "In Progress"
+          ~/bin/sync-tasks
+        If the task is no longer in To Do when you look, someone else has
+        it: stop and output SKIPPED.
+
+        STEP 2, WORK: follow the task's Implementation Plan below. Use the
+        project's own build, lint, and test commands. Commit to {{.Branch}},
+        push it, and open a draft pull request with `gh pr create --draft`.
+        Never push to the default branch or force-push.
+
+        Implementation Plan:
+        {{index .Fields "plan"}}
+
+        STEP 3, FINISH. Record the outcome on the board, then sync it.
+        - Success with a pull request: append a note saying what you did,
+          add the pull request as a reference, and move the task to Waiting:
+            BACKLOG_CWD=~/tasks backlog task edit {{index .Fields "id"}} -s Waiting \
+              --add-ref <pull request URL> --append-notes "<what you did>"
+        - Success with nothing to review: move it to Done with
+          --final-summary "<what you did>".
+        - Failure, or you can't finish without a human decision: append a
+          note on where you stopped and why, move the task back to To Do,
+          and swap the queue label for agent-failed, so it isn't picked up
+          again and shows up in triage:
+            BACKLOG_CWD=~/tasks backlog task edit {{index .Fields "id"}} -s "To Do" \
+              --remove-label agent --add-label agent-failed \
+              --append-notes "<where it stopped and why>"
+
+        Your final message goes to your notification channel. Output one
+        line: SKIPPED, WAITING, DONE, or FAILED, then the task ID and the
+        pull request URL if there is one.
+    - type: shell
+      command: ~/.config/docent/notify.sh
+      args: [task]
+```
+
+To retry a failed task, fix its plan and put the `agent` label back in place
+of `agent-failed`.
+
+Some things to know:
+
+- **Claiming is what stops repeats.** Cooldowns and queued jobs live in memory,
+  so after a restart `include_existing` fires again for every task that is
+  still queued. A task the agent claimed is In Progress, so it isn't.
+- **A task without `Repo:` and `Branch:` fails before the agent starts**, so
+  nothing claims it and it stays queued. The job shows the error on the
+  Automations page. Add the lines, then remove and re-add the `agent` label
+  (or restart `docentd`) to queue it again.
+- **One board, one machine.** Run the rule on a single `docentd`. Claiming and
+  syncing first narrows the race between two machines but doesn't close it.

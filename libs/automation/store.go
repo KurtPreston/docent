@@ -10,6 +10,7 @@ type JobStatus string
 
 const (
 	JobPending JobStatus = "pending"
+	JobQueued  JobStatus = "queued"
 	JobRunning JobStatus = "running"
 	JobDone    JobStatus = "done"
 	JobError   JobStatus = "error"
@@ -73,6 +74,17 @@ func (s *Store) ShouldSkip(dedupeKey, cooldown string, now time.Time) bool {
 
 // Start records a new pending→running job and stamps the dedupe key.
 func (s *Store) Start(id, ruleID, dedupeKey string, now time.Time) *Job {
+	return s.record(id, ruleID, dedupeKey, JobRunning, now)
+}
+
+// Queue records a job waiting for its rule's max_concurrent slot. Like Start,
+// it stamps the dedupe key, so cooldown counts from when the job was queued.
+func (s *Store) Queue(id, ruleID, dedupeKey string, now time.Time) *Job {
+	return s.record(id, ruleID, dedupeKey, JobQueued, now)
+}
+
+// record adds a job in the given status and stamps its dedupe key.
+func (s *Store) record(id, ruleID, dedupeKey string, status JobStatus, now time.Time) *Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
@@ -80,15 +92,31 @@ func (s *Store) Start(id, ruleID, dedupeKey string, now time.Time) *Job {
 		ID:        id,
 		RuleID:    ruleID,
 		DedupeKey: dedupeKey,
-		Status:    JobRunning,
+		Status:    status,
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+	if status == JobQueued {
+		j.Message = "waiting for max_concurrent"
 	}
 	s.jobs[id] = j
 	if dedupeKey != "" {
 		s.byDedupe[dedupeKey] = now
 	}
 	return cloneJob(j)
+}
+
+// Run marks a queued job as running once it gets its slot.
+func (s *Store) Run(id string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[id]
+	if !ok {
+		return
+	}
+	j.Status = JobRunning
+	j.Message = ""
+	j.UpdatedAt = now
 }
 
 // Finish marks a job done.
