@@ -208,6 +208,9 @@ After the pull request merges, on the automation host:
   `GIT_CONFIG_*` env vars, and `TMPDIR` is a symlinked path. With those
   removed and `TMPDIR` resolved, the full suite passes; validation is run
   that way.
+- Phase 4: config validation had no warning channel, only errors.
+  `automation.RuleWarnings` returns non-fatal notes; the daemon logs them at
+  startup and `docentd doctor` prints them as `WARN` without failing.
 
 ## Found bugs
 

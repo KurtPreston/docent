@@ -353,6 +353,9 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		}
 	}
 	if len(cfg.Automations) > 0 {
+		for _, w := range automation.RuleWarnings(cfg.Automations) {
+			log.Printf("automations: warning: %s", w)
+		}
 		e.automations = automation.NewDispatcher(cfg.Automations)
 		e.wireAutomationConnectors()
 	}
