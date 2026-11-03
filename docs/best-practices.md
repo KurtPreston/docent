@@ -33,10 +33,12 @@ whose workflows inspired a feature.
 - **`docentd` is the foreground daemon.** Service managers and the CLI launch
   it; it does not dispatch user commands. Diagnostic flags such as `--help`
   and `--version` still belong on the daemon.
-- **Prefer clean breaks with explicit migrations.** When changing these
-  command boundaries, document the installer step rather than maintaining
-  compatibility aliases. Reject obsolete commands with an actionable error;
-  never interpret them as a request to start a daemon.
+- **During v0.x, prefer clean breaks with explicit migrations.** Docent is
+  still in its early phases, so command boundaries can change without
+  compatibility aliases when the migration is documented. Revisit this
+  policy before v1.0; do not assume the same freedom to break compatibility
+  once stable interfaces are published. Reject obsolete commands with an
+  actionable error; never interpret them as a request to start a daemon.
 
 These boundaries keep maintenance commands usable without a running daemon
 and make it clear which process owns background work.
