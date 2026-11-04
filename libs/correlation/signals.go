@@ -79,6 +79,11 @@ func SignalToEntity(s model.Signal, cfg Config) model.Entity {
 			ent.State[k] = v
 		}
 	}
+	if s.Source == "backlog" && (s.Kind == "task" || s.Kind == "task_activity") {
+		delete(ent.Coordinates, "ticket")
+		ent.Coordinates["backlog_board"] = s.DirectiveID
+		ent.Coordinates["backlog_id"] = s.Fields["id"]
+	}
 	if !s.ObservedAt.IsZero() {
 		ent.State["observedAt"] = s.ObservedAt.UTC().Format(time.RFC3339Nano)
 	}

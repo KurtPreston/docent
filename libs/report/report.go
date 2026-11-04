@@ -302,15 +302,14 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 		if err := runPass(collectors.ModeEvents, nil); err != nil {
 			return nil, err
 		}
-		// State pass is for live readiness (open PRs / checks), not a
-		// full JIRA inventory. Restrict to GitHub collectors so Done
-		// tickets outside the window don't flood the report.
-		ghOnly := []string{"github", "github-enterprise"}
+		// Include board context and live PR readiness, not a full JIRA
+		// inventory. These snapshots are distinct from activity events.
+		stateCollectors := []string{"github", "github-enterprise", "backlog"}
 		if len(resolved.Collectors) > 0 {
-			ghOnly = intersectCollectors(resolved.Collectors, ghOnly)
+			stateCollectors = intersectCollectors(resolved.Collectors, stateCollectors)
 		}
-		if len(ghOnly) > 0 {
-			if err := runPass(collectors.ModeState, ghOnly); err != nil {
+		if len(stateCollectors) > 0 {
+			if err := runPass(collectors.ModeState, stateCollectors); err != nil {
 				return nil, err
 			}
 		}

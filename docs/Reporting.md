@@ -453,7 +453,7 @@ All collectors run in **date range** mode (`since` → `until`), except
 - `google-calendar` — events from a secret iCal URL.
 - `azure-pipelines` — completed Azure DevOps runs of `config.definitions`: a `build_failure` signal per failed run and, with a [log parser](#log-parsers), a `test_failure` signal per test file that failed **or flaked** (passed only on retry). Built to trigger automations; see [Azure Pipelines](#azure-pipelines).
 - `slack` — DMs, `@`-mentions, and your sent messages by default; thread replies + a 3-message context window per self-message at `involved`; explicit channels via `config.followed_channels` at `all`. Requires a User OAuth token (`xoxp-...`). See [Slack.md](Slack.md) for token setup and required scopes.
-- `backlog` — the tasks on a [Backlog.md](https://github.com/MrLesk/Backlog.md) board, read through the `backlog` CLI. State only: `docentd` polls it to drive automations such as a [work queue](Automation-recipes.md#work-queue-from-a-backlogmd-board), and event-mode reports skip it. See [Backlog.md boards](#backlogmd-boards).
+- `backlog` — current tasks on a [Backlog.md](https://github.com/MrLesk/Backlog.md) board, plus optional Git-backed activity events. State supports daily plans and automations such as a [work queue](Automation-recipes.md#work-queue-from-a-backlogmd-board); enable `config.git_events: "true"` for activity reports. See [Backlog.md boards](#backlogmd-boards).
 
 ### Azure Pipelines
 
@@ -530,6 +530,7 @@ directives:
     config:
       board: ~/tasks              # directory holding the board's backlog/ (required)
       command: backlog            # optional, default backlog
+      git_events: "true"          # optional, default "false"; requires local Git history
       pull_command: ~/bin/sync-tasks  # optional, run in the board before each collect
       statuses: To Do, In Progress    # optional, default every status
       queue_label: agent          # optional; enables the queued field
@@ -538,7 +539,7 @@ directives:
       poll: { interval: 5m, on_load: true }
 ```
 
-It is a state collector, so give it a `state:` poll, not `events:`. Each
+State collection uses a `state:` poll. Each state
 collect runs `backlog task list --json`, then `backlog task view <id> --json`
 for each task carrying `queue_label` in `queue_status`, to read its plan.
 Archived tasks are skipped. When `pull_command` fails, the collect fails, so a
@@ -565,6 +566,62 @@ Tasks carrying `queue_label` in `queue_status` also get:
 
 `docent doctor` checks that `board` is a directory and that the command is on
 `PATH`.
+
+#### Optional Git activity
+
+`git_events` defaults to `"false"`. Enabling it lets recent-activity,
+custom-prompt, and daily-plan reports read committed task changes directly;
+no background `events:` poll is required. A daily plan also receives current
+Backlog state (subject to `statuses`), separately labeled as planning context
+and not evidence of work in its historical window. GitHub-only PR reports
+remain GitHub-only. Collector allow-lists apply to both report passes.
+
+The history collector reads the board checkout's HEAD first-parent history
+and compares each in-window commit with its first parent, using the commit's
+recording time. A merged snapshot appears once; intermediate side-branch
+changes or edits made between commits cannot be recovered. Task creation and
+latest-update timestamps are not used as a fallback or completion date.
+Imports and the initial commit are labeled as first-recorded/baseline data,
+not new accomplishments. The sync commit author is provenance, not proof of
+who did the work; configured personal-board events are included in all scopes.
+
+Each task changed in a commit produces one `task_activity` event with `id`,
+historical `status`, `commit`, `commit_author`, `time_basis: git_commit`, and
+`changes` (a JSON object of before/after values). Changes include status,
+title, and meaningful Markdown section edits. Unchanged surrounding note
+lines are omitted. Metadata-only changes (timestamps, labels, ordering),
+whitespace-only changes, pure moves, and deletions do not count as work.
+Events never carry `queued` or `ready` fields and cannot match a `kind: task`
+work-queue trigger.
+
+Tasks are matched by stored ID, including renamed files and tasks now in
+`archive/tasks` or legacy `completed` directories. The default `backlog/`,
+hidden `.backlog/`, and root `backlog.config.yml`'s `backlog_directory` layouts
+are resolved at each historical revision. A board may be nested inside a
+Git repository. Current-state `statuses` filters do not hide historical
+completions or archived tasks. Uncommitted edits are not historical events.
+
+Both Markdown and JSON report inputs retain task details and commit evidence.
+Backlog tasks are grouped by board and task ID, not confused with similarly
+named issue-tracker tickets. Commit timestamps describe when a change was
+recorded, not the exact time work happened.
+
+For optional daemon caching, add an `events:` block alongside the existing
+`state:` block:
+
+```yaml
+events:
+  lookback: 7d
+  poll: { interval: 15m, on_load: true }
+```
+
+With neither block, polling still defaults to state only. Disabling
+`git_events` performs no event-side Git or sync commands. An enabled read
+runs `pull_command` first when configured; failed syncs, invalid task data,
+non-Git boards, and unavailable comparison objects produce explicit errors.
+An empty Git repository has no history. If a shallow checkout lacks a needed
+parent, obtain that history yourself before retrying; Docent never implicitly
+fetches it. `docent doctor` checks Git access when the feature is enabled.
 
 ### Nested repos (`config.scan_depth`)
 

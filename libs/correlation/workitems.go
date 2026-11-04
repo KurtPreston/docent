@@ -40,6 +40,9 @@ func branchAnchor(ent model.Entity) (repo, branch string, ok bool) {
 
 // GroupKey returns the work-item anchor key for an entity.
 func GroupKey(ent model.Entity, cfg Config) string {
+	if board := ent.Coordinates["backlog_board"]; board != "" {
+		return "backlog:" + board + ":" + ent.Coordinates["backlog_id"]
+	}
 	if repo, branch, ok := branchAnchor(ent); ok {
 		return branchKey(repo, branch)
 	}
@@ -56,6 +59,9 @@ func GroupKey(ent model.Entity, cfg Config) string {
 // tagged "PR-7373" by a generic scan upstream), so an unrecognized value
 // falls back to parsing the title instead of being trusted verbatim.
 func ticketFromEntity(ent model.Entity, cfg Config) string {
+	if ent.Coordinates["backlog_board"] != "" {
+		return ""
+	}
 	if ent.Coordinates != nil {
 		if t := strings.ToUpper(strings.TrimSpace(ent.Coordinates["ticket"])); t != "" && looksLikeTicketKey(t, cfg) {
 			return t
@@ -119,6 +125,9 @@ func BuildWorkItems(entities []model.Entity, cfg Config) []model.WorkItem {
 			order = append(order, key)
 		}
 		wi.Entities = append(wi.Entities, ent)
+		if ent.Kind == "task" && ent.Coordinates["backlog_board"] != "" {
+			wi.Title = ent.Title
+		}
 		// Promote jira ticket summary as work-item title when available.
 		if isJiraEntity(ent) && ent.Title != "" && !strings.HasPrefix(wi.Key, "wb:") {
 			if t := ticketFromEntity(ent, cfg); t != "" {
