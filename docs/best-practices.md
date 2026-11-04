@@ -58,6 +58,11 @@ Don't build docent from a working tree and copy the binaries into place, or
 restart a daemon onto unreleased code. A machine should only ever run a
 tagged release.
 
+A merge alone does not publish binaries; the release workflow runs on
+version tags. Wait for its artifacts before updating. Check for active jobs
+before allowing the updater to restart a daemon; use `--restart never` when
+installation must be separated from a later, safe restart.
+
 Why: every installed docent then matches a published release, which keeps
-`docent update` and `--version` meaningful, and every change has been through
-review and CI.
+`docent update` and `--version` meaningful, exercises the supported upgrade
+path, and ensures every change has been through review and CI.

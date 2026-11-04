@@ -700,6 +700,11 @@ First, a [`backlog` directive](Reporting.md#backlogmd-boards) reads the board.
 If you sync the board between machines, run your sync script as
 `pull_command` so docent sees tasks you queued elsewhere:
 
+The queue needs only state polling. You can independently enable
+[`config.git_events: "true"`](Reporting.md#optional-git-activity) for activity
+reports; historical `task_activity` signals never match this recipe's
+`kind: task` trigger and do not carry queue eligibility fields.
+
 ```yaml
 directives:
   - id: tasks

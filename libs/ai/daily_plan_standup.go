@@ -127,6 +127,7 @@ func RenderDailyPlanMarkdown(in RunInput, _ ActivityFormatter) string {
 		}
 	}
 
+	b.WriteString(backlogDailyContext(in))
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
