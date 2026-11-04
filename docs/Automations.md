@@ -72,19 +72,24 @@ so `when.to: <value>` also fires the first time a matching entity is seen —
 one rule covers both "this appeared already in the state I care about" and
 "this later changed into it". Pin `when.from` when you want only the change.
 
-**A daemon restart doesn't replay history**: the first successful collect of
-each unit after startup only seeds a baseline (so docentd knows what
-"existing" looks like); automations only fire from the *second* collect of a
-unit onward. Otherwise every signal/state already in the lookback window
-would look "new" on every restart.
+**A daemon restart doesn't replay history, but it doesn't lose changes
+either.** Signal rules only fire from the *second* collect of a unit after
+startup; the first only seeds a baseline, so every signal already in the
+lookback window doesn't look "new" on every restart. Transition rules keep
+their baseline across restarts: each state unit's last snapshot is saved under
+`~/.local/state/docent/automation-baselines/`, and the first collect after a
+start fires for anything that changed while docentd was down, such as a push
+to a watched PR. Only a unit with no saved snapshot, such as a newly added
+directive, seeds silently. After a long outage, expect one firing per entity
+that changed in the meantime.
 
 Set **`trigger.include_existing: true`** on a `transition` rule to fire for
 entities that are already in the target state on that first collect, instead
 of only recording them. A work queue needs this: a task queued while docentd
 was down should still run. The first collect fires the rule for every entity
 whose `when.field` already equals `when.to` (and that passes `match.fields`
-and `when.from`), as though it had just appeared; later collects work as
-usual. Cooldowns are kept in memory, so each restart fires again for entities
+and `when.from`), as though it had just appeared, instead of comparing against
+the saved snapshot; later collects work as usual. Cooldowns are kept in memory, so each restart fires again for entities
 still in that state. Pair it with an action that moves the entity out of the
 state, such as claiming a queued task. The option has no effect on other
 trigger types, and `docent doctor` warns when it is set on one.
