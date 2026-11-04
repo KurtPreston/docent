@@ -19,7 +19,12 @@ type prDetail struct {
 	ReviewDecision string
 	HeadBranch     string
 	// HeadSHA is the PR's current head commit, which changes on every push.
-	HeadSHA   string
+	HeadSHA string
+	// BaseBranch is the branch the PR merges into.
+	BaseBranch string
+	// State is GitHub's OPEN, CLOSED, or MERGED, or empty when the lookup
+	// could not say (the `gh pr view` fallback).
+	State     string
 	Mergeable string
 	IsDraft   bool
 	Threads   []ReviewThread
@@ -49,7 +54,7 @@ const prDetailQuery = `
 query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
-      isDraft mergeable reviewDecision updatedAt headRefName headRefOid
+      state isDraft mergeable reviewDecision updatedAt headRefName headRefOid baseRefName
       author{ login __typename }
       commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
       reviewThreads(first:50){
@@ -106,12 +111,14 @@ type ghPRDetailResponse struct {
 }
 
 type ghPRDetail struct {
+	State          string  `json:"state"`
 	IsDraft        bool    `json:"isDraft"`
 	Mergeable      string  `json:"mergeable"`
 	ReviewDecision string  `json:"reviewDecision"`
 	UpdatedAt      string  `json:"updatedAt"`
 	HeadRefName    string  `json:"headRefName"`
 	HeadRefOid     string  `json:"headRefOid"`
+	BaseRefName    string  `json:"baseRefName"`
 	Author         ghActor `json:"author"`
 	Commits        struct {
 		Nodes []ghCommitNode `json:"nodes"`
@@ -185,6 +192,8 @@ func buildPRDetail(pr ghPRDetail, viewer string) prDetail {
 		ReviewDecision: strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)),
 		HeadBranch:     strings.TrimSpace(pr.HeadRefName),
 		HeadSHA:        strings.TrimSpace(pr.HeadRefOid),
+		BaseBranch:     strings.TrimSpace(pr.BaseRefName),
+		State:          strings.ToUpper(strings.TrimSpace(pr.State)),
 		Mergeable:      normalizeMergeable(pr.Mergeable),
 		IsDraft:        pr.IsDraft,
 	}
@@ -269,4 +278,12 @@ func (c GitHubCollector) fetchPRDetailFallback(ctx context.Context, env []string
 	d := c.fetchPRStatus(ctx, env, prURL, directive, opts)
 	d.Threads = c.fetchPRUnresolvedThreads(ctx, env, prURL, viewer, directive, opts)
 	return d
+}
+
+// closed reports whether the lookup saw the PR as no longer open. Search can
+// still list a PR for a while after it closes, and every reader of
+// pr_review_status takes "open" as given, so such a PR must not be reported.
+// An unknown state (the fallback path) is not evidence of closing.
+func (d prDetail) closed() bool {
+	return d.State != "" && d.State != "OPEN"
 }

@@ -886,8 +886,13 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	close(work)
 	wg.Wait()
 
+	// Build rows for the PRs still open by the time their detail was read
 	items := make([]StatusItem, 0, len(rows))
 	for _, r := range rows {
+		if r.detail.closed() {
+			loggerFor(opts, directive.ID).Note("github: %s is %s, leaving it out", r.row.URL, strings.ToLower(r.detail.State))
+			continue
+		}
 		items = append(items, prReviewItem(directive, user, host, now, r.row, r.spec, r.detail))
 	}
 	// Report what the watch scans could not check after the PRs they found

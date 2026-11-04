@@ -171,8 +171,8 @@ func watchPageJSON(t *testing.T, prs ...fixturePR) string {
 
 // prDetailJSON renders a passing, mergeable prDetailQuery reply.
 func prDetailJSON(author string) string {
-	return `{"data":{"repository":{"pullRequest":{"isDraft":false,"mergeable":"MERGEABLE",` +
-		`"reviewDecision":"","updatedAt":"2026-01-02T00:00:00Z","headRefName":"fix","headRefOid":"abc123",` +
+	return `{"data":{"repository":{"pullRequest":{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE",` +
+		`"reviewDecision":"","updatedAt":"2026-01-02T00:00:00Z","headRefName":"fix","headRefOid":"abc123","baseRefName":"main",` +
 		`"author":{"login":"` + author + `","__typename":"User"},` +
 		`"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]},` +
 		`"reviewThreads":{"nodes":[]},"reviews":{"nodes":[]},"timelineItems":{"nodes":[]}}}}}`
