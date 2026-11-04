@@ -757,6 +757,7 @@ func (u *unit) due(now time.Time, initial bool) bool {
 // performs the initial on_load collection, then polls each unit on its own
 // cadence, rebuilding the snapshot after any collection completes.
 func (e *Engine) StartScheduler(ctx context.Context) {
+	e.startWorktreeReaper(ctx)
 	go func() {
 		e.tick(ctx, true)
 		ticker := time.NewTicker(time.Second)

@@ -91,8 +91,9 @@ type WorkdirResult struct {
 // is also the only honest place for it -- what makes a checkout usable is a
 // property of the repository, not something docent can infer.
 //
-// Nothing is cleaned up afterwards. docent owns everything under its state
-// directory, so unlike the second design a reclaim is at least possible later.
+// The worktree outlives the run, so a later run or session can resume in it.
+// docent owns everything under its state directory, which is what lets the
+// daemon reclaim trees left idle past worktreeRetention (see worktree.Reap).
 func ProvisionWorkdir(ctx context.Context, req WorkdirRequest) (WorkdirResult, error) {
 	mode := strings.TrimSpace(req.Mode)
 	if mode == "" {
