@@ -113,19 +113,21 @@ func (r AgentRunner) RunWithOutput(ctx context.Context, action Action, ev Event)
 	if provider == "" {
 		provider = "cursor"
 	}
-	out, err := r.runAgent(runCtx, provider, wd.Path, prompt)
+	cmdName, args, err := r.agentCommand(provider, strings.TrimSpace(action.Model), prompt)
+	if err != nil {
+		return "", err
+	}
+	out, err := runAgent(runCtx, agentProcess{Provider: provider, Dir: wd.Path, Name: cmdName, Args: args})
 	if err != nil {
 		return out, err
 	}
 	return out, r.runPost(runCtx, action, actx, wd.Path)
 }
 
-// runAgent returns the agent's stdout: its final answer for providers run in
-// text/silent mode.
-func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, agentTimeout)
-	defer cancel()
-
+// agentCommand returns the CLI binary and arguments that run prompt
+// unattended with provider. A non-empty model is passed as --model; an empty
+// one leaves the arguments exactly as they were before models could be pinned.
+func (r AgentRunner) agentCommand(provider, model, prompt string) (string, []string, error) {
 	var cmdName string
 	var args []string
 	switch strings.ToLower(provider) {
@@ -135,14 +137,14 @@ func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string)
 			cmdName = "cursor-agent"
 		}
 		// Write mode: omit --mode=ask so the agent can edit and run shell.
-		args = []string{"-p", "--output-format=text", "--trust", "--force", prompt}
+		args = []string{"-p", "--output-format=text", "--trust", "--force"}
 	case "claude":
 		cmdName = r.ClaudeCommand
 		if cmdName == "" {
 			cmdName = "claude"
 		}
 		// Write mode: omit --disallowedTools so Edit/Write/Bash are available.
-		args = []string{"--print", "--output-format=text", "--permission-mode", "acceptEdits", prompt}
+		args = []string{"--print", "--output-format=text", "--permission-mode", "acceptEdits"}
 	case "copilot":
 		cmdName = r.CopilotCommand
 		if cmdName == "" {
@@ -151,13 +153,38 @@ func (r AgentRunner) runAgent(ctx context.Context, provider, cwd, prompt string)
 		// Write mode, unattended: every tool/path/URL is allowed and ask_user is
 		// disabled since nobody is there to answer. --silent leaves only the
 		// agent's response on stdout.
-		args = []string{"--allow-all", "--no-ask-user", "--silent", "--no-color", "-p", prompt}
+		args = []string{"--allow-all", "--no-ask-user", "--silent", "--no-color"}
 	default:
-		return "", fmt.Errorf("agent: unknown provider %q", provider)
+		return "", nil, fmt.Errorf("agent: unknown provider %q", provider)
 	}
 
-	cmd := exec.CommandContext(cctx, cmdName, args...)
-	cmd.Dir = cwd
+	// Pin the model, then end with the prompt (copilot takes it as -p's value)
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if strings.EqualFold(provider, "copilot") {
+		args = append(args, "-p")
+	}
+	return cmdName, append(args, prompt), nil
+}
+
+// agentProcess is one unattended agent CLI invocation.
+type agentProcess struct {
+	Provider string
+	Dir      string
+	Name     string
+	Args     []string
+}
+
+// runAgent runs p and returns the agent's stdout: its final answer for
+// providers run in text/silent mode.
+func runAgent(ctx context.Context, p agentProcess) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, agentTimeout)
+	defer cancel()
+	provider := p.Provider
+
+	cmd := exec.CommandContext(cctx, p.Name, p.Args...)
+	cmd.Dir = p.Dir
 	configureProcGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
 	var combined, stdout bytes.Buffer

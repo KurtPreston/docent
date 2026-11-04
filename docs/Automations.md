@@ -137,8 +137,8 @@ Optional gates evaluated after the trigger matches, before any action runs:
 | `jira-comment` | Post a JIRA comment | `issue` (defaults to the matched ticket key), `body` (required). Uses the first enabled `jira` directive. |
 | `slack-post` | Post a Slack message | `channel`, `body` (required). Uses the first enabled `slack` directive. |
 | `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`, and the optional prompt controls `prompt` / `context` (see [Report delivery](#report-delivery)). |
-| `agent` | Start a hosted agent session in a provisioned workdir | `provider` (`cursor` / `claude`), `workdir` (`worktree` default, or `open_path`), `base_ref` (branch point for a brand-new branch), `prompt` (required). Streams to the cockpit and ignores `post` — see [`agent` vs `agent-inline`](#agent-vs-agent-inline). |
-| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, plus `post` (see below). `provider` may also be `copilot` (run with `--allow-all --no-ask-user`). The agent's final output is passed to later actions as `.AgentOutput`. |
+| `agent` | Start a hosted agent session in a provisioned workdir | `provider` (`cursor` / `claude`), `model` (optional, see [Pinning a model](#pinning-a-model)), `workdir` (`worktree` default, or `open_path`), `base_ref` (branch point for a brand-new branch), `prompt` (required). Streams to the cockpit and ignores `post` — see [`agent` vs `agent-inline`](#agent-vs-agent-inline). |
+| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, including `model`, plus `post` (see below). `provider` may also be `copilot` (run with `--allow-all --no-ask-user`). The agent's final output is passed to later actions as `.AgentOutput`. |
 | `open` | Open a path in the editor via the configured [open trigger](Dashboard.md#open-trigger--live-window-polling-cursor--wsm--none) | An optional templated `cwd`. Only available when `open_trigger` is configured. |
 
 An action's failure doesn't stop the chain: every action in a rule runs even
@@ -157,6 +157,15 @@ the provisioned workdir:
 - **`commit: "true"`** and optional `commit_message` — `git add -A && git commit` (a clean tree is not an error).
 - **`push: "true"`** — `git push -u origin HEAD:<branch>`.
 - **`jira_comment: "true"`** and optional `jira_comment_body` (templated) — posts a comment to the matched ticket; requires an enabled `jira` directive.
+
+### Pinning a model
+
+`model` names the model an `agent` or `agent-inline` action runs, passed to the
+provider's CLI as `--model`, e.g. `model: claude-sonnet-4.5`. Without it, the
+CLI uses whatever model its own settings on that machine last saved, which an
+interactive session can change at any time. Pin it for unattended agents whose
+judgment matters, such as reviewers. The value is used as written, not
+templated, and must be a name the chosen provider's CLI accepts.
 
 ### Where an agent runs
 

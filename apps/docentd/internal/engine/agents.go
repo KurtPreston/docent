@@ -233,6 +233,7 @@ func (r sessionAgentRunner) Run(ctx context.Context, action automation.Action, e
 
 	_, err = r.manager.Start(ctx, agentsession.StartRequest{
 		Provider: provider,
+		Model:    strings.TrimSpace(action.Model),
 		Title:    automationSessionTitle(actx),
 		Repo:     actx.Repo,
 		Branch:   actx.Branch,

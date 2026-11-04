@@ -131,8 +131,11 @@ type Action struct {
 	// string). It is ignored when the branch already exists locally or on the
 	// remote, which is the usual case for a PR-triggered action. Empty means
 	// the project's default branch.
-	BaseRef string            `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
-	Prompt  string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	BaseRef string `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	// Model pins the model the agent runs (passed as --model). Empty leaves
+	// the choice to the provider CLI's own configuration.
+	Model  string            `yaml:"model,omitempty" json:"model,omitempty"`
+	Prompt string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Post    map[string]string `yaml:"post,omitempty" json:"post,omitempty"`
 
 	// report
