@@ -814,7 +814,8 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	var found []prReviewRow
 	counts := map[string]int{}
 	order := make([]string, 0, len(specs))
-	run := ghRun{env: env, directive: directive, opts: opts}
+	gaps := &watchGaps{directive: directive, at: now.UTC()}
+	run := ghRun{env: env, directive: directive, opts: opts, gaps: gaps}
 	for _, spec := range specs {
 		rows, err := c.listPRReviewSpec(ctx, run, spec)
 		if err != nil {
@@ -889,7 +890,8 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	for _, r := range rows {
 		items = append(items, prReviewItem(directive, user, host, now, r.row, r.spec, r.detail))
 	}
-	return items, nil
+	// Report what the watch scans could not check after the PRs they found
+	return append(items, gaps.list()...), nil
 }
 
 // prDetailWorkers bounds the concurrent per-PR lookups. The calls are

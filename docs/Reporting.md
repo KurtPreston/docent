@@ -349,9 +349,15 @@ that ask `my-org/api-owners` for review.
   open PR they match is paged through. GitHub search stops at 1000 results,
   so the search asks for the most recently updated PRs first (unless the
   qualifiers set their own `sort:`), and anything past the cap is the
-  stalest. In a busy repository this search can take minutes, longer than
-  the 60-second default for a scheduled collect; raise the directive's
-  [`state.poll.timeout`](Automations.md#triggers) to fit it. `paths` is
+  stalest. A scan that leaves PRs unchecked says so with a
+  `collector_error` row alongside the PRs it did find: a `warning` when
+  search matched more PRs than it returned, giving both counts, and an
+  `error` naming each larger PR whose full file list couldn't be fetched.
+  Those PRs are left out rather than guessed at. Each row's title is stable
+  for its query, so a rule on `collector_error` fires when the gap first
+  appears, not on every poll. In a busy repository this search can take
+  minutes, longer than the 60-second default for a scheduled collect; raise
+  the directive's [`state.poll.timeout`](Automations.md#triggers) to fit it. `paths` is
   only valid with `watch`.
 - **Not capped.** The 50-PR limit on the [review pool](#prs-you-could-review)
   does not apply: you asked for this set by name, so all of it is resolved.

@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -133,7 +134,7 @@ func TestTouchesWatchPaths(t *testing.T) {
 
 func TestParseWatchSearchPages(t *testing.T) {
 	// --paginate writes one JSON document per page back to back.
-	out := []byte(`{"data":{"search":{"pageInfo":{"hasNextPage":true},"nodes":[
+	out := []byte(`{"data":{"search":{"issueCount":5,"pageInfo":{"hasNextPage":true},"nodes":[
 	  {"title":"Add endpoint","url":"https://github.com/o/r/pull/1","isDraft":false,
 	   "createdAt":"2026-05-01T00:00:00Z","updatedAt":"2026-05-02T00:00:00Z",
 	   "author":{"login":"renovate","__typename":"Bot"},
@@ -141,12 +142,16 @@ func TestParseWatchSearchPages(t *testing.T) {
 	   "repository":{"nameWithOwner":"o/r"},
 	   "files":{"totalCount":2,"nodes":[{"path":"services/api/a.go"},{"path":"go.mod"}]}},
 	  {}]}}}
-	{"data":{"search":{"pageInfo":{"hasNextPage":false},"nodes":[
+	{"data":{"search":{"issueCount":4,"pageInfo":{"hasNextPage":false},"nodes":[
 	  {"title":"Docs","url":"https://github.com/o/r/pull/2","author":{"login":"carol","__typename":"User"},
 	   "repository":{"nameWithOwner":"o/r"},"files":{"totalCount":1,"nodes":[{"path":"docs/x.md"}]}}]}}}`)
-	nodes, err := parseWatchSearchPages(out)
+	scan, err := parseWatchSearchPages(out)
 	if err != nil {
 		t.Fatal(err)
+	}
+	nodes := scan.nodes
+	if scan.matched != 5 || scan.returned != 3 {
+		t.Errorf("matched %d, returned %d; want 5 (largest issueCount) and 3 (every node, PR or not)", scan.matched, scan.returned)
 	}
 	if len(nodes) != 2 {
 		t.Fatalf("got %d nodes, want 2 (the empty non-PR node is skipped)", len(nodes))
@@ -183,7 +188,8 @@ func TestWatchSearchQSortsByUpdated(t *testing.T) {
 
 // TestFilterTouchingListsOnlyLargeMisses checks that a PR is kept when its
 // listed paths match, that only a PR with more paths than the search showed is
-// listed in full, and that matches keep the search's order.
+// listed in full, that matches keep the search's order, and that a PR whose
+// listing fails is left out and reported.
 func TestFilterTouchingListsOnlyLargeMisses(t *testing.T) {
 	node := func(url string, total int, paths ...string) watchSearchNode {
 		n := watchSearchNode{URL: url}
@@ -201,17 +207,21 @@ func TestFilterTouchingListsOnlyLargeMisses(t *testing.T) {
 		node("u/3", 500, "web/b.ts"),          // large miss, match in full list
 		node("u/4", 500, "web/c.ts"),          // large miss, no match in full list
 		node("u/5", 300, "services/api/b.go"), // large but already matching
+		node("u/6", 500, "web/d.ts"),          // large miss, listing fails
 	}
 	full := map[string][]string{"u/3": {"web/b.ts", "services/api/c.go"}, "u/4": {"web/c.ts"}}
 
 	// Record which PRs were listed in full
 	var mu sync.Mutex
 	var listed []string
-	rows := filterTouching(nodes, []string{"services/api"}, func(url string) []string {
+	rows, failed := filterTouching(nodes, []string{"services/api"}, func(url string) ([]string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		listed = append(listed, url)
-		return full[url]
+		if url == "u/6" {
+			return nil, errors.New("HTTP 502")
+		}
+		return full[url], nil
 	})
 
 	// Expect matches in search order, and full listings only for large misses
@@ -220,7 +230,10 @@ func TestFilterTouchingListsOnlyLargeMisses(t *testing.T) {
 		got = append(got, r.URL)
 	}
 	sort.Strings(listed)
-	if strings.Join(got, ",") != "u/1,u/3,u/5" || strings.Join(listed, ",") != "u/3,u/4" {
+	if strings.Join(got, ",") != "u/1,u/3,u/5" || strings.Join(listed, ",") != "u/3,u/4,u/6" {
 		t.Fatalf("rows = %v, listed = %v", got, listed)
+	}
+	if strings.Join(failed, ",") != "u/6: HTTP 502" {
+		t.Fatalf("failed = %v", failed)
 	}
 }
