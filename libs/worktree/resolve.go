@@ -199,6 +199,9 @@ func provision(ctx context.Context, root, repo, branch string, req Request, loca
 	if err != nil {
 		return "", "", false, "", err
 	}
+	// Marked under the lock Reap also takes, so a sweep never sees a tree as
+	// idle in the moment it is being handed out.
+	markUsed(ctx, dir)
 	return base, dir, created, note, nil
 }
 

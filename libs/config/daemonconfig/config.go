@@ -3,6 +3,8 @@ package daemonconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/config/configschema"
@@ -43,9 +45,13 @@ type DaemonConfig struct {
 	// needs, the dependency install, whatever else makes a fresh tree usable.
 	// docent cannot know any of that, and the alternative to a hook was handing
 	// creation to a tool that did, which put placement outside git.
-	WorktreeHook string               `yaml:"worktreeHook"`
-	SSHHost      string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
-	Directives   []userdata.Directive `yaml:"directives,omitempty"`
+	WorktreeHook string `yaml:"worktreeHook"`
+	// WorktreeRetention is how long one of docent's own worktrees may sit
+	// unused before the daemon removes it, as a Go duration ("72h"). Empty
+	// means the default; "0" or "off" keeps worktrees forever.
+	WorktreeRetention string               `yaml:"worktreeRetention,omitempty"`
+	SSHHost           string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
+	Directives        []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI and
 	// OpenTrigger are optional.
@@ -113,6 +119,29 @@ func resolveWorktreeHook(cfg DaemonConfig) string {
 		return cfg.WorktreeHook
 	}
 	return filepath.Join(docentconfig.DefaultDir(), "worktree.sh")
+}
+
+// DefaultWorktreeRetention is how long docent keeps an idle worktree when
+// worktreeRetention is unset. Long enough to span a weekend between turns of
+// the same work; short enough that daily automation branches do not pile up.
+const DefaultWorktreeRetention = 72 * time.Hour
+
+// WorktreeRetentionDuration parses WorktreeRetention. Zero means never remove;
+// an unparseable value falls back to the default rather than disabling cleanup,
+// since a typo should not quietly let the disk fill.
+func (c DaemonConfig) WorktreeRetentionDuration() time.Duration {
+	v := strings.TrimSpace(c.WorktreeRetention)
+	switch strings.ToLower(v) {
+	case "":
+		return DefaultWorktreeRetention
+	case "0", "off", "never":
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return DefaultWorktreeRetention
+	}
+	return d
 }
 
 // ResolveBindHost picks the listen interface. Precedence: an explicit -host
