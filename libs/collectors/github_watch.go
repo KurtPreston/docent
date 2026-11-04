@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,7 +67,10 @@ func (g *watchGaps) list() []StatusItem {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return append([]StatusItem(nil), g.items...)
+	// Watch queries are searched concurrently, so order by title for stable output
+	out := append([]StatusItem(nil), g.items...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Title < out[j].Title })
+	return out
 }
 
 // watchPRReviewSpecs plans one spec per declared watch query. They are searched
@@ -111,6 +115,40 @@ func (c GitHubCollector) listPRReviewSpec(ctx context.Context, run ghRun, spec p
 		return c.listOpenPRs(ctx, run.env, run.directive, run.opts, spec.args...)
 	}
 	return c.listOpenPRsTouching(ctx, run, spec)
+}
+
+// listPRReviewSpecs runs every spec's search at the same time and returns each
+// spec's rows at the spec's index, so callers still see them in precedence
+// order. The searches are independent, and one (a path-filtered watch query
+// over a busy repository) can page for a minute; run in turn, every other
+// search waited behind it. The first failing spec in order is reported, as
+// when they ran in turn.
+func (c GitHubCollector) listPRReviewSpecs(ctx context.Context, run ghRun, specs []prReviewSpec) ([][]ghSearchActivityRow, error) {
+	rows := make([][]ghSearchActivityRow, len(specs))
+	errs := make([]error, len(specs))
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < prDetailWorkers && w < len(specs); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				rows[i], errs[i] = c.listPRReviewSpec(ctx, run, specs[i])
+			}
+		}()
+	}
+	for i := range specs {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
 }
 
 //go:embed github_watch_search.graphql
