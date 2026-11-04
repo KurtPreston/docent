@@ -265,7 +265,12 @@ belongs only in the task record.
 
 ## Obstacles
 
-None encountered during planning.
+- Phase 1 validation initially hit existing test-environment assumptions:
+  bare-repository tests conflict with a restrictive user Git setting, and
+  macOS temporary-directory aliases produce duplicate paths. Validation passes
+  with a canonical `TMPDIR` and process-local
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository
+  GIT_CONFIG_VALUE_0=all`. No global Git settings or production code changed.
 
 ## Found bugs
 
