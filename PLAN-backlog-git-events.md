@@ -265,6 +265,18 @@ belongs only in the task record.
 
 ## Obstacles
 
+- Phase 4 is paused at the restart gate: the existing instance has an active
+  queue job and another queued job. Do not interrupt them. Source phases 1-3
+  are committed and validated; version-stamped Linux binaries are staged,
+  not installed. Private paths and job IDs are in the task record.
+- The staged collector and offline report pipeline were verified without
+  running the sync command or changing the daemon. An independent
+  whole-archive comparison matched event identities and status transitions,
+  including archived tasks. A daily plan retained current board context.
+  Measurements and report evidence are in the private task record.
+- The embedded dashboard build initially lacked TypeScript dependencies.
+  Restoring the locked dependencies with `npm ci` resolved this; the
+  production dashboard build and Linux cross-compilation then succeeded.
 - Phase 1 validation initially hit existing test-environment assumptions:
   bare-repository tests conflict with a restrictive user Git setting, and
   macOS temporary-directory aliases produce duplicate paths. Validation passes
@@ -276,3 +288,6 @@ belongs only in the task record.
 
 None identified outside this effort. Backlog's absence from reports and the
 loss of detailed task activity in count-only rendering are in scope.
+The test-environment failures described above are tracked separately; no
+unrelated product changes were made. The deterministic daily-plan renderer's
+omission of Backlog activity was fixed as part of report integration.
