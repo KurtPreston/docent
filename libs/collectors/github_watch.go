@@ -27,6 +27,10 @@ type ghRun struct {
 	directive userdata.Directive
 	opts      *CollectOpts
 	gaps      *watchGaps
+	// user and host say whose view of GitHub a watch cache holds.
+	user, host string
+	// now reads the wall clock, for stamping when a scan ran.
+	now func() time.Time
 }
 
 // watchGaps records the open PRs a watch scan could not check, so a scan that
@@ -136,13 +140,17 @@ type watchScan struct {
 
 // watchSearchNode is one PR from watchSearchQuery.
 type watchSearchNode struct {
-	Title     string  `json:"title"`
-	URL       string  `json:"url"`
-	IsDraft   bool    `json:"isDraft"`
-	CreatedAt string  `json:"createdAt"`
-	UpdatedAt string  `json:"updatedAt"`
-	Author    ghActor `json:"author"`
-	Assignees struct {
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	IsDraft   bool   `json:"isDraft"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+	// HeadRefOid and BaseRefName pin what a membership verdict was computed
+	// against.
+	HeadRefOid  string  `json:"headRefOid"`
+	BaseRefName string  `json:"baseRefName"`
+	Author      ghActor `json:"author"`
+	Assignees   struct {
 		Nodes []struct {
 			Login string `json:"login"`
 		} `json:"nodes"`
@@ -164,6 +172,7 @@ type watchSearchNode struct {
 // silently.
 func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spec prReviewSpec) ([]ghSearchActivityRow, error) {
 	q := watchSearchQ(spec.args)
+	started := run.clock()
 	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
 	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
 	if err != nil {
@@ -186,13 +195,26 @@ func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spe
 	}
 
 	// Filter by path, then report any PR whose file list could not be read
-	rows, failed := filterTouching(scan.nodes, spec.paths, func(url string) ([]string, error) {
+	verdicts := classifyTouching(scan.nodes, spec.paths, func(url string) ([]string, error) {
 		return c.listPRFiles(ctx, run, url)
 	})
+	rows, failed := touchingRows(scan.nodes, verdicts)
 	if len(failed) > 0 {
 		run.gaps.add(fmt.Sprintf("watch %q file listings failed", name), fmt.Sprintf(
 			"could not list the files of %d PR(s), so they were left out of the watched set: %s",
 			len(failed), strings.Join(failed, "; ")), "error")
+	}
+
+	// Remember what this scan learned, for later scans of the same query
+	if ctx.Err() == nil {
+		cache := newWatchCache(q, spec.paths)
+		cache.ScannedAt = started.UTC()
+		cache.Truncated = scan.matched > scan.returned
+		cache.Covered = !cache.Truncated
+		for i, n := range scan.nodes {
+			cache.PRs[n.URL] = n.cacheEntry(verdicts[i])
+		}
+		run.saveWatchCache(q, spec.paths, cache)
 	}
 	return rows, nil
 }
@@ -217,14 +239,26 @@ func watchSearchQ(args []string) string {
 // can need dozens, so they run concurrently. A PR whose listing fails is left
 // out and returned in failed, as "URL: error", in search order.
 func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) ([]string, error)) (rows []ghSearchActivityRow, failed []string) {
-	keep := make([]bool, len(nodes))
-	errs := make([]error, len(nodes))
+	return touchingRows(nodes, classifyTouching(nodes, paths, listFiles))
+}
+
+// touchVerdict is whether one PR changes a file under the watched paths. err
+// is set when its files couldn't be listed, so the answer is unknown.
+type touchVerdict struct {
+	touches bool
+	err     error
+}
+
+// classifyTouching decides each node's membership, as filterTouching
+// describes, and returns one verdict per node in the same order.
+func classifyTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) ([]string, error)) []touchVerdict {
+	verdicts := make([]touchVerdict, len(nodes))
 	var full []int
 	for i, n := range nodes {
 		shown := n.filePaths()
 		switch {
 		case touchesWatchPaths(shown, paths):
-			keep[i] = true
+			verdicts[i].touches = true
 		case n.Files.TotalCount > len(shown):
 			full = append(full, i)
 		}
@@ -239,7 +273,7 @@ func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url 
 			defer wg.Done()
 			for i := range work {
 				files, err := listFiles(nodes[i].URL)
-				keep[i], errs[i] = err == nil && touchesWatchPaths(files, paths), err
+				verdicts[i] = touchVerdict{touches: err == nil && touchesWatchPaths(files, paths), err: err}
 			}
 		}()
 	}
@@ -248,14 +282,18 @@ func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url 
 	}
 	close(work)
 	wg.Wait()
+	return verdicts
+}
 
-	// Return the matches and failures in the order the search gave them
+// touchingRows returns the matches and the failures, as "URL: error", in the
+// order the search gave them.
+func touchingRows(nodes []watchSearchNode, verdicts []touchVerdict) (rows []ghSearchActivityRow, failed []string) {
 	for i, n := range nodes {
 		switch {
-		case keep[i]:
+		case verdicts[i].touches:
 			rows = append(rows, n.searchRow())
-		case errs[i] != nil:
-			failed = append(failed, fmt.Sprintf("%s: %v", n.URL, errs[i]))
+		case verdicts[i].err != nil:
+			failed = append(failed, fmt.Sprintf("%s: %v", n.URL, verdicts[i].err))
 		}
 	}
 	return rows, failed

@@ -125,6 +125,11 @@ type fixturePR struct {
 	Paths      []string
 	TotalFiles int
 	UpdatedAt  string
+	// CreatedAt, Head, and Base default to a fixed date, "sha-<number>",
+	// and "main".
+	CreatedAt string
+	Head      string
+	Base      string
 }
 
 // url is the PR's address in the fixture repository.
@@ -149,9 +154,20 @@ func watchPageJSON(t *testing.T, prs ...fixturePR) string {
 		if updated == "" {
 			updated = "2026-01-02T00:00:00Z"
 		}
+		created, head, base := p.CreatedAt, p.Head, p.Base
+		if created == "" {
+			created = "2026-01-01T00:00:00Z"
+		}
+		if head == "" {
+			head = fmt.Sprintf("sha-%d", p.Number)
+		}
+		if base == "" {
+			base = "main"
+		}
 		nodes = append(nodes, map[string]any{
 			"title": fmt.Sprintf("PR %d", p.Number), "url": p.url(), "isDraft": false,
-			"createdAt": "2026-01-01T00:00:00Z", "updatedAt": updated,
+			"createdAt": created, "updatedAt": updated,
+			"headRefOid": head, "baseRefName": base,
 			"author":     map[string]string{"login": p.Author, "__typename": "User"},
 			"assignees":  map[string]any{"nodes": []any{}},
 			"repository": map[string]string{"nameWithOwner": "my-org/my-repo"},

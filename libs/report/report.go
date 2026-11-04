@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -74,7 +75,10 @@ type Options struct {
 	DebugDir string
 	// LogsDir is the parent of logs/<run>/ when DebugDir is empty.
 	// Empty defaults to docentconfig.StateDir(). Ignored when DebugDir is set.
-	LogsDir   string
+	LogsDir string
+	// CacheDir is where collectors keep state between runs. Empty defaults to
+	// a cache directory beside the run logs when Generate creates them.
+	CacheDir  string
 	StreamOut io.Writer
 	// OnPhase reports coarse pipeline phases ("collecting", "correlating",
 	// "generating"). Nil is fine.
@@ -92,6 +96,8 @@ type CollectOptions struct {
 	ExpandRepoPath    func(string) string
 	OnDirectiveUpdate func(collectors.DirectiveProgress)
 	RunLog            collectors.RunLog
+	// CacheDir is passed to collectors as CollectOpts.CacheDir.
+	CacheDir string
 }
 
 // RenderOptions are the render-only knobs shared by Generate and the CLI.
@@ -160,6 +166,9 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 			return Result{}, fmt.Errorf("create run log: %w", err)
 		}
 		opts.DebugDir = run.Dir()
+		if strings.TrimSpace(opts.CacheDir) == "" {
+			opts.CacheDir = filepath.Join(logsParent, "cache")
+		}
 		if opts.RunLog == nil {
 			opts.RunLog = runLogAdapter{run: run}
 		}
@@ -182,6 +191,7 @@ func Generate(ctx context.Context, cfg userdata.ConfigFile, opts Options) (Resul
 		ExpandRepoPath:    opts.ExpandRepoPath,
 		OnDirectiveUpdate: opts.OnDirectiveUpdate,
 		RunLog:            opts.RunLog,
+		CacheDir:          opts.CacheDir,
 	})
 	if err != nil {
 		return Result{}, err
@@ -263,6 +273,7 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 		Scope:              collectors.Scope(resolved.Scope),
 		OnlyCollectorTypes: resolved.Collectors,
 		RunLog:             opts.RunLog,
+		CacheDir:           opts.CacheDir,
 		// Collectors that stamp ticket fields need the same matching config
 		// the report stage uses, or a zero Config disables matching entirely
 		// and local-git silently stops anchoring commits and reflog rows to

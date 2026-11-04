@@ -815,7 +815,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	counts := map[string]int{}
 	order := make([]string, 0, len(specs))
 	gaps := &watchGaps{directive: directive, at: now.UTC()}
-	run := ghRun{env: env, directive: directive, opts: opts, gaps: gaps}
+	run := ghRun{env: env, directive: directive, opts: opts, gaps: gaps, user: user, host: host, now: c.clockNow}
 	for _, spec := range specs {
 		rows, err := c.listPRReviewSpec(ctx, run, spec)
 		if err != nil {

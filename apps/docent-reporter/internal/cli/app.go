@@ -294,7 +294,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 			tracker.Update(p, a.Now())
 			progress.Update(p)
 		},
-		RunLog: runLogAdapter{run: run},
+		RunLog:   runLogAdapter{run: run},
+		CacheDir: filepath.Join(logsParent, "cache"),
 	})
 	stopAbort()
 	collectDuration := a.Now().Sub(collectStart)
