@@ -611,6 +611,8 @@ all of these with a marker carrying the head commit.
   actions:
     - type: agent-inline
       provider: copilot
+      # Pin the reviewer's model so a local CLI settings change can't swap it
+      model: claude-sonnet-4.5
       workdir: worktree
       prompt: |-
         You are an autonomous, narrowly scoped PR reviewer, running in a fresh
