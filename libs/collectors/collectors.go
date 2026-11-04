@@ -106,6 +106,10 @@ type CollectOpts struct {
 	// correlation.Config so generic scanning stays gated on JIRA /
 	// ticketProjects rather than inventing keys from Dependabot branches.
 	CorrCfg correlation.Config
+	// CacheDir is where collectors may keep state between runs, such as what
+	// an earlier GitHub watch scan learned. Empty disables such caches, so
+	// each run starts from scratch.
+	CacheDir string
 }
 
 // DirectiveLogger captures per-directive HTTP and subprocess
