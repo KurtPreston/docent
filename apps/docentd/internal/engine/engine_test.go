@@ -30,6 +30,8 @@ func newTestEngine(t *testing.T) *Engine {
 	// Tests that assert the no-jira gate construct Engine via New directly.
 	e := New(config.DaemonConfig{}, store)
 	e.corrCfg.AllowGeneric = true
+	// Each test gets its own transition baselines, so none restores another's
+	e.baselines = &baselineStore{dir: t.TempDir()}
 	return e
 }
 

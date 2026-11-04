@@ -43,14 +43,26 @@ whose workflows inspired a feature.
 These boundaries keep maintenance commands usable without a running daemon
 and make it clear which process owns background work.
 
-## Release-based rollout
+## Shipping changes
 
-Roll out changes through a reviewed pull request, merge, and published
-release, then run `docent update` on installed machines. Do not replace
-working installations with ad hoc branch builds: released artifacts keep
-versions consistent and exercise the supported upgrade path.
+Every change to docent, including a fix for the maintainer's own setup, ships
+the same way:
+
+1. Commit on a branch, never directly on `main`.
+2. Open a pull request and let CI pass.
+3. Merge it into `main`.
+4. Push a `vX.Y.Z` tag, which runs the release workflow.
+5. Install it with `docent update`.
+
+Don't build docent from a working tree and copy the binaries into place, or
+restart a daemon onto unreleased code. A machine should only ever run a
+tagged release.
 
 A merge alone does not publish binaries; the release workflow runs on
 version tags. Wait for its artifacts before updating. Check for active jobs
 before allowing the updater to restart a daemon; use `--restart never` when
 installation must be separated from a later, safe restart.
+
+Why: every installed docent then matches a published release, which keeps
+`docent update` and `--version` meaningful, exercises the supported upgrade
+path, and ensures every change has been through review and CI.

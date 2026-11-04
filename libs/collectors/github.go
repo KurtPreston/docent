@@ -187,12 +187,22 @@ func (c GitHubCollector) ghContext(directive userdata.Directive, opts *CollectOp
 // See buildPRReviewSpecs.
 func (c GitHubCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	user, host, env := c.ghContext(directive, opts)
+
+	// The recently-closed lookups are independent of the open-PR ones, so run
+	// them alongside rather than after the open-PR searches and detail fetches.
+	var closed []StatusItem
+	var closedErr error
+	closedDone := make(chan struct{})
+	go func() {
+		defer close(closedDone)
+		closed, closedErr = c.collectClosedPRs(ctx, env, directive, user, host, opts)
+	}()
 	items, err := c.collectPRReviewStatus(ctx, env, directive, user, host, opts)
+	<-closedDone
 	if err != nil {
 		return nil, err
 	}
-	closed, err := c.collectClosedPRs(ctx, env, directive, user, host, opts)
-	if err != nil {
+	if err := closedErr; err != nil {
 		// Reported but not fatal. The recently-closed rows only enrich the
 		// standup; the open-PR rows above are what the dashboard and every
 		// automation run on, and losing those to a failed extra search would be
@@ -816,11 +826,12 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	order := make([]string, 0, len(specs))
 	gaps := &watchGaps{directive: directive, at: now.UTC()}
 	run := ghRun{env: env, directive: directive, opts: opts, gaps: gaps, user: user, host: host, now: c.clockNow, watch: &watchSession{}}
-	for _, spec := range specs {
-		rows, err := c.listPRReviewSpec(ctx, run, spec)
-		if err != nil {
-			return nil, err
-		}
+	listed, err := c.listPRReviewSpecs(ctx, run, specs)
+	if err != nil {
+		return nil, err
+	}
+	for i, spec := range specs {
+		rows := listed[i]
 		for _, row := range rows {
 			found = append(found, prReviewRow{spec: spec.forRow(row, user), row: row})
 		}

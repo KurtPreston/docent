@@ -12,17 +12,33 @@ import (
 	"github.com/KurtPreston/docent/libs/config/userdata"
 )
 
+// backlogHistory holds per-run caches. Parsed tasks are keyed by blob hash and
+// shared between snapshots, so cached values (including Sections) are
+// read-only once stored.
 type backlogHistory struct {
 	cfg    backlogConfig
 	opts   *CollectOpts
 	prefix string
 	blobs  map[string][]byte
+	tasks  map[string]backlogSnapshotTask
+	// parses and snapshots count work done, for tests and diagnostics.
+	parses, snapshots int
 }
 
 type backlogRevision struct {
 	hash, parent string
 	author       string
 	at           time.Time
+}
+
+// backlogSnapshotRef is one assembled snapshot retained for reuse.
+type backlogSnapshotRef struct {
+	revision string
+	tasks    map[string]backlogSnapshotTask
+}
+
+func newBacklogHistory(cfg backlogConfig, opts *CollectOpts) *backlogHistory {
+	return &backlogHistory{cfg: cfg, opts: opts, blobs: map[string][]byte{}, tasks: map[string]backlogSnapshotTask{}}
 }
 
 // CollectEvents reads committed snapshots only; state collection remains usable
@@ -39,17 +55,23 @@ func (c BacklogCollector) CollectEvents(ctx context.Context, directive userdata.
 			return nil, fmt.Errorf("backlog: pull_command failed: %w", err)
 		}
 	}
-	h := backlogHistory{cfg: cfg, opts: opts, blobs: map[string][]byte{}}
-	revisions, err := h.revisions(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var since time.Time
 	if opts != nil {
 		since = opts.Since
 	}
-	until := opts.windowEnd(c.Clock)
+	return newBacklogHistory(cfg, opts).events(ctx, since, opts.windowEnd(c.Clock))
+}
+
+// events compares each in-window first-parent commit with its parent. A
+// commit's snapshot is usually the previous in-window commit's parent, so only
+// that one snapshot is retained rather than every whole-board map.
+func (h *backlogHistory) events(ctx context.Context, since, until time.Time) ([]StatusItem, error) {
+	revisions, err := h.revisions(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var items []StatusItem
+	var previous backlogSnapshotRef
 	for i, rev := range revisions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -57,10 +79,12 @@ func (c BacklogCollector) CollectEvents(ctx context.Context, directive userdata.
 		if rev.at.Before(since) || rev.at.After(until) {
 			continue
 		}
-		reportProgress(opts, DirectiveProgress{
-			DirectiveID: directive.ID, Status: "running", Detail: "reading task history",
+		reportProgress(h.opts, DirectiveProgress{
+			DirectiveID: h.cfg.directiveID, Status: "running", Detail: "reading task history",
 			Completed: i, Total: len(revisions),
 		})
+
+		// Read the parent first so a missing parent reports the history error.
 		before := map[string]backlogSnapshotTask{}
 		if rev.parent != "" {
 			before, err = h.snapshot(ctx, rev.parent)
@@ -68,11 +92,16 @@ func (c BacklogCollector) CollectEvents(ctx context.Context, directive userdata.
 				return nil, fmt.Errorf("backlog history: cannot compare parent of %s (restore missing or shallow history): %w", rev.hash, err)
 			}
 		}
-		after, err := h.snapshot(ctx, rev.hash)
-		if err != nil {
-			return nil, err
+
+		// Reuse the previous parent snapshot when it is this commit.
+		after := previous.tasks
+		if previous.revision != rev.hash || after == nil {
+			if after, err = h.snapshot(ctx, rev.hash); err != nil {
+				return nil, err
+			}
 		}
-		items = append(items, backlogRevisionEvents(cfg.directiveID, rev, backlogSnapshots{before, after})...)
+		previous = backlogSnapshotRef{revision: rev.parent, tasks: before}
+		items = append(items, backlogRevisionEvents(h.cfg.directiveID, rev, backlogSnapshots{before, after})...)
 	}
 	return items, nil
 }

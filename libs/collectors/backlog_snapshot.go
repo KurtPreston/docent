@@ -53,26 +53,38 @@ func (h *backlogHistory) snapshot(ctx context.Context, revision string) (map[str
 			if file.mode != "100644" && file.mode != "100755" {
 				return nil, fmt.Errorf("backlog history: task %s is not a regular file", name)
 			}
-			wanted = append(wanted, file.hash)
+			if _, parsed := h.tasks[file.hash]; !parsed {
+				wanted = append(wanted, file.hash)
+			}
 		}
 	}
 	if err := h.loadBlobs(ctx, wanted); err != nil {
 		return nil, err
 	}
+
+	// Parse each task blob once per run; IDs are validated per snapshot.
 	tasks := map[string]backlogSnapshotTask{}
 	for name, file := range files {
 		if !backlogTaskPath(name, dir) {
 			continue
 		}
-		task, err := parseBacklogSnapshot(h.blobs[file.hash])
-		if err != nil {
-			return nil, fmt.Errorf("backlog history %s file %s: %w", revision, name, err)
+		task, parsed := h.tasks[file.hash]
+		if !parsed {
+			task, err = parseBacklogSnapshot(h.blobs[file.hash])
+			if err != nil {
+				return nil, fmt.Errorf("backlog history %s file %s: %w", revision, name, err)
+			}
+			h.parses++
+			h.tasks[file.hash] = task
+			// The parsed form replaces the raw bytes for the rest of the run.
+			delete(h.blobs, file.hash)
 		}
 		if _, duplicate := tasks[task.ID]; duplicate {
 			return nil, fmt.Errorf("backlog history %s: duplicate task ID %s", revision, task.ID)
 		}
 		tasks[task.ID] = task
 	}
+	h.snapshots++
 	return tasks, nil
 }
 
