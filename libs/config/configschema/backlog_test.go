@@ -46,6 +46,18 @@ func TestValidateYAML_backlogQueueAccepted(t *testing.T) {
 	if err := configschema.ValidateYAML([]byte(strings.TrimSpace(backlogQueueDoc))); err != nil {
 		t.Fatalf("backlog queue config should validate: %v", configschema.ValidationProblems(err))
 	}
+
+}
+
+func TestValidateYAML_backlogGitEvents(t *testing.T) {
+	for _, value := range []string{`"true"`, `"false"`, `"yes"`, `true`} {
+		doc := strings.Replace(backlogQueueDoc, "      board: ~/tasks", "      board: ~/tasks\n      git_events: "+value, 1)
+		err := configschema.ValidateYAML([]byte(doc))
+		wantValid := value == `"true"` || value == `"false"`
+		if (err == nil) != wantValid {
+			t.Errorf("git_events=%s: %v", value, err)
+		}
+	}
 }
 
 func TestValidateYAML_backlogQueueRejectsBadShape(t *testing.T) {

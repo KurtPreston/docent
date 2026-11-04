@@ -1322,6 +1322,12 @@
           "type": "object",
           "required": ["board"],
           "properties": {
+            "git_events": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "Opt in to committed Backlog task history for event reports (default false). Git commit times are recording times, not exact work times.",
+              "x-docent-setup-skip-prompt": true
+            },
             "board": {
               "type": "string",
               "description": "Backlog.md board directory, passed to the CLI as BACKLOG_CWD. A leading ~ expands to your home directory.",
@@ -1340,7 +1346,7 @@
             },
             "statuses": {
               "type": "string",
-              "description": "Comma-separated statuses to collect (default all). Archived tasks are always skipped.",
+              "description": "Comma-separated statuses for current state (default all). Archived tasks are skipped in state only; this filter does not restrict Git events.",
               "x-docent-setup-skip-prompt": true
             },
             "queue_label": {
