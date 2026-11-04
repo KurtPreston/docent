@@ -151,6 +151,15 @@ func NestRepoChronologicalDepth(f ActivityFormatter) ActivityFormatter {
 
 // formatSignalLine is a compact, model-friendly human line per StatusItem (RFC3339, source, kind, details).
 func formatSignalLine(s collectors.StatusItem) string {
+	if s.Source == "backlog" {
+		if s.Kind == "task" {
+			return fmt.Sprintf("- current board state (not activity): %s %s [%s]", s.Fields["id"], s.Title, s.Fields["status"])
+		}
+		if s.Kind == "task_activity" {
+			return fmt.Sprintf("- recorded %s: %s %s; commit %s (recording time, not exact work time); changes: %s",
+				s.ObservedAt.Format(time.RFC3339), s.Fields["id"], s.Title, s.Fields["commit"], s.Fields["changes"])
+		}
+	}
 	src := strings.TrimSpace(s.Source)
 	if src == "" {
 		src = "(unknown)"

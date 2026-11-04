@@ -269,7 +269,7 @@ func TestBacklogCollector_ValidateDirective(t *testing.T) {
 
 func TestBacklogCollector_Registered(t *testing.T) {
 	state, events := NewRegistry(nil).Capabilities("backlog")
-	if !state || events {
-		t.Fatalf("backlog should be state-only, got state=%v events=%v", state, events)
+	if !state || !events {
+		t.Fatalf("backlog should support state and opt-in events, got state=%v events=%v", state, events)
 	}
 }

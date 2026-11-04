@@ -63,6 +63,7 @@ type backlogConfig struct {
 	statuses    map[string]bool
 	queueLabel  string
 	queueStatus string
+	gitEvents   bool
 }
 
 // backlogReservedFields are the fields a plan header line may not override.
@@ -87,6 +88,13 @@ func parseBacklogConfig(directive userdata.Directive) (backlogConfig, error) {
 		pullCommand: strings.TrimSpace(directive.Config["pull_command"]),
 		queueLabel:  strings.TrimSpace(directive.Config["queue_label"]),
 		queueStatus: strings.TrimSpace(directive.Config["queue_status"]),
+	}
+	switch value := strings.TrimSpace(directive.Config["git_events"]); value {
+	case "", "false":
+	case "true":
+		cfg.gitEvents = true
+	default:
+		return backlogConfig{}, fmt.Errorf("config.git_events must be \"true\" or \"false\"")
 	}
 
 	// Fill defaults for the command and queue status
@@ -318,10 +326,14 @@ func parsePlanHeaders(plan string) map[string]string {
 func (c BacklogCollector) ValidateDirective(ctx context.Context, directive userdata.Directive, opts *ValidateOpts) []ValidationIssue {
 	cfg, err := parseBacklogConfig(directive)
 	if err != nil {
+		field := "config.board"
+		if strings.Contains(err.Error(), "config.git_events") {
+			field = "config.git_events"
+		}
 		return []ValidationIssue{{
-			Field:       "config.board",
+			Field:       field,
 			Message:     err.Error(),
-			Remediation: "set config.board to the directory that contains the board's backlog/ folder",
+			Remediation: "set config.board to the board directory and config.git_events to \"true\" or \"false\"",
 		}}
 	}
 
@@ -342,6 +354,15 @@ func (c BacklogCollector) ValidateDirective(ctx context.Context, directive userd
 			Message:     fmt.Sprintf("%q not found on PATH", cfg.command[0]),
 			Remediation: "install the Backlog.md CLI (npm i -g backlog.md) or set config.command to its path",
 		})
+	}
+	if cfg.gitEvents {
+		h := backlogHistory{cfg: cfg}
+		if _, err := h.git(ctx, []string{"rev-parse", "--show-toplevel"}, ""); err != nil {
+			issues = append(issues, ValidationIssue{
+				Field: "config.git_events", Message: err.Error(),
+				Remediation: "install Git and use a board checkout with local commit history, or disable git_events",
+			})
+		}
 	}
 	return issues
 }

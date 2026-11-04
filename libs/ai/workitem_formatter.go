@@ -27,7 +27,7 @@ func FormatWorkItems(items []model.WorkItem, formatter ActivityFormatter) (strin
 	if formatter != nil && formatter.Name() == activityFormatterJSONSignalList {
 		return formatWorkItemsJSON(items)
 	}
-	return formatWorkItemsMarkdown(items, 2), nil
+	return formatWorkItemsMarkdown(items, 2)
 }
 
 // NestWorkItemDepth bumps Markdown heading depth for nesting under a ##
@@ -39,13 +39,13 @@ func NestWorkItemDepth(headingLevel int) int {
 	return headingLevel
 }
 
-func formatWorkItemsMarkdown(items []model.WorkItem, headingLevel int) string {
+func formatWorkItemsMarkdown(items []model.WorkItem, headingLevel int) (string, error) {
 	if headingLevel < 2 {
 		headingLevel = 2
 	}
 	prefix := strings.Repeat("#", headingLevel) + " "
 	if len(items) == 0 {
-		return "_No work items in this window._"
+		return "_No work items in this window._", nil
 	}
 
 	// Stable order: last activity desc, then key.
@@ -107,6 +107,14 @@ func formatWorkItemsMarkdown(items []model.WorkItem, headingLevel int) string {
 		// Compact entity tally (exclude PRs already listed).
 		counts := map[string]int{}
 		for _, ent := range wi.Entities {
+			if ent.Coordinates["backlog_board"] != "" {
+				detail, err := formatBacklogEntity(ent)
+				if err != nil {
+					return "", err
+				}
+				b.WriteString(detail)
+				continue
+			}
 			if strings.Contains(ent.Kind, "pr") {
 				continue
 			}
@@ -130,7 +138,7 @@ func formatWorkItemsMarkdown(items []model.WorkItem, headingLevel int) string {
 		}
 		b.WriteByte('\n')
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
 func formatWorkItemsJSON(items []model.WorkItem) (string, error) {
