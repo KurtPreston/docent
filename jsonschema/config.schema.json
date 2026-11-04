@@ -167,6 +167,7 @@
         "provider": { "type": "string" },
         "workdir": { "type": "string", "enum": ["worktree", "open_path"] },
         "base_ref": { "type": "string" },
+        "model": { "type": "string", "description": "Model the agent runs, passed to the provider CLI as --model." },
         "prompt": { "type": "string" },
         "post": {
           "type": "object",

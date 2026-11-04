@@ -536,3 +536,28 @@ directives:
 		})
 	}
 }
+
+func TestValidateYAML_automationActionModel(t *testing.T) {
+	doc := `
+automations:
+  - id: review
+    enabled: true
+    trigger:
+      type: schedule
+      at: "04:00"
+    actions:
+      - type: agent-inline
+        provider: copilot
+        model: some-model
+        prompt: review
+`
+	if err := configschema.ValidateYAML([]byte(strings.TrimSpace(doc))); err != nil {
+		t.Fatalf("model rejected: %v", configschema.ValidationProblems(err))
+	}
+
+	// A non-string model is still a schema error
+	bad := strings.Replace(doc, "model: some-model", "model: [a, b]", 1)
+	if err := configschema.ValidateYAML([]byte(strings.TrimSpace(bad))); err == nil {
+		t.Fatal("expected schema rejection for a non-string model")
+	}
+}
