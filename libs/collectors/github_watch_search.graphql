@@ -1,14 +1,16 @@
 # Lists open PRs matching a watch query's qualifiers, with the paths each one
 # changes, so the collector can filter by path without a call per PR. The
 # caller prepends "is:pr is:open" to $q and pages with --paginate. issueCount
-# tells the caller when GitHub's 1000-result cap cut the scan short.
+# tells the caller when GitHub's 1000-result cap cut the scan short. The head
+# commit and base branch let a later scan reuse a PR's path membership while
+# neither has moved.
 query($q: String!, $endCursor: String) {
   search(query: $q, type: ISSUE, first: 50, after: $endCursor) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        title url isDraft createdAt updatedAt
+        title url isDraft createdAt updatedAt headRefOid baseRefName
         author { login __typename }
         assignees(first: 20) { nodes { login } }
         repository { nameWithOwner }

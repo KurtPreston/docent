@@ -355,10 +355,24 @@ that ask `my-org/api-owners` for review.
   `error` naming each larger PR whose full file list couldn't be fetched.
   Those PRs are left out rather than guessed at. Each row's title is stable
   for its query, so a rule on `collector_error` fires when the gap first
-  appears, not on every poll. In a busy repository this search can take
+  appears, not on every poll. In a busy repository the first scan can take
   minutes, longer than the 60-second default for a scheduled collect; raise
   the directive's [`state.poll.timeout`](Automations.md#triggers) to fit it. `paths` is
   only valid with `watch`.
+- **Path scans are incremental.** After a full scan, docent caches each
+  PR's verdict, keyed by its head and base, under
+  `<state dir>/cache/github-watch/` (the CLI uses a `cache` directory beside
+  its logs). Later collects search only PRs updated since the last scan and
+  reuse verdicts whose head and base are unchanged. A failed or undecided file
+  lookup is retried rather than cached. Each collect also re-checks a slice of
+  older PRs, newest first, to drop ones that left the query without an update;
+  a full lap ends when the slice reaches the oldest match, which also clears
+  the truncation warning once every match has been checked. A slice that
+  fails adds a `watch "…" reconciliation failed` warning. The cache is
+  replaced by a full scan when it is more than 24 hours old, unreadable, or
+  when the update search itself is truncated. Queries that set their own
+  `sort:`, `updated:`, or `created:` always scan in full. Deleting the
+  directory is always safe.
 - **Not capped.** The 50-PR limit on the [review pool](#prs-you-could-review)
   does not apply: you asked for this set by name, so all of it is resolved.
 - **Open PRs only.** Watch queries are skipped by the

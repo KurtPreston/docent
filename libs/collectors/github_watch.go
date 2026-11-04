@@ -28,6 +28,13 @@ type ghRun struct {
 	directive userdata.Directive
 	opts      *CollectOpts
 	gaps      *watchGaps
+	// user and host say whose view of GitHub a watch cache holds.
+	user, host string
+	// now reads the wall clock, for stamping when a scan ran.
+	now func() time.Time
+	// watch holds this run's watch caches until the PRs they found have been
+	// looked up, which can show some of them have since left the watched set.
+	watch *watchSession
 }
 
 // watchGaps records the open PRs a watch scan could not check, so a scan that
@@ -158,8 +165,12 @@ var watchSearchQuery string
 type watchSearchPage struct {
 	Data struct {
 		Search struct {
-			IssueCount int               `json:"issueCount"`
-			Nodes      []watchSearchNode `json:"nodes"`
+			IssueCount int `json:"issueCount"`
+			PageInfo   struct {
+				HasNextPage bool   `json:"hasNextPage"`
+				EndCursor   string `json:"endCursor"`
+			} `json:"pageInfo"`
+			Nodes []watchSearchNode `json:"nodes"`
 		} `json:"search"`
 	} `json:"data"`
 }
@@ -174,13 +185,17 @@ type watchScan struct {
 
 // watchSearchNode is one PR from watchSearchQuery.
 type watchSearchNode struct {
-	Title     string  `json:"title"`
-	URL       string  `json:"url"`
-	IsDraft   bool    `json:"isDraft"`
-	CreatedAt string  `json:"createdAt"`
-	UpdatedAt string  `json:"updatedAt"`
-	Author    ghActor `json:"author"`
-	Assignees struct {
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	IsDraft   bool   `json:"isDraft"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+	// HeadRefOid and BaseRefName pin what a membership verdict was computed
+	// against.
+	HeadRefOid  string  `json:"headRefOid"`
+	BaseRefName string  `json:"baseRefName"`
+	Author      ghActor `json:"author"`
+	Assignees   struct {
 		Nodes []struct {
 			Login string `json:"login"`
 		} `json:"nodes"`
@@ -196,11 +211,30 @@ type watchSearchNode struct {
 	} `json:"files"`
 }
 
-// listOpenPRsTouching runs a path-filtered watch query: every page of the
-// GraphQL search, then the PRs that change a file under one of its paths.
-// PRs the scan could not check are recorded in run.gaps rather than dropped
-// silently.
+// listOpenPRsTouching runs a path-filtered watch query. With a usable cache
+// from an earlier run it searches only what changed since; otherwise it scans
+// the whole query. PRs a scan could not check are recorded in run.gaps rather
+// than dropped silently.
 func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spec prReviewSpec) ([]ghSearchActivityRow, error) {
+	q := watchSearchQ(spec.args)
+	started := run.clock()
+	path := ""
+	if watchCacheable(spec.args) {
+		path = run.watchCachePath(q, spec.paths)
+	}
+	if cache := run.loadWatchCache(path, started); cache != nil {
+		rows, ok, err := c.scanWatchIncremental(ctx, run, watchScanJob{spec: spec, path: path, started: started, cache: cache})
+		if err != nil || ok {
+			return rows, err
+		}
+	}
+	return c.scanWatchFull(ctx, run, watchScanJob{spec: spec, path: path, started: started})
+}
+
+// scanWatchFull pages through every PR a watch query matches, then keeps the
+// ones that change a file under one of its paths.
+func (c GitHubCollector) scanWatchFull(ctx context.Context, run ghRun, job watchScanJob) ([]ghSearchActivityRow, error) {
+	spec := job.spec
 	q := watchSearchQ(spec.args)
 	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
 	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
@@ -212,11 +246,7 @@ func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spe
 		return nil, fmt.Errorf("parse search %q: %w", q, err)
 	}
 
-	// Name the scan the way the config does, falling back to its search
-	name := spec.relation
-	if name == "" {
-		name = q
-	}
+	name := watchName(spec)
 	if scan.matched > scan.returned {
 		run.gaps.add(fmt.Sprintf("watch %q scan truncated", name), fmt.Sprintf(
 			"search %q matched %d open PRs but GitHub search returned only %d; the last %d in search order were not checked against the watched paths",
@@ -224,15 +254,37 @@ func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spe
 	}
 
 	// Filter by path, then report any PR whose file list could not be read
-	rows, failed := filterTouching(scan.nodes, spec.paths, func(url string) ([]string, error) {
+	verdicts := classifyTouching(scan.nodes, spec.paths, func(url string) ([]string, error) {
 		return c.listPRFiles(ctx, run, url)
 	})
+	rows, failed := touchingRows(scan.nodes, verdicts)
 	if len(failed) > 0 {
 		run.gaps.add(fmt.Sprintf("watch %q file listings failed", name), fmt.Sprintf(
 			"could not list the files of %d PR(s), so they were left out of the watched set: %s",
 			len(failed), strings.Join(failed, "; ")), "error")
 	}
+
+	// Remember what this scan learned, for later scans of the same query
+	if job.path != "" {
+		cache := newWatchCache(q, spec.paths)
+		cache.ScannedAt = job.started.UTC()
+		cache.Truncated = scan.matched > scan.returned
+		cache.Covered = !cache.Truncated
+		for i, n := range scan.nodes {
+			cache.PRs[n.URL] = n.cacheEntry(verdicts[i])
+		}
+		run.watch.hold(ctx, run, &watchScanState{job: job, cache: cache})
+	}
 	return rows, nil
+}
+
+// watchName names a watch query the way the config does, falling back to its
+// search.
+func watchName(spec prReviewSpec) string {
+	if spec.relation != "" {
+		return spec.relation
+	}
+	return watchSearchQ(spec.args)
 }
 
 // watchSearchQ builds the search string for a watch query. GitHub search
@@ -255,14 +307,26 @@ func watchSearchQ(args []string) string {
 // can need dozens, so they run concurrently. A PR whose listing fails is left
 // out and returned in failed, as "URL: error", in search order.
 func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) ([]string, error)) (rows []ghSearchActivityRow, failed []string) {
-	keep := make([]bool, len(nodes))
-	errs := make([]error, len(nodes))
+	return touchingRows(nodes, classifyTouching(nodes, paths, listFiles))
+}
+
+// touchVerdict is whether one PR changes a file under the watched paths. err
+// is set when its files couldn't be listed, so the answer is unknown.
+type touchVerdict struct {
+	touches bool
+	err     error
+}
+
+// classifyTouching decides each node's membership, as filterTouching
+// describes, and returns one verdict per node in the same order.
+func classifyTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) ([]string, error)) []touchVerdict {
+	verdicts := make([]touchVerdict, len(nodes))
 	var full []int
 	for i, n := range nodes {
 		shown := n.filePaths()
 		switch {
 		case touchesWatchPaths(shown, paths):
-			keep[i] = true
+			verdicts[i].touches = true
 		case n.Files.TotalCount > len(shown):
 			full = append(full, i)
 		}
@@ -277,7 +341,7 @@ func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url 
 			defer wg.Done()
 			for i := range work {
 				files, err := listFiles(nodes[i].URL)
-				keep[i], errs[i] = err == nil && touchesWatchPaths(files, paths), err
+				verdicts[i] = touchVerdict{touches: err == nil && touchesWatchPaths(files, paths), err: err}
 			}
 		}()
 	}
@@ -286,14 +350,18 @@ func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url 
 	}
 	close(work)
 	wg.Wait()
+	return verdicts
+}
 
-	// Return the matches and failures in the order the search gave them
+// touchingRows returns the matches and the failures, as "URL: error", in the
+// order the search gave them.
+func touchingRows(nodes []watchSearchNode, verdicts []touchVerdict) (rows []ghSearchActivityRow, failed []string) {
 	for i, n := range nodes {
 		switch {
-		case keep[i]:
+		case verdicts[i].touches:
 			rows = append(rows, n.searchRow())
-		case errs[i] != nil:
-			failed = append(failed, fmt.Sprintf("%s: %v", n.URL, errs[i]))
+		case verdicts[i].err != nil:
+			failed = append(failed, fmt.Sprintf("%s: %v", n.URL, verdicts[i].err))
 		}
 	}
 	return rows, failed
@@ -325,6 +393,13 @@ func parseWatchSearchPages(out []byte) (watchScan, error) {
 			}
 		}
 	}
+}
+
+// parseWatchSearchPage decodes a single page of watchSearchQuery's reply.
+func parseWatchSearchPage(out []byte) (watchSearchPage, error) {
+	var page watchSearchPage
+	err := json.Unmarshal(out, &page)
+	return page, err
 }
 
 // filePaths returns the changed paths the search included.

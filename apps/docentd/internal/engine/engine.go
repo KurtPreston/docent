@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/KurtPreston/docent/libs/agentsession"
 	"github.com/KurtPreston/docent/libs/automation"
 	"github.com/KurtPreston/docent/libs/collectors"
+	"github.com/KurtPreston/docent/libs/config/docentconfig"
 	"github.com/KurtPreston/docent/libs/config/userdata"
 	"github.com/KurtPreston/docent/libs/correlation"
 	"github.com/KurtPreston/docent/libs/model"
@@ -874,8 +876,9 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 		// ScopeSelf, which would silently starve the autofix rules of the
 		// transitions they trigger on. See TestCollectUnitRequestsInvolvedScope.
 		Scope:   collectors.ScopeInvolved,
-		Mode:    u.mode,
-		CorrCfg: e.corrCfg,
+		Mode:     u.mode,
+		CorrCfg:  e.corrCfg,
+		CacheDir: filepath.Join(docentconfig.StateDir(), "cache"),
 	}
 	cutoff := now.Add(-u.lookback)
 	if u.mode == collectors.ModeEvents {
