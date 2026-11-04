@@ -42,3 +42,22 @@ whose workflows inspired a feature.
 
 These boundaries keep maintenance commands usable without a running daemon
 and make it clear which process owns background work.
+
+## Shipping changes
+
+Every change to docent, including a fix for the maintainer's own setup, ships
+the same way:
+
+1. Commit on a branch, never directly on `main`.
+2. Open a pull request and let CI pass.
+3. Merge it into `main`.
+4. Push a `vX.Y.Z` tag, which runs the release workflow.
+5. Install it with `docent update`.
+
+Don't build docent from a working tree and copy the binaries into place, or
+restart a daemon onto unreleased code. A machine should only ever run a
+tagged release.
+
+Why: every installed docent then matches a published release, which keeps
+`docent update` and `--version` meaningful, and every change has been through
+review and CI.
