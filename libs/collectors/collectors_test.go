@@ -3,6 +3,7 @@ package collectors
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,19 +56,23 @@ func TestRegistrySkipsDisabled(t *testing.T) {
 // the filter test can assert which directives actually ran.
 type stubCollector struct {
 	id     string
+	mu     *sync.Mutex
 	called *[]string
 }
 
 func (s stubCollector) CollectEvents(_ context.Context, d userdata.Directive, _ *CollectOpts) ([]StatusItem, error) {
+	s.mu.Lock()
 	*s.called = append(*s.called, d.ID)
+	s.mu.Unlock()
 	return []StatusItem{{DirectiveID: d.ID, Source: d.Collector, Kind: "stub", Title: d.ID}}, nil
 }
 
 func TestRegistryOnlyCollectorTypes(t *testing.T) {
 	var called []string
+	var mu sync.Mutex
 	r := NewRegistry(func() time.Time { return time.Unix(0, 0).UTC() })
-	r.Register("alpha", stubCollector{id: "alpha", called: &called})
-	r.Register("beta", stubCollector{id: "beta", called: &called})
+	r.Register("alpha", stubCollector{id: "alpha", mu: &mu, called: &called})
+	r.Register("beta", stubCollector{id: "beta", mu: &mu, called: &called})
 
 	directives := []userdata.Directive{
 		{ID: "a", Name: "A", Collector: "alpha", Enabled: true},
@@ -134,6 +139,7 @@ func TestRegistryAbortKeepsPartialResults(t *testing.T) {
 type stubValidator struct {
 	Issues []ValidationIssue
 	Err    error
+	mu     sync.Mutex
 	Calls  int
 }
 
@@ -142,7 +148,9 @@ func (s *stubValidator) CollectEvents(_ context.Context, _ userdata.Directive, _
 }
 
 func (s *stubValidator) ValidateDirective(_ context.Context, d userdata.Directive, _ *ValidateOpts) []ValidationIssue {
+	s.mu.Lock()
 	s.Calls++
+	s.mu.Unlock()
 	out := make([]ValidationIssue, len(s.Issues))
 	copy(out, s.Issues)
 	for i := range out {
