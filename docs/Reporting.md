@@ -623,6 +623,14 @@ An empty Git repository has no history. If a shallow checkout lacks a needed
 parent, obtain that history yourself before retrying; Docent never implicitly
 fetches it. `docent doctor` checks Git access when the feature is enabled.
 
+To roll out support on an existing installation, first update to a published
+release with `docent update`, then enable `git_events` on the existing board
+directive. Preserve its state poll and queue settings. Restart the daemon
+when its jobs are idle so it loads the changed configuration, and verify a
+recent-activity report against known board commits. If jobs are running, use
+`docent update --restart never` and defer the restart. CLI-only machines need
+no daemon restart.
+
 ### Nested repos (`config.scan_depth`)
 
 By default `local-git` looks exactly one level in: the immediate children of `code_home`, or the `paths` entries themselves. That misses layouts where a project directory is a container rather than a checkout — most commonly a **worktree project**, where `~/Code/salsa` holds a bare clone plus one worktree directory per branch, so the working trees live at `~/Code/salsa/<branch>`.

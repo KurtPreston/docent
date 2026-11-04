@@ -42,3 +42,15 @@ whose workflows inspired a feature.
 
 These boundaries keep maintenance commands usable without a running daemon
 and make it clear which process owns background work.
+
+## Release-based rollout
+
+Roll out changes through a reviewed pull request, merge, and published
+release, then run `docent update` on installed machines. Do not replace
+working installations with ad hoc branch builds: released artifacts keep
+versions consistent and exercise the supported upgrade path.
+
+A merge alone does not publish binaries; the release workflow runs on
+version tags. Wait for its artifacts before updating. Check for active jobs
+before allowing the updater to restart a daemon; use `--restart never` when
+installation must be separated from a later, safe restart.
