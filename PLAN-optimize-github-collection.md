@@ -150,6 +150,21 @@ running daemon or its configuration.
 
 ## Obstacles
 
+- The shell fake `gh` only gives canned replies, which can't model date
+  ranges, sort orders, the result cap, or paging across polls. Added a
+  stateful fake (`github_fakehub_test.go`) that reuses the test binary as
+  `gh` through `TestMain`, so tests still go through the real exec path.
+- A reconciliation slice whose last page hit the search cap looked like the
+  end of the lap and claimed full coverage. A slice now ends a lap only when
+  it has returned as many PRs as `issueCount` reports.
+- A PR the user authored that leaves the watch query must keep its
+  `authored` row, as a full scan would give it. Dropped watch rows are
+  replanned from the pre-dedupe list, reusing resolved details.
+- PRs that leave the query with no update at all (lost access) are only
+  evicted when the slice reaches them, at most one lap later. A PR that
+  leaves within 5 minutes of a poll stays one poll longer, in case the
+  search index is lagging.
+
 ## Found bugs
 
 - `go test -race ./libs/collectors` reports data races in the registry test

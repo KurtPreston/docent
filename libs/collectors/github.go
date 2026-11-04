@@ -815,7 +815,7 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 	counts := map[string]int{}
 	order := make([]string, 0, len(specs))
 	gaps := &watchGaps{directive: directive, at: now.UTC()}
-	run := ghRun{env: env, directive: directive, opts: opts, gaps: gaps, user: user, host: host, now: c.clockNow}
+	run := ghRun{env: env, directive: directive, opts: opts, gaps: gaps, user: user, host: host, now: c.clockNow, watch: &watchSession{}}
 	for _, spec := range specs {
 		rows, err := c.listPRReviewSpec(ctx, run, spec)
 		if err != nil {
@@ -850,41 +850,20 @@ func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string
 		Total:       totalSteps,
 	})
 
-	// Resolved concurrently because each PR is an independent round trip and
-	// there can be dozens: serially this is the slowest thing docent does, and
-	// a scheduled collection has a fixed budget to finish inside.
-	var mu sync.Mutex
-	work := make(chan int)
-	var wg sync.WaitGroup
-	for i := 0; i < prDetailWorkers && i < len(rows); i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range work {
-				detail := c.resolvePRDetail(ctx, env, rows[idx].spec, rows[idx].row.URL, user, directive, opts)
-				// The progress callback belongs to the caller and is not
-				// promised to be safe to call from several goroutines, so it
-				// reports under the same lock that advances the counter.
-				mu.Lock()
-				rows[idx].detail = detail
-				completed++
-				reportProgress(opts, DirectiveProgress{
-					DirectiveID: directive.ID,
-					Description: directive.Name,
-					Status:      "running",
-					Detail:      "checking PR status",
-					Completed:   completed,
-					Total:       totalSteps,
-				})
-				mu.Unlock()
-			}
-		}()
-	}
-	for i := range rows {
-		work <- i
-	}
-	close(work)
-	wg.Wait()
+	// Look up every PR, then settle the watch caches against what came back
+	c.resolveReviewRows(ctx, run, reviewBatch{rows: rows, onDone: func() {
+		completed++
+		reportProgress(opts, DirectiveProgress{
+			DirectiveID: directive.ID,
+			Description: directive.Name,
+			Status:      "running",
+			Detail:      "checking PR status",
+			Completed:   completed,
+			Total:       totalSteps,
+		})
+	}})
+	rows = c.settleWatchRows(ctx, run, found, rows)
+	run.watch.save(ctx, run)
 
 	// Build rows for the PRs still open by the time their detail was read
 	items := make([]StatusItem, 0, len(rows))

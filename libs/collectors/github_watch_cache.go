@@ -179,13 +179,9 @@ func (r ghRun) watchCachePath(query string, paths []string) string {
 	return watchCachePath(r.opts.CacheDir, watchCacheKey(watchViewer{r.host, r.user, r.directive.ID}, query, paths))
 }
 
-// saveWatchCache writes a watch query's cache when caching is on. A failure
-// only costs the next run its head start, so it is logged, not returned.
-func (r ghRun) saveWatchCache(query string, paths []string, c *watchCache) {
-	path := r.watchCachePath(query, paths)
-	if path == "" {
-		return
-	}
+// saveWatchCache writes a watch query's cache. A failure only costs the next
+// run its head start, so it is logged, not returned.
+func (r ghRun) saveWatchCache(path string, c *watchCache) {
 	if err := c.save(path); err != nil {
 		loggerFor(r.opts, r.directive.ID).Note("github: could not save watch cache %s: %v", path, err)
 	}
