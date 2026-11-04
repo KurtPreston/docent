@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/KurtPreston/docent/libs/ai"
@@ -247,7 +248,7 @@ func (a runLogAdapter) Directive(id string) collectors.DirectiveLogger {
 
 // Collect runs the enabled directives for an already-resolved run, honoring
 // resolved.Collect (events, state, or both). When CollectBoth, both passes
-// run and their signals are concatenated. It assembles the CollectOpts both
+// run at the same time and their signals are concatenated, events first. It assembles the CollectOpts both
 // the CLI and Generate need.
 func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigFile, resolved executionmode.ResolvedRun, opts CollectOptions) ([]collectors.StatusItem, error) {
 	expand := opts.ExpandRepoPath
@@ -278,45 +279,73 @@ func Collect(ctx context.Context, reg *collectors.Registry, cfg userdata.ConfigF
 		collect = executionmode.CollectEvents
 	}
 
-	var all []collectors.StatusItem
-	runPass := func(mode collectors.Mode, onlyCollectors []string) error {
-		pass := *base
-		pass.Mode = mode
-		if onlyCollectors != nil {
-			pass.OnlyCollectorTypes = onlyCollectors
-		}
-		items, err := reg.Collect(ctx, cfg.Directives, &pass)
-		if err != nil {
-			return err
-		}
-		all = append(all, items...)
-		return nil
-	}
+	passes := planPasses(collect, resolved.Collectors)
+	return runPasses(ctx, reg, cfg.Directives, base, passes)
+}
 
+// planPasses lists the registry passes a collect capability needs, in the
+// order their signals are concatenated.
+func planPasses(collect executionmode.Collect, only []string) []collectionPass {
 	switch collect {
 	case executionmode.CollectState:
-		if err := runPass(collectors.ModeState, nil); err != nil {
-			return nil, err
-		}
+		return []collectionPass{{mode: collectors.ModeState, only: only}}
 	case executionmode.CollectBoth:
-		if err := runPass(collectors.ModeEvents, nil); err != nil {
-			return nil, err
-		}
+		passes := []collectionPass{{mode: collectors.ModeEvents, only: only}}
 		// Include board context and live PR readiness, not a full JIRA
 		// inventory. These snapshots are distinct from activity events.
 		stateCollectors := []string{"github", "github-enterprise", "backlog"}
-		if len(resolved.Collectors) > 0 {
-			stateCollectors = intersectCollectors(resolved.Collectors, stateCollectors)
+		if len(only) > 0 {
+			stateCollectors = intersectCollectors(only, stateCollectors)
 		}
 		if len(stateCollectors) > 0 {
-			if err := runPass(collectors.ModeState, stateCollectors); err != nil {
-				return nil, err
-			}
+			passes = append(passes, collectionPass{mode: collectors.ModeState, only: stateCollectors})
 		}
+		return passes
 	default: // CollectEvents
-		if err := runPass(collectors.ModeEvents, nil); err != nil {
-			return nil, err
+		return []collectionPass{{mode: collectors.ModeEvents, only: only}}
+	}
+}
+
+// runPasses runs every pass at the same time and concatenates their signals in
+// pass order. The passes are independent: each is a different mode over the
+// same directives, so neither reads what the other produces. Running them
+// together means a report waits for the slowest pass rather than the sum, and a
+// slow event collector no longer delays the start of every state collector.
+func runPasses(ctx context.Context, reg *collectors.Registry, directives []userdata.Directive, base *collectors.CollectOpts, passes []collectionPass) ([]collectors.StatusItem, error) {
+	// Merge progress when a directive can report from more than one pass
+	var progress *passProgress
+	if base.OnDirectiveUpdate != nil && len(passes) > 1 {
+		progress = newPassProgress(reg, directives, passes, base.OnDirectiveUpdate)
+	}
+
+	// Run each pass with its own options and progress hook
+	results := make([][]collectors.StatusItem, len(passes))
+	errs := make([]error, len(passes))
+	var wg sync.WaitGroup
+	for i, p := range passes {
+		pass := *base
+		pass.Mode = p.mode
+		if p.only != nil {
+			pass.OnlyCollectorTypes = p.only
 		}
+		if progress != nil {
+			pass.OnDirectiveUpdate = progress.callback(p.mode)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = reg.Collect(ctx, directives, &pass)
+		}()
+	}
+	wg.Wait()
+
+	// Report the first failing pass in order, else concatenate in order
+	var all []collectors.StatusItem
+	for i := range passes {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		all = append(all, results[i]...)
 	}
 	return all, nil
 }
