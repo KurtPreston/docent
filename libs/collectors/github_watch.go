@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
 )
@@ -25,6 +26,47 @@ type ghRun struct {
 	env       []string
 	directive userdata.Directive
 	opts      *CollectOpts
+	gaps      *watchGaps
+}
+
+// watchGaps records the open PRs a watch scan could not check, so a scan that
+// came back incomplete says so instead of passing for the whole watched set.
+type watchGaps struct {
+	directive userdata.Directive
+	at        time.Time
+	mu        sync.Mutex
+	items     []StatusItem
+}
+
+// add records one gap as a collector_error row. The title is stable for a
+// given gap, so docentd offers it to automations once when it first appears
+// rather than on every poll.
+func (g *watchGaps) add(title, summary, severity string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.items = append(g.items, StatusItem{
+		DirectiveID: g.directive.ID,
+		Source:      g.directive.Collector,
+		Kind:        "collector_error",
+		Title:       g.directive.Name + ": " + title,
+		Summary:     summary,
+		Severity:    severity,
+		ObservedAt:  g.at,
+		IsSelf:      true,
+	})
+}
+
+// list returns the recorded gaps.
+func (g *watchGaps) list() []StatusItem {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]StatusItem(nil), g.items...)
 }
 
 // watchPRReviewSpecs plans one spec per declared watch query. They are searched
@@ -78,9 +120,18 @@ var watchSearchQuery string
 type watchSearchPage struct {
 	Data struct {
 		Search struct {
-			Nodes []watchSearchNode `json:"nodes"`
+			IssueCount int               `json:"issueCount"`
+			Nodes      []watchSearchNode `json:"nodes"`
 		} `json:"search"`
 	} `json:"data"`
+}
+
+// watchScan is what a paginated watch search returned: the PR nodes, how many
+// results the search reported matching, and how many it actually returned.
+type watchScan struct {
+	nodes    []watchSearchNode
+	matched  int
+	returned int
 }
 
 // watchSearchNode is one PR from watchSearchQuery.
@@ -109,6 +160,8 @@ type watchSearchNode struct {
 
 // listOpenPRsTouching runs a path-filtered watch query: every page of the
 // GraphQL search, then the PRs that change a file under one of its paths.
+// PRs the scan could not check are recorded in run.gaps rather than dropped
+// silently.
 func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spec prReviewSpec) ([]ghSearchActivityRow, error) {
 	q := watchSearchQ(spec.args)
 	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
@@ -116,14 +169,32 @@ func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spe
 	if err != nil {
 		return nil, fmt.Errorf("gh api graphql (search %q): %w", q, err)
 	}
-	nodes, err := parseWatchSearchPages(out)
+	scan, err := parseWatchSearchPages(out)
 	if err != nil {
 		return nil, fmt.Errorf("parse search %q: %w", q, err)
 	}
 
-	return filterTouching(nodes, spec.paths, func(url string) []string {
+	// Name the scan the way the config does, falling back to its search
+	name := spec.relation
+	if name == "" {
+		name = q
+	}
+	if scan.matched > scan.returned {
+		run.gaps.add(fmt.Sprintf("watch %q scan truncated", name), fmt.Sprintf(
+			"search %q matched %d open PRs but GitHub search returned only %d; the last %d in search order were not checked against the watched paths",
+			q, scan.matched, scan.returned, scan.matched-scan.returned), "warning")
+	}
+
+	// Filter by path, then report any PR whose file list could not be read
+	rows, failed := filterTouching(scan.nodes, spec.paths, func(url string) ([]string, error) {
 		return c.listPRFiles(ctx, run, url)
-	}), nil
+	})
+	if len(failed) > 0 {
+		run.gaps.add(fmt.Sprintf("watch %q file listings failed", name), fmt.Sprintf(
+			"could not list the files of %d PR(s), so they were left out of the watched set: %s",
+			len(failed), strings.Join(failed, "; ")), "error")
+	}
+	return rows, nil
 }
 
 // watchSearchQ builds the search string for a watch query. GitHub search
@@ -143,9 +214,11 @@ func watchSearchQ(args []string) string {
 // in search order. The search returns at most 100 paths per PR; a larger PR
 // that shows no match among them is listed in full with listFiles before it is
 // ruled out. Those listings are independent round trips, and a busy repository
-// can need dozens, so they run concurrently.
-func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) []string) []ghSearchActivityRow {
+// can need dozens, so they run concurrently. A PR whose listing fails is left
+// out and returned in failed, as "URL: error", in search order.
+func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url string) ([]string, error)) (rows []ghSearchActivityRow, failed []string) {
 	keep := make([]bool, len(nodes))
+	errs := make([]error, len(nodes))
 	var full []int
 	for i, n := range nodes {
 		shown := n.filePaths()
@@ -165,7 +238,8 @@ func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url 
 		go func() {
 			defer wg.Done()
 			for i := range work {
-				keep[i] = touchesWatchPaths(listFiles(nodes[i].URL), paths)
+				files, err := listFiles(nodes[i].URL)
+				keep[i], errs[i] = err == nil && touchesWatchPaths(files, paths), err
 			}
 		}()
 	}
@@ -175,34 +249,41 @@ func filterTouching(nodes []watchSearchNode, paths []string, listFiles func(url 
 	close(work)
 	wg.Wait()
 
-	// Return the matches in the order the search gave them
-	var rows []ghSearchActivityRow
+	// Return the matches and failures in the order the search gave them
 	for i, n := range nodes {
-		if keep[i] {
+		switch {
+		case keep[i]:
 			rows = append(rows, n.searchRow())
+		case errs[i] != nil:
+			failed = append(failed, fmt.Sprintf("%s: %v", n.URL, errs[i]))
 		}
 	}
-	return rows
+	return rows, failed
 }
 
 // parseWatchSearchPages decodes `gh api graphql --paginate` output, which is one
 // JSON document per page written back to back.
-func parseWatchSearchPages(out []byte) ([]watchSearchNode, error) {
+func parseWatchSearchPages(out []byte) (watchScan, error) {
 	dec := json.NewDecoder(bytes.NewReader(out))
-	var nodes []watchSearchNode
+	var scan watchScan
 	for {
 		var page watchSearchPage
 		err := dec.Decode(&page)
 		if errors.Is(err, io.EOF) {
-			return nodes, nil
+			return scan, nil
 		}
 		if err != nil {
-			return nil, err
+			return watchScan{}, err
 		}
+
+		// Every page reports the total; keep the largest in case it moved
+		scan.matched = max(scan.matched, page.Data.Search.IssueCount)
+		scan.returned += len(page.Data.Search.Nodes)
+
 		// Search can return non-PR nodes as empty objects; skip them.
 		for _, n := range page.Data.Search.Nodes {
 			if n.URL != "" {
-				nodes = append(nodes, n)
+				scan.nodes = append(scan.nodes, n)
 			}
 		}
 	}
@@ -237,19 +318,20 @@ func (n watchSearchNode) searchRow() ghSearchActivityRow {
 }
 
 // listPRFiles lists every path a PR changes through the REST API, which pages
-// past the search's 100-path window. A failure yields no paths, so the PR is
-// left out rather than failing the whole collection.
-func (c GitHubCollector) listPRFiles(ctx context.Context, run ghRun, prURL string) []string {
+// past the search's 100-path window. The caller decides what a failure costs;
+// the watch scan leaves the PR out and reports it rather than failing the
+// whole collection.
+func (c GitHubCollector) listPRFiles(ctx context.Context, run ghRun, prURL string) ([]string, error) {
 	owner, name, number, ok := parsePRURL(prURL)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("not a pull request URL")
 	}
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/files", owner, name, strconv.Itoa(number))
 	args := []string{"api", endpoint, "--paginate", "--jq", ".[].filename"}
 	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
 	if err != nil {
 		loggerFor(run.opts, run.directive.ID).Note("github: could not list files of %s: %v", prURL, err)
-		return nil
+		return nil, err
 	}
 	// One filename per line; names may contain spaces.
 	var paths []string
@@ -258,7 +340,7 @@ func (c GitHubCollector) listPRFiles(ctx context.Context, run ghRun, prURL strin
 			paths = append(paths, line)
 		}
 	}
-	return paths
+	return paths, nil
 }
 
 // normalizeWatchPaths trims each configured path to its bare form without
