@@ -582,8 +582,10 @@ directives:
 
 Then the rule fires on each new head commit in that set. A `transition` with
 no `from` or `to` fires on any change, including a PR first entering the set.
-The first collect after `docentd` starts only records a baseline, so PRs open
-at that point are reviewed on their next push rather than all at once.
+The first time `docentd` collects the set it only records a baseline, so PRs
+already open are reviewed on their next push rather than all at once. That
+baseline survives restarts, so a push made while `docentd` was down is
+reviewed on the first collect after it starts.
 
 Some firings are repeats. The entity ID comes from the PR title, so renaming a
 PR fires the rule again for a revision it already reviewed, and so does a PR

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -310,6 +311,10 @@ type Engine struct {
 	// not replay the whole lookback window as "new". Guarded by mu.
 	automationSeeded map[string]bool
 
+	// baselines persists entitySnapshots, so the first collect after a
+	// restart can fire transitions against the state docentd last saw.
+	baselines *baselineStore
+
 	// scheduleLastFire tracks the last fire time per schedule rule ID so we
 	// don't re-fire within the same minute. Guarded by scheduleMu.
 	scheduleLastFire map[string]time.Time
@@ -335,6 +340,7 @@ func New(cfg config.DaemonConfig, store *registry.Store) *Engine {
 		annotations:      map[string]annotationEntry{},
 		entitySnapshots:  map[string]map[string]model.Entity{},
 		automationSeeded: map[string]bool{},
+		baselines:        defaultBaselineStore(),
 		scheduleLastFire: map[string]time.Time{},
 	}
 	e.sessionMgr = sessionmanager.Select(cfg.OpenTrigger)
@@ -897,6 +903,12 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	prevErr := u.lastErr
 	e.mu.Unlock()
 
+	// Before a state unit's first collect, recover the snapshot the last run saved
+	var restored map[string]model.Entity
+	if !seeded && u.mode == collectors.ModeState {
+		restored = e.baselines.load(snapKey)
+	}
+
 	signals, err := e.reg.CollectUnit(ctx, d, u.mode, opts)
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		// A unit that always outlasts its deadline never seeds, so its
@@ -943,14 +955,24 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	}
 	e.mu.Unlock()
 
-	// Skip firing on the first successful collect of a unit (seeded==false
-	// here): startup/restart would otherwise replay the whole lookback
-	// window (events) or every current item (state) as "new". Rules that opt
-	// in with trigger.include_existing still see entities already matching.
+	// Persist a changed state snapshot as the baseline for the next start
+	if nextEntities != nil && !reflect.DeepEqual(nextEntities, prevEntities) {
+		if serr := e.baselines.save(snapKey, nextEntities); serr != nil {
+			log.Printf("docentd: save transition baseline %s: %v", snapKey, serr)
+		}
+	}
+
+	// Skip firing signal rules on the first successful collect of a unit
+	// (seeded==false here): startup/restart would otherwise replay the whole
+	// lookback window (events) or every current item (state) as "new".
+	// Transition rules still compare against the snapshot saved before the
+	// restart, and rules that opt in with trigger.include_existing still see
+	// entities already matching.
 	if err == nil && e.automations != nil {
 		if seeded {
 			e.evaluateAutomations(ctx, newSignals, prevEntities, nextEntities)
 		} else {
+			e.evaluateRestoredTransitions(ctx, restored, nextEntities)
 			e.evaluateExistingEntities(ctx, nextEntities)
 		}
 	}
