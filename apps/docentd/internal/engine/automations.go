@@ -107,6 +107,37 @@ func (e *Engine) evaluateExistingEntities(ctx context.Context, nextEntities map[
 	}
 }
 
+// evaluateRestoredTransitions runs on a state unit's first collect after a
+// restart, matching transition rules against the snapshot the previous run
+// saved, so a change made while docentd was down still fires. Rules with
+// trigger.include_existing are left to evaluateExistingEntities, which already
+// fires them for every entity in their target state. It must not run under
+// e.mu.
+func (e *Engine) evaluateRestoredTransitions(ctx context.Context, restored, nextEntities map[string]model.Entity) {
+	if e.automations == nil || restored == nil || len(nextEntities) == 0 {
+		return
+	}
+
+	// Leave include_existing rules to the existing-entities pass
+	var rules []automation.Rule
+	for _, r := range e.automations.EnabledRules() {
+		if !r.Trigger.IncludeExisting {
+			rules = append(rules, r)
+		}
+	}
+	if len(rules) == 0 {
+		return
+	}
+
+	// Fire for whatever changed since the saved snapshot
+	opts := automation.MatchOpts{CorrCfg: e.corrCfg}
+	events := automation.MatchTransitions(rules, restored, nextEntities, opts)
+	if len(events) > 0 {
+		e.enrichEvents(events)
+		e.automations.HandleEvents(ctx, events)
+	}
+}
+
 func (e *Engine) enrichEvents(events []automation.Event) {
 	e.mu.Lock()
 	workItems := e.lastWorkItems
