@@ -717,3 +717,33 @@ func TestSanitizePath(t *testing.T) {
 		}
 	}
 }
+
+// A clone killed before it set HEAD is replaced rather than reused: on it, every
+// worktree add fails with "failed to resolve HEAD as a valid ref".
+func TestResolveReplacesAnInterruptedClone(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	f.clone(code, "salsa", remote)
+	state := t.TempDir()
+
+	// Leave the base the way an interrupted clone does.
+	req := Request{Repo: "Chip/salsa", Branch: "first", Roots: []string{code}, StateRoot: state}
+	if _, err := Resolve(context.Background(), req); err != nil {
+		t.Fatalf("first Resolve: %v", err)
+	}
+	base := filepath.Join(state, "projects", "Chip-salsa", ".base")
+	if err := os.WriteFile(filepath.Join(base, "HEAD"), []byte("ref: refs/heads/.invalid\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next branch provisions on a fresh clone.
+	req.Branch = "second"
+	if _, err := Resolve(context.Background(), req); err != nil {
+		t.Fatalf("Resolve on an interrupted clone: %v", err)
+	}
+	if !cloneFinished(base) {
+		t.Error("the interrupted clone was kept")
+	}
+}

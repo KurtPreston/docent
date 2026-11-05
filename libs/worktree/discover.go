@@ -268,7 +268,25 @@ func isBareRepo(dir string) bool {
 	if !isDir(filepath.Join(dir, "objects")) || !isDir(filepath.Join(dir, "refs")) {
 		return false
 	}
-	return gitConfig(dir)["core.bare"] == "true"
+	return coreBare(dir) == "true"
+}
+
+// coreBare is the repository's core.bare as git reads it.
+//
+// With extensions.worktreeConfig on, git layers config.worktree over config,
+// and `git sparse-checkout` moves core.bare there when it turns the extension
+// on. Reading only config would then take docent's own bare clone for a
+// half-written directory and delete it.
+func coreBare(gitDir string) string {
+	cfg := gitConfig(gitDir)
+	bare := cfg["core.bare"]
+	if cfg["extensions.worktreeconfig"] != "true" {
+		return bare
+	}
+	if v, ok := readConfigFile(filepath.Join(gitDir, "config.worktree"))["core.bare"]; ok {
+		return v
+	}
+	return bare
 }
 
 // commonDir resolves a linked worktree's .git file to the repository's shared
@@ -316,8 +334,13 @@ func commonDir(gitFile string) (string, bool) {
 // discovery has, without a subprocess. Includes are not followed, which is
 // acceptable for values git itself writes into the file it created.
 func gitConfig(gitDir string) map[string]string {
+	return readConfigFile(filepath.Join(gitDir, "config"))
+}
+
+// readConfigFile parses one git config file the way gitConfig describes.
+func readConfigFile(path string) map[string]string {
 	out := map[string]string{}
-	b, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return out
 	}

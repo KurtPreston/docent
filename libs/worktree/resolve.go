@@ -214,12 +214,12 @@ func provision(ctx context.Context, root, repo, branch string, req Request, loca
 // Callers hold the repository's provisioning lock.
 func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal bool, remoteURL string) (string, error) {
 	base := filepath.Join(root, baseDirName)
-	if isBareRepo(base) {
+	if isBareRepo(base) && cloneFinished(base) {
 		return reconcileLocalRemote(ctx, base, local, hasLocal)
 	}
 
-	// A half-written directory from an interrupted clone is not a bare repo and
-	// would make git clone fail with "already exists".
+	// A half-written directory from an interrupted clone is not a usable repo
+	// and would make git clone fail with "already exists".
 	if isDir(base) {
 		if err := os.RemoveAll(base); err != nil {
 			return "", fmt.Errorf("worktree: %w", err)
@@ -244,7 +244,7 @@ func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal 
 	}
 	args = append(args, url, base)
 	if err := gitRun(ctx, root, cloneTimeout, args...); err != nil {
-		if isBareRepo(base) {
+		if isBareRepo(base) && cloneFinished(base) {
 			// Another caller finished while this one was cloning.
 			return finishBase(ctx, base, local, hasLocal, url)
 		}
@@ -254,6 +254,20 @@ func ensureBase(ctx context.Context, root, repo string, local Project, hasLocal 
 	}
 
 	return finishBase(ctx, base, local, hasLocal, url)
+}
+
+// cloneFinished reports whether the clone at base ran to completion.
+//
+// git clone points HEAD at the placeholder refs/heads/.invalid until it has
+// fetched, and only then at the remote's default branch. A clone killed in
+// between is already a bare repository by every other measure, yet every
+// `git worktree add` on it fails with "failed to resolve HEAD as a valid ref".
+func cloneFinished(base string) bool {
+	b, err := os.ReadFile(filepath.Join(base, "HEAD"))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) != "ref: refs/heads/.invalid"
 }
 
 // reconcileLocalRemote registers the developer's git dir as remote.local when

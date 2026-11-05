@@ -67,3 +67,39 @@ func TestSparseFor(t *testing.T) {
 		t.Errorf("SparseFor(unlisted) = %v; want nil", got)
 	}
 }
+
+// Narrowing a worktree moves core.bare out of the base's config and into
+// config.worktree. The base must still be recognized afterwards: taken for a
+// half-written clone, it would be deleted along with every worktree on it.
+func TestResolveSparseKeepsTheBaseAcrossResolves(t *testing.T) {
+	requireGit(t)
+	f := newForge(t)
+	remote := f.repo("Chip/salsa")
+	code := t.TempDir()
+	f.clone(code, "salsa", remote)
+	state := t.TempDir()
+
+	// Resolve one narrowed branch, then mark the base so a re-clone shows.
+	req := Request{Repo: "Chip/salsa", Branch: "first", Roots: []string{code}, StateRoot: state, Sparse: []string{"apps"}}
+	first, err := Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatalf("first Resolve: %v", err)
+	}
+	base := filepath.Join(state, "projects", "Chip-salsa", ".base")
+	marker := filepath.Join(base, "docent-test-marker")
+	if err := os.WriteFile(marker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second branch must reuse that base and leave the first tree alone.
+	req.Branch = "second"
+	if _, err := Resolve(context.Background(), req); err != nil {
+		t.Fatalf("second Resolve: %v", err)
+	}
+	if !exists(marker) {
+		t.Error("the base was deleted and cloned again")
+	}
+	if !isWorktreeOf(context.Background(), first.Dir, base) {
+		t.Error("the first worktree no longer belongs to the base")
+	}
+}
