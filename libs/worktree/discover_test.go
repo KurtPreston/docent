@@ -467,3 +467,19 @@ func TestIsBareRepo(t *testing.T) {
 		t.Error("an empty directory was reported bare")
 	}
 }
+
+// Once extensions.worktreeConfig is on, git reads core.bare from
+// config.worktree too, which is where `git sparse-checkout` moves it.
+func TestIsBareRepoReadsWorktreeConfig(t *testing.T) {
+	bare := initBare(t, t.TempDir(), "b", "")
+	cfg := "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tworktreeConfig = true\n"
+	if err := os.WriteFile(filepath.Join(bare, "config"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bare, "config.worktree"), []byte("[core]\n\tbare = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isBareRepo(bare) {
+		t.Error("a bare repository with core.bare in config.worktree was not recognized")
+	}
+}
