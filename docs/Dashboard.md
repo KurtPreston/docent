@@ -160,7 +160,9 @@ transcript under `$XDG_STATE_HOME/docent/agent-sessions/`.
   is the default and the only one an automation ever gets, since it is the one
   that cannot disturb something you have open. Deleting a session leaves the
   directory alone; the daemon removes it later, once it has gone unused for
-  `worktreeRetention` (default 72 hours) with no uncommitted changes.
+  `worktreeRetention` (default 72 hours) with no uncommitted changes, or
+  sooner, least recently used first, when docent's worktrees together exceed
+  `worktreeMaxDisk` (default 200GB).
 - **docent's own worktree is kept in step with yours.** Before every turn it
   fetches your git directory and `origin`, fast-forwarding when cleanly behind
   and refusing with `409 conflict: "diverged"` when the two have forked. After
@@ -390,6 +392,7 @@ for a starting point.
 | `worktreeHook` | `~/.config/docent/worktree.sh` | Run once in every working directory docent creates; skipped when the file does not exist. See [Per-worktree setup](Automations.md#per-worktree-setup). `DOCENT_WORKTREE_HOOK` env var overrides. |
 | `worktreeSparse` | unset | Per repository, the directories docent's own worktrees check out, such as `{my-org/my-repo: [apps/web, ci, .github]}`. Uses git's sparse checkout in cone mode, so files at the repository root are always present, and the full history stays available. Applies only to worktrees docent creates for itself after the change, never to ones in your project. An agent can widen its tree with `git sparse-checkout add DIR`. Unlisted repositories get a full checkout. |
 | `worktreeRetention` | `72h` | How long one of docent's own worktrees may go unused before the daemon removes it. Checked at startup and hourly; values under `1h` are raised to `1h`. Trees bound to an agent session or holding uncommitted changes are kept, and the branch stays in docent's clone. `0` or `off` keeps worktrees forever. |
+| `worktreeMaxDisk` | `200GB` | Cap on the disk docent's own worktrees use together, such as `200GB` or `1.5TB` (binary units, as `du -h` prints them). Measured at each sweep; while over it, the daemon removes the least recently used worktrees, oldest first, before their `worktreeRetention` is up. Trees used within the last hour, bound to an agent session, or holding uncommitted changes are never removed, though they count toward the total. `0` or `off` removes the cap. |
 | `sshHost` | unset | SSH alias for remote-open, passed to the hook as `DOCENT_HOST`. |
 | `ticketProjects` | auto-detected | Restricts ticket-key matching (branch names, PR/commit titles, JIRA issue keys) to these project keys, e.g. `[SALSA, JASPER]`. Without a jira directive, generic `WORD-digits` scanning is disabled (so Dependabot branches like `fontawesome-free-7` don't invent phantom tickets); set `ticketProjects` (or `ticketPattern`) to opt into matching. With jira enabled, matching starts generic and the engine auto-widens/narrows via `followed_projects` and observed issue keys. |
 | `ticketPattern` | unset | Fully overrides ticket matching with a custom regex (first capture group is the key) instead of `ticketProjects`. |

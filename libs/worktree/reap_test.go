@@ -132,3 +132,78 @@ func TestReapWithNoProjects(t *testing.T) {
 		t.Fatalf("Reap = %+v, %v", res, err)
 	}
 }
+
+// backdate makes dir look last provisioned age ago.
+func backdate(t *testing.T, dir string, age time.Duration) {
+	t.Helper()
+	gitDir, err := worktreeGitDir(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-age)
+	if err := os.Chtimes(filepath.Join(gitDir, lastUsedFile), old, old); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Over the disk cap, the least recently used trees go first, and only until
+// usage fits, even though none has reached its idle retention.
+func TestReapEvictsLeastRecentlyUsedOverBudget(t *testing.T) {
+	requireGit(t)
+	state, dirs := reapFixture(t, "older", "newer")
+	backdate(t, dirs["older"], 5*time.Hour)
+	backdate(t, dirs["newer"], 2*time.Hour)
+
+	// Set the cap just under what both trees use together.
+	seen := map[fileID]bool{}
+	total := diskUsage(context.Background(), dirs["older"], seen) + diskUsage(context.Background(), dirs["newer"], seen)
+	res, err := Reap(context.Background(), ReapRequest{
+		MaxIdle: 72 * time.Hour, MaxBytes: total - 1, StateRoot: state,
+	})
+	if err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+
+	// Only the older tree is evicted, and nothing counts as idle-removed.
+	if len(res.Evicted) != 1 || !SamePath(res.Evicted[0], dirs["older"]) || exists(dirs["older"]) {
+		t.Fatalf("Evicted = %v; want only the older tree", res.Evicted)
+	}
+	if len(res.Removed) != 0 || !exists(dirs["newer"]) {
+		t.Errorf("Removed = %v, newer exists = %v", res.Removed, exists(dirs["newer"]))
+	}
+	if res.UsedBytes <= 0 || res.UsedBytes > total-1 {
+		t.Errorf("UsedBytes = %d; want under %d", res.UsedBytes, total-1)
+	}
+}
+
+// The cap never removes a tree used within the hour, a kept tree, or one with
+// uncommitted work, though all of them count toward usage.
+func TestReapBudgetSparesRecentKeptAndDirty(t *testing.T) {
+	requireGit(t)
+	state, dirs := reapFixture(t, "recent", "kept", "dirty")
+	backdate(t, dirs["kept"], 5*time.Hour)
+	backdate(t, dirs["dirty"], 5*time.Hour)
+	if err := os.WriteFile(filepath.Join(dirs["dirty"], "wip.txt"), []byte("unsaved"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Reap(context.Background(), ReapRequest{
+		MaxBytes:  1,
+		StateRoot: state,
+		Keep:      func(dir string) bool { return SamePath(dir, dirs["kept"]) },
+	})
+	if err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+	if len(res.Evicted) != 0 || len(res.Removed) != 0 {
+		t.Errorf("Evicted = %v, Removed = %v; want nothing", res.Evicted, res.Removed)
+	}
+	if len(res.Dirty) != 1 || res.UsedBytes <= 1 {
+		t.Errorf("Dirty = %v, UsedBytes = %d", res.Dirty, res.UsedBytes)
+	}
+	for b, dir := range dirs {
+		if !exists(dir) {
+			t.Errorf("%s was removed", b)
+		}
+	}
+}

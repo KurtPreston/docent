@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -10,18 +11,26 @@ import (
 
 // worktreeReapInterval is how often the daemon sweeps its own worktrees. Idle
 // retention is measured in days, so hourly is plenty, and each sweep costs a
-// `git status` per idle tree.
+// `git status` per idle tree plus, with a disk cap, a walk of every tree.
 const worktreeReapInterval = time.Hour
 
-// startWorktreeReaper sweeps docent's idle worktrees once at startup and then
-// hourly, until ctx is cancelled. A zero retention disables it.
+// reapPolicy is when the daemon removes its own worktrees: after sitting idle
+// for retention, or sooner when together they use more than maxBytes.
+type reapPolicy struct {
+	retention time.Duration
+	maxBytes  int64
+}
+
+// startWorktreeReaper sweeps docent's worktrees once at startup and then
+// hourly, until ctx is cancelled. It is off only when both the retention and
+// the disk cap are disabled.
 func (e *Engine) startWorktreeReaper(ctx context.Context) {
-	retention := e.cfg.WorktreeRetentionDuration()
-	if retention <= 0 {
+	policy := reapPolicy{retention: e.cfg.WorktreeRetentionDuration(), maxBytes: e.cfg.WorktreeMaxDiskBytes()}
+	if policy.retention <= 0 && policy.maxBytes <= 0 {
 		return
 	}
 	go func() {
-		e.reapWorktrees(ctx, retention)
+		e.reapWorktrees(ctx, policy)
 		ticker := time.NewTicker(worktreeReapInterval)
 		defer ticker.Stop()
 		for {
@@ -29,7 +38,7 @@ func (e *Engine) startWorktreeReaper(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				e.reapWorktrees(ctx, retention)
+				e.reapWorktrees(ctx, policy)
 			}
 		}
 	}()
@@ -41,14 +50,15 @@ func (e *Engine) startWorktreeReaper(ctx context.Context) {
 // records its directory once and resumes into it, so removing it would strand
 // the lane. Without the session store there is no way to tell which those are,
 // so the sweep is skipped entirely rather than guessed at.
-func (e *Engine) reapWorktrees(ctx context.Context, retention time.Duration) {
+func (e *Engine) reapWorktrees(ctx context.Context, policy reapPolicy) {
 	keep, ok := e.sessionDirs()
 	if !ok {
 		return
 	}
 	res, err := worktree.Reap(ctx, worktree.ReapRequest{
-		MaxIdle: retention,
-		Keep:    func(dir string) bool { return keepsDir(keep, dir) },
+		MaxIdle:  policy.retention,
+		MaxBytes: policy.maxBytes,
+		Keep:     func(dir string) bool { return keepsDir(keep, dir) },
 	})
 	if err != nil {
 		log.Printf("worktrees: sweep: %v", err)
@@ -57,7 +67,13 @@ func (e *Engine) reapWorktrees(ctx context.Context, retention time.Duration) {
 
 	// Report removals, trees kept for uncommitted work, and failures.
 	for _, dir := range res.Removed {
-		log.Printf("worktrees: removed %s (idle more than %s)", dir, retention)
+		log.Printf("worktrees: removed %s (idle more than %s)", dir, policy.retention)
+	}
+	for _, dir := range res.Evicted {
+		log.Printf("worktrees: removed %s (worktrees over %s)", dir, gib(policy.maxBytes))
+	}
+	if policy.maxBytes > 0 {
+		log.Printf("worktrees: using %s of %s", gib(res.UsedBytes), gib(policy.maxBytes))
 	}
 	for _, dir := range res.Dirty {
 		log.Printf("worktrees: kept idle %s: it has uncommitted changes", dir)
@@ -65,6 +81,11 @@ func (e *Engine) reapWorktrees(ctx context.Context, retention time.Duration) {
 	for _, err := range res.Errors {
 		log.Printf("worktrees: sweep: %v", err)
 	}
+}
+
+// gib formats a byte count in GiB for the log.
+func gib(n int64) string {
+	return fmt.Sprintf("%.1fGiB", float64(n)/(1<<30))
 }
 
 // keepsDir reports whether dir is one of keep, comparing through symlinks: a
