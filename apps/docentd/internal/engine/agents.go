@@ -57,6 +57,7 @@ func newAgentManager(cfg config.DaemonConfig, sessions *registry.Store) (*agents
 				Target:   req.Target,
 				Roots:    roots,
 				Hook:     cfg.WorktreeHook,
+				Sparse:   worktree.SparseFor(cfg.WorktreeSparse, req.Repo),
 			})
 			if err != nil {
 				return agentsession.ProvisionResult{}, err

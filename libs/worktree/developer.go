@@ -73,7 +73,7 @@ func createWorktree(ctx context.Context, p Project, branch string, req Request) 
 	if _, err := os.Stat(dir); err == nil {
 		return Result{}, fmt.Errorf("worktree: %s already exists", Display(dir))
 	}
-	if err := addWorktree(ctx, p.GitDir, dir, branch, req.BaseRef); err != nil {
+	if err := addWorktree(ctx, addSpec{base: p.GitDir, dir: dir, branch: branch, baseRef: req.BaseRef}); err != nil {
 		return Result{}, err
 	}
 	res := Result{Dir: dir, Project: p.Dir, Created: true}

@@ -248,6 +248,17 @@ simply absent from it. A non-zero exit is reported and not fatal — a checkout
 with failed setup is still a checkout, and stranding it is worse. The hook gets
 15 minutes and its own process group. See [examples/worktree.sh](../examples/worktree.sh).
 
+In a large repository where automations only touch a few directories, set
+`worktreeSparse` in `docentd.yaml` to limit docent's own worktrees to them:
+
+```yaml
+worktreeSparse:
+  my-org/my-repo: [apps/web, ci, .github]
+```
+
+The hook then runs in that sparse checkout, so it should not rely on files
+outside those directories, apart from the files at the repository root.
+
 ### Report delivery
 
 The `report` action's `deliver` field picks the destination:

@@ -52,9 +52,13 @@ type DaemonConfig struct {
 	// such as "200GB". Over it, the daemon removes the least recently used
 	// ones before their retention is up. Empty means the default; "0" or "off"
 	// removes the cap.
-	WorktreeMaxDisk string               `yaml:"worktreeMaxDisk,omitempty"`
-	SSHHost         string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
-	Directives      []userdata.Directive `yaml:"directives,omitempty"`
+	WorktreeMaxDisk string `yaml:"worktreeMaxDisk,omitempty"`
+	// WorktreeSparse limits the worktrees docent creates for itself, per
+	// repository ("owner/name"), to a sparse checkout of the listed directories.
+	// Repositories not listed get a full checkout.
+	WorktreeSparse map[string][]string  `yaml:"worktreeSparse,omitempty"`
+	SSHHost        string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
+	Directives     []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI and
 	// OpenTrigger are optional.

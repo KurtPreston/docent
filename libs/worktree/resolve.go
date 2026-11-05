@@ -62,6 +62,11 @@ type Request struct {
 	// of TargetExisting, TargetCreate or TargetInPlace; Resolve ignores it,
 	// being the isolated placement itself.
 	Target string
+	// Sparse limits a worktree docent creates for itself to these directories,
+	// in git's cone mode, so files at the repository root are always present.
+	// Empty means a full checkout. Only a newly created tree is narrowed; one
+	// that already exists keeps what it has.
+	Sparse []string
 	// StateRoot overrides the docent state directory, for tests.
 	StateRoot string
 }
@@ -195,7 +200,7 @@ func provision(ctx context.Context, root, repo, branch string, req Request, loca
 	if err != nil {
 		return "", "", false, "", err
 	}
-	dir, created, note, err = ensureWorktree(ctx, base, root, branch, req.BaseRef)
+	dir, created, note, err = ensureWorktree(ctx, root, addSpec{base: base, branch: branch, baseRef: req.BaseRef, sparse: req.Sparse})
 	if err != nil {
 		return "", "", false, "", err
 	}
@@ -386,7 +391,8 @@ func cloneURL(repo string, local Project, hasLocal bool, override string) (strin
 }
 
 // ensureWorktree returns branch's directory under root, creating it if needed.
-func ensureWorktree(ctx context.Context, base, root, branch, baseRef string) (dir string, created bool, note string, err error) {
+func ensureWorktree(ctx context.Context, root string, spec addSpec) (dir string, created bool, note string, err error) {
+	base, branch := spec.base, spec.branch
 	layout, err := List(ctx, base)
 	if err != nil {
 		return "", false, "", err
@@ -418,9 +424,11 @@ func ensureWorktree(ctx context.Context, base, root, branch, baseRef string) (di
 		// The lookup above found no worktree holding this branch, yet the
 		// directory one would live in is a live worktree: whatever is checked
 		// out in there is something else.
-		return healDrift(ctx, base, dir, branch, baseRef)
+		spec.dir = dir
+		return healDrift(ctx, spec)
 	}
-	if err := addWorktree(ctx, base, dir, branch, baseRef); err != nil {
+	spec.dir = dir
+	if err := addWorktree(ctx, spec); err != nil {
 		return "", false, "", err
 	}
 	return dir, true, "", nil
@@ -445,11 +453,12 @@ func ensureWorktree(ctx context.Context, base, root, branch, baseRef string) (di
 // edits sitting in a drifted tree belong to whichever branch is checked out,
 // not to this one, and git carries them across only until they conflict; a
 // clean rebuild is at least a state somebody can reason about.
-func healDrift(ctx context.Context, base, dir, branch, baseRef string) (string, bool, string, error) {
+func healDrift(ctx context.Context, spec addSpec) (string, bool, string, error) {
+	base, dir, branch := spec.base, spec.dir, spec.branch
 	was := headDescription(ctx, dir)
 	dirty, err := IsDirty(ctx, dir)
 	if err == nil && !dirty {
-		if _, switchErr := switchTo(ctx, dir, branch, baseRef); switchErr == nil {
+		if _, switchErr := switchTo(ctx, dir, branch, spec.baseRef); switchErr == nil {
 			return dir, false, fmt.Sprintf("%s was on %s; switched it back to %s",
 				Display(dir), was, branch), nil
 		}
@@ -457,7 +466,7 @@ func healDrift(ctx context.Context, base, dir, branch, baseRef string) (string, 
 	if err := removeWorktree(ctx, base, dir); err != nil {
 		return "", false, "", err
 	}
-	if err := addWorktree(ctx, base, dir, branch, baseRef); err != nil {
+	if err := addWorktree(ctx, spec); err != nil {
 		return "", false, "", err
 	}
 	return dir, true, fmt.Sprintf("%s was on %s and could not be switched back; rebuilt it on %s",
@@ -519,11 +528,12 @@ func isWorktreeOf(ctx context.Context, dir, base string) bool {
 // later push is a fast-forward rather than a surprise; a branch that exists
 // nowhere is created from the ref the caller asked for, which is the difference
 // between a backport landing on the release line and on the default branch.
-func addWorktree(ctx context.Context, base, dir, branch, baseRef string) error {
+func addWorktree(ctx context.Context, spec addSpec) error {
+	base, dir, branch := spec.base, spec.dir, spec.branch
 	if hasRef(ctx, base, "refs/heads/"+branch) {
 		// A local branch here is one docent has worked on before, carrying
 		// earlier turns' commits, so it is continued rather than reset.
-		return gitRun(ctx, base, gitTimeout, "worktree", "add", "--quiet", dir, branch)
+		return spec.add(ctx, dir, branch)
 	}
 	remoteRef := "refs/remotes/origin/" + branch
 	// Ask the remote before deciding anything, rather than only when the
@@ -534,14 +544,13 @@ func addWorktree(ctx context.Context, base, dir, branch, baseRef string) error {
 	_ = gitRun(ctx, base, fetchTimeout, "fetch", "--quiet", "origin",
 		"+refs/heads/"+branch+":"+remoteRef)
 	if hasRef(ctx, base, remoteRef) {
-		return gitRun(ctx, base, gitTimeout, "worktree", "add", "--quiet",
-			"--track", "-b", branch, dir, "origin/"+branch)
+		return spec.add(ctx, "--track", "-b", branch, dir, "origin/"+branch)
 	}
-	start, err := startPoint(ctx, base, baseRef)
+	start, err := startPoint(ctx, base, spec.baseRef)
 	if err != nil {
 		return err
 	}
-	return gitRun(ctx, base, gitTimeout, "worktree", "add", "--quiet", "-b", branch, dir, start)
+	return spec.add(ctx, "-b", branch, dir, start)
 }
 
 // switchTo checks branch out in a working tree that already exists, reporting
