@@ -49,9 +49,13 @@ type DaemonConfig struct {
 	// WorktreeRetention is how long one of docent's own worktrees may sit
 	// unused before the daemon removes it, as a Go duration ("72h"). Empty
 	// means the default; "0" or "off" keeps worktrees forever.
-	WorktreeRetention string               `yaml:"worktreeRetention,omitempty"`
-	SSHHost           string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
-	Directives        []userdata.Directive `yaml:"directives,omitempty"`
+	WorktreeRetention string `yaml:"worktreeRetention,omitempty"`
+	// WorktreeSparse limits the worktrees docent creates for itself, per
+	// repository ("owner/name"), to a sparse checkout of the listed directories.
+	// Repositories not listed get a full checkout.
+	WorktreeSparse map[string][]string  `yaml:"worktreeSparse,omitempty"`
+	SSHHost        string               `yaml:"sshHost"` // optional ssh alias for remote editor open (DOCENT_HOST)
+	Directives     []userdata.Directive `yaml:"directives,omitempty"`
 
 	// Loaded from configDir/config.yaml (not docentd.yaml). AI and
 	// OpenTrigger are optional.

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 const agentTimeout = 30 * time.Minute
@@ -37,6 +39,9 @@ type AgentRunner struct {
 	Roots []string
 	// WorktreeHook is the per-worktree setup script run on a fresh checkout.
 	WorktreeHook string
+	// WorktreeSparse maps a repository to the directories its worktrees are
+	// limited to; see worktree.SparseFor.
+	WorktreeSparse map[string][]string
 }
 
 func (r AgentRunner) Run(ctx context.Context, action Action, ev Event) error {
@@ -101,6 +106,7 @@ func (r AgentRunner) RunWithOutput(ctx context.Context, action Action, ev Event)
 		OpenPath: actx.OpenPath,
 		Roots:    r.Roots,
 		Hook:     r.WorktreeHook,
+		Sparse:   worktree.SparseFor(r.WorktreeSparse, actx.Repo),
 	})
 	if err != nil {
 		return "", err

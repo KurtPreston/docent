@@ -143,7 +143,7 @@ func openWorktreeAt(ctx context.Context, gitDir, dir, branch, docentRef string) 
 		}
 		return nil
 	}
-	return addWorktree(ctx, gitDir, dir, branch, "")
+	return addWorktree(ctx, addSpec{base: gitDir, dir: dir, branch: branch})
 }
 
 // IsolatedBase is docent's bare repository for a repo, whether or not it exists.

@@ -250,8 +250,9 @@ func (e *Engine) wireAutomationConnectors() {
 		// The runner needs to know where the developer's own copies of a
 		// repository live, to learn a clone URL and to reference its objects.
 		// The local-git roots are exactly that.
-		Roots:        collectors.LocalGitRoots(e.cfg.Directives),
-		WorktreeHook: e.cfg.WorktreeHook,
+		Roots:          collectors.LocalGitRoots(e.cfg.Directives),
+		WorktreeHook:   e.cfg.WorktreeHook,
+		WorktreeSparse: e.cfg.WorktreeSparse,
 		Commenter: automation.IssueCommenterFunc(func(ctx context.Context, issueKey, body string) error {
 			dir, ok := firstDirective(e.cfg.Directives, "jira")
 			if !ok {

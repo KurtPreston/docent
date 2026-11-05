@@ -45,6 +45,9 @@ type WorkdirRequest struct {
 	RemoteURL string
 	// Hook is the per-worktree setup script run on a freshly created directory.
 	Hook string
+	// Sparse limits docent's own new worktree to these directories; see
+	// worktree.Request.Sparse.
+	Sparse []string
 	// StateRoot overrides docent's state directory, for tests.
 	StateRoot string
 }
@@ -128,6 +131,7 @@ func provisionWorktree(ctx context.Context, req WorkdirRequest) (WorkdirResult, 
 		Roots:     req.Roots,
 		RemoteURL: req.RemoteURL,
 		Hook:      req.Hook,
+		Sparse:    req.Sparse,
 		Target:    req.Target,
 		StateRoot: req.StateRoot,
 	}
