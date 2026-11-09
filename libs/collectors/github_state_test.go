@@ -7,18 +7,18 @@ import (
 	"time"
 )
 
-// TestCollectStateRunsSearchesTogether proves the open-PR searches overlap each
-// other and the recently-closed lookups. Each rule below waits for a marker that
-// a later call (in the old, one-at-a-time order) creates, so running them in
-// turn times out instead of passing.
-func TestCollectStateRunsSearchesTogether(t *testing.T) {
+// TestCollectStateRunsPlainSearchesInTurn proves the plain `gh search prs`
+// calls, open and recently-closed alike, never overlap, while the GraphQL watch
+// scan still runs alongside them: it waits for the last plain search to start,
+// so running it after them would time out.
+func TestCollectStateRunsPlainSearchesInTurn(t *testing.T) {
 	gh := newFakeGH(t)
 	watched := fixturePR{Number: 7, Author: "teammate", Paths: []string{"services/api/main.go"}}
-	gh.on(ghRule{Pattern: "is:pr is:open repo:my-org/my-repo", Out: watchPageJSON(t, watched), WaitFor: "authored-started"})
-	gh.on(ghRule{Pattern: "--author my-user --state open", Out: "[]", Touch: "authored-started", WaitFor: "closed-started"})
-	gh.on(ghRule{Pattern: "--author my-user --state closed", Out: "[]", Touch: "closed-started"})
-	gh.on(ghRule{Pattern: "--review-requested my-user", Out: "[]"})
-	gh.on(ghRule{Pattern: "--assignee my-user", Out: "[]"})
+	gh.on(ghRule{Pattern: "is:pr is:open repo:my-org/my-repo", Out: watchPageJSON(t, watched), WaitFor: "closed-started"})
+	gh.on(ghRule{Pattern: "--author my-user --state open", Out: "[]", Exclusive: true})
+	gh.on(ghRule{Pattern: "--author my-user --state closed", Out: "[]", Touch: "closed-started", Exclusive: true})
+	gh.on(ghRule{Pattern: "--review-requested my-user", Out: "[]", Exclusive: true})
+	gh.on(ghRule{Pattern: "--assignee my-user", Out: "[]", Exclusive: true})
 	gh.on(ghRule{Pattern: "-F number=7", Out: prDetailJSON("teammate")})
 
 	items, err := GitHubCollector{Clock: time.Now}.CollectState(context.Background(), watchDirective(), stateOpts())
@@ -39,6 +39,9 @@ func TestCollectStateRunsSearchesTogether(t *testing.T) {
 	}
 	if n := len(gh.calls()); n != 6 {
 		t.Fatalf("want 6 gh calls, got %d: %v", n, gh.calls())
+	}
+	if o := gh.overlaps(); len(o) != 0 {
+		t.Fatalf("plain searches overlapped: %q", o)
 	}
 }
 

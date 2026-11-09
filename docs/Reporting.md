@@ -238,10 +238,18 @@ keeps an automation like `autofix-pr` from pushing commits at a teammate's PR.
 
 Each candidate is resolved as fully as one of your own, because the
 [bucket](#how-an-open-pr-is-classified) is the whole reason a candidate is worth
-listing: it says whether anyone is still waiting on a reviewer. That costs one
-API round trip each, so the pool is capped at the 50 most recently updated and
-the lookups run concurrently. A repo with hundreds of open PRs will show you the
-newest 50 rather than spending a collection on the rest.
+listing: it says whether anyone is still waiting on a reviewer. That costs a
+detail lookup each, so the pool is capped at the 50 most recently updated. Detail
+lookups for open PRs go out in GraphQL batches of up to 10 PRs, a few batches at
+a time; a PR a batch can't answer is looked up on its own. A repo with hundreds
+of open PRs will show you the newest 50 rather than spending a collection on the
+rest.
+
+The plain `gh search prs` calls — your own PRs, review requests, assignments,
+`pr_queries`, and the recently-closed search below — run one at a time within a
+collect, because GitHub's secondary rate limit trips on bursts of concurrent
+searches. Path-filtered `watch` scans don't use `gh search prs` and still run
+alongside them.
 
 Like `pr_queries`, these searches run at `involved` and `all` only: `scope: self`
 is your own work by definition, and other people's PRs are the opposite of that.
@@ -259,6 +267,11 @@ branch; without one there is no telling a commit you pushed to the PR from the
 squash-merge commit GitHub attributes to you on the base branch. It also lets
 correlation anchor a merged PR to its branch unit rather than floating it on the
 ticket.
+
+Fetching that head branch costs a lookup per PR, so docent caches each closed
+PR's head branch and final state under `<state dir>/cache/github-closed/` and
+looks up only PRs it hasn't seen closed before. A closed PR's head branch doesn't
+change, and PRs that fall out of the window are dropped from the cache.
 
 The separate kind is a safety boundary rather than a naming choice. Everything
 that reads `pr_review_status` takes "open" as given: the automation matcher's

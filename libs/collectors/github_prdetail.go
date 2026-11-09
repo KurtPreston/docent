@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -53,33 +54,14 @@ type prDetail struct {
 // action decides a bucket, so older history cannot change the answer; and a PR
 // with more than 50 unresolved threads is past the point where a follow-up queue
 // helps.
-const prDetailQuery = `
+var prDetailQuery = `
 query($owner:String!,$name:String!,$number:Int!){
-  repository(owner:$owner,name:$name){
-    pullRequest(number:$number){
-      state isDraft mergeable reviewDecision updatedAt headRefName headRefOid baseRefName
-      author{ login __typename }
-      commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
-      reviewThreads(first:50){
-        nodes{
-          id isResolved isOutdated path line
-          comments(first:50){ nodes{ author{login} body url createdAt } }
-        }
-      }
-      reviews(last:30){ nodes{ state createdAt submittedAt body author{login __typename} } }
-      timelineItems(last:30, itemTypes:[ISSUE_COMMENT,PULL_REQUEST_REVIEW,PULL_REQUEST_COMMIT,HEAD_REF_FORCE_PUSHED_EVENT,READY_FOR_REVIEW_EVENT]){
-        nodes{
-          __typename
-          ... on IssueComment{ createdAt body author{login __typename} }
-          ... on PullRequestReview{ createdAt submittedAt state author{login __typename} }
-          ... on PullRequestCommit{ commit{ committedDate } }
-          ... on HeadRefForcePushedEvent{ createdAt }
-          ... on ReadyForReviewEvent{ createdAt }
-        }
-      }
-    }
-  }
-}`
+  repository(owner:$owner,name:$name){ pullRequest(number:$number){ ...prDetail } }
+}
+` + prDetailFragment
+
+//go:embed github_prdetail.graphql
+var prDetailFragment string
 
 // ghActor decodes an author, carrying __typename so bots can be told apart. A
 // null author (a deleted account) decodes to the zero value.
@@ -314,31 +296,38 @@ func (c GitHubCollector) resolveReviewRows(ctx context.Context, run ghRun, b rev
 		}
 	}
 
-	// Each worker resolves rows until the queue is drained
+	// Each worker resolves jobs, a batch of PRs or a single one, until the
+	// queue is drained
+	jobs := planReviewLookups(b.rows, indices)
 	var mu sync.Mutex
-	work := make(chan int)
+	work := make(chan []int)
 	var wg sync.WaitGroup
-	for i := 0; i < prDetailWorkers && i < len(indices); i++ {
+	for i := 0; i < prResolveWorkers && i < len(jobs); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for idx := range work {
-				r := &b.rows[idx]
-				detail := c.resolvePRDetail(ctx, run.env, r.spec, r.row.URL, run.user, run.directive, run.opts)
+			for job := range work {
+				picked := make([]prReviewRow, len(job))
+				for k, idx := range job {
+					picked[k] = b.rows[idx]
+				}
+				details := c.resolveLookupJob(ctx, run, picked)
 				// onDone belongs to the caller and is not promised to be safe
 				// to call from several goroutines, so it runs under the same
 				// lock that stores the result.
 				mu.Lock()
-				r.detail = detail
-				if b.onDone != nil {
-					b.onDone()
+				for k, idx := range job {
+					b.rows[idx].detail = details[k]
+					if b.onDone != nil {
+						b.onDone()
+					}
 				}
 				mu.Unlock()
 			}
 		}()
 	}
-	for _, i := range indices {
-		work <- i
+	for _, job := range jobs {
+		work <- job
 	}
 	close(work)
 	wg.Wait()
