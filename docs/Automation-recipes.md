@@ -723,12 +723,14 @@ directives:
 
 A task is queued when it has the `agent` label, is in To Do, and Backlog.md reports
 it as ready (`isReady`). Its Implementation Plan is the agent's brief, and it
-must start with `Repo:` and `Branch:` lines naming the repository and the
-branch to work on. Docent reads those lines to pick the checkout, the same way
-it does for a pull request. `Branch:` holds only the branch name; put notes
-about it, such as "this is an existing pull request's branch", in the body.
-When the branch already exists on the remote, docent checks it out rather than
-creating a new one:
+must start with a `Repo:` line naming the repository. A `Branch:` line names
+the branch to work on; leave it out and docent picks one from the task title
+(see [`branch_prefix`](Reporting.md#backlogmd-boards)). Docent reads those
+lines to pick the checkout, the same way it does for a pull request. `Branch:`
+holds only the branch name; put notes about it, such as "this is an existing
+pull request's branch", in the body. When the branch already exists on the
+remote, docent checks it out rather than creating a new one. Name the branch
+yourself whenever it must be a particular one, such as an open pull request's:
 
 ```markdown
 Repo: my-org/my-repo
@@ -818,12 +820,14 @@ Some things to know:
 - **Claiming is what stops repeats.** Cooldowns and queued jobs live in memory,
   so after a restart `include_existing` fires again for every task that is
   still queued. A task the agent claimed is In Progress, so it isn't.
-- **A task without `Repo:` and `Branch:` fails before the agent starts**, so
-  nothing claims it and it stays queued. The job shows the error on the
-  Automations page. Add the lines, then remove and re-add the `agent` label
-  (or restart `docentd`) to queue it again.
+- **A task without `Repo:` fails before the agent starts**, so nothing claims
+  it and it stays queued. The job shows the error on the Automations page. Add
+  the line, then remove and re-add the `agent` label (or restart `docentd`) to
+  queue it again.
 - **A `Branch:` that isn't a valid branch name keeps the task out of the
-  queue.** The task gets `plan_valid: "false"` and the reason in `plan_error`,
+  queue.** Docent doesn't pick a name in its place, since the plan meant a
+  particular branch and a guess could put the work on someone else's. The task
+  gets `plan_valid: "false"` and the reason in `plan_error`,
   so nothing starts. To hear about it, add a rule like this, then fix the line
   and the task queues itself on the next poll:
 

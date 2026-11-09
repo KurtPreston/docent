@@ -1359,6 +1359,11 @@
               "type": "string",
               "description": "Status a labeled task must have to count as queued (default To Do).",
               "x-docent-setup-skip-prompt": true
+            },
+            "branch_prefix": {
+              "type": "string",
+              "description": "Starts the branch name docent picks from the title of a queued task whose plan has no Branch: header, such as agent/.",
+              "x-docent-setup-skip-prompt": true
             }
           },
           "additionalProperties": {
