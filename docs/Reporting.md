@@ -596,6 +596,8 @@ Tasks carrying `queue_label` in `queue_status` also get:
 | `file` | Absolute path of the task's Markdown file. |
 | `plan` | The task's Implementation Plan text. |
 | header fields | Each `Key: value` line at the top of the plan, before the first other line, as a lower-cased field (spaces and dashes become `_`). A plan starting `Repo: my-org/my-repo` and `Branch: fix-login` sets `repo` and `branch`, which is what `workdir: worktree` uses to pick the checkout. Headers never replace the fields above. |
+| `plan_valid` | `false` when a header can't be used, otherwise `true`. Today that means a `Branch:` value git would refuse as a branch name, such as one with a note after it (`Branch: fix-login (existing PR)`). The bad `branch` field is dropped and `queued` is `false`, so no agent starts on the task. |
+| `plan_error` | Why `plan_valid` is `false`, such as ``Branch header: branch name "fix-login (existing PR)" contains ' '``. Empty otherwise. |
 
 `docent doctor` checks that `board` is a directory and that the command is on
 `PATH`.
