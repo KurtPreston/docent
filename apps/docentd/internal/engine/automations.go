@@ -29,9 +29,28 @@ func (e *Engine) AutomationJobs(limit int) []automation.Job {
 	return e.automations.Store.List(limit)
 }
 
+// shouldAlertCollectorError decides whether a failed collect starts an outage
+// worth reporting. Most errors alert on the first failure. A rate limit, such
+// as GitHub's secondary limit on bursts of searches, usually clears by the next
+// poll, so it alerts only when the following collect fails too. Either way an
+// outage alerts at most once, until the unit recovers.
+func shouldAlertCollectorError(err error, prevErr string, prevAlerted bool) bool {
+	if prevAlerted {
+		return false
+	}
+	return prevErr != "" || !isTransientCollectError(err)
+}
+
+// isTransientCollectError reports whether err is a rate limit that a later
+// poll is likely to get past without anyone stepping in.
+func isTransientCollectError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "rate limit")
+}
+
 // alertCollectorError offers automations a collector_error signal when a unit
-// starts failing, such as after its credentials expire. It fires once per
-// outage: the unit must have been healthy (or never run) before this collect.
+// starts failing, such as after its credentials expire. collectUnit calls it
+// once per outage, as shouldAlertCollectorError decides.
 // The outage start time is part of the StableID, so cooldown dedupe doesn't
 // swallow the next outage. It must not run under e.mu.
 func (e *Engine) alertCollectorError(ctx context.Context, u *unit, err error, now time.Time) {
