@@ -65,13 +65,16 @@ type backlogConfig struct {
 	queueLabel  string
 	queueStatus string
 	gitEvents   bool
+	// branchPrefix starts every branch name docent elects for a brief without
+	// a Branch: header. A header's own name is used as written.
+	branchPrefix string
 }
 
 // backlogReservedFields are the fields a plan header line may not override.
 var backlogReservedFields = map[string]bool{
 	"id": true, "status": true, "labels": true, "priority": true, "project": true,
 	"due_date": true, "file": true, "ready": true, "queued": true, "plan": true,
-	"plan_valid": true, "plan_error": true,
+	"plan_valid": true, "plan_error": true, "branch_elected": true,
 }
 
 // backlogHeaderLine matches a `Key: value` line at the top of a plan.
@@ -84,12 +87,13 @@ func parseBacklogConfig(directive userdata.Directive) (backlogConfig, error) {
 		return backlogConfig{}, fmt.Errorf("config.board is required for backlog collector")
 	}
 	cfg := backlogConfig{
-		directiveID: directive.ID,
-		board:       board,
-		command:     strings.Fields(directive.Config["command"]),
-		pullCommand: strings.TrimSpace(directive.Config["pull_command"]),
-		queueLabel:  strings.TrimSpace(directive.Config["queue_label"]),
-		queueStatus: strings.TrimSpace(directive.Config["queue_status"]),
+		directiveID:  directive.ID,
+		board:        board,
+		command:      strings.Fields(directive.Config["command"]),
+		pullCommand:  strings.TrimSpace(directive.Config["pull_command"]),
+		queueLabel:   strings.TrimSpace(directive.Config["queue_label"]),
+		queueStatus:  strings.TrimSpace(directive.Config["queue_status"]),
+		branchPrefix: strings.TrimSpace(directive.Config["branch_prefix"]),
 	}
 	switch value := strings.TrimSpace(directive.Config["git_events"]); value {
 	case "", "false":
@@ -97,6 +101,13 @@ func parseBacklogConfig(directive userdata.Directive) (backlogConfig, error) {
 		cfg.gitEvents = true
 	default:
 		return backlogConfig{}, fmt.Errorf("config.git_events must be \"true\" or \"false\"")
+	}
+
+	// A prefix must leave a valid branch name once a slug is added to it
+	if cfg.branchPrefix != "" {
+		if err := worktree.CheckBranchName(cfg.branchPrefix + "x"); err != nil {
+			return backlogConfig{}, fmt.Errorf("config.branch_prefix %q cannot start a branch name: %w", cfg.branchPrefix, err)
+		}
 	}
 
 	// Fill defaults for the command and queue status
@@ -289,7 +300,7 @@ func backlogItem(directiveID string, cfg backlogConfig, task backlogTask) Status
 				fields[k] = v
 			}
 		}
-		checkPlanHeaders(fields)
+		checkPlanHeaders(cfg, task, fields)
 	}
 
 	// A task listing is state, not activity, so ObservedAt stays unset
@@ -305,14 +316,20 @@ func backlogItem(directiveID string, cfg backlogConfig, task backlogTask) Status
 	}
 }
 
-// checkPlanHeaders records whether a plan's headers can be acted on. A branch
-// git would refuse to create is dropped, reported in plan_error, and holds the
-// task out of the queue, so the mistake shows on the task rather than as an
-// agent run that fails before it starts.
-func checkPlanHeaders(fields map[string]string) {
+// checkPlanHeaders records whether a plan's headers can be acted on. A plan
+// without a Branch: header gets a branch elected for it, since any branch of
+// the task's own will do. A branch git would refuse to create is different:
+// the plan named a branch docent can't read, and guessing could put the work on
+// someone else's, so it is dropped, reported in plan_error, and holds the task
+// out of the queue.
+func checkPlanHeaders(cfg backlogConfig, task backlogTask, fields map[string]string) {
 	fields["plan_valid"] = "true"
 	branch, ok := fields["branch"]
 	if !ok {
+		if name := electBranch(cfg.branchPrefix, task.Title, task.ID); name != "" {
+			fields["branch"] = name
+			fields["branch_elected"] = "true"
+		}
 		return
 	}
 	if err := worktree.CheckBranchName(branch); err != nil {
@@ -348,13 +365,16 @@ func (c BacklogCollector) ValidateDirective(ctx context.Context, directive userd
 	cfg, err := parseBacklogConfig(directive)
 	if err != nil {
 		field := "config.board"
-		if strings.Contains(err.Error(), "config.git_events") {
+		switch {
+		case strings.Contains(err.Error(), "config.git_events"):
 			field = "config.git_events"
+		case strings.Contains(err.Error(), "config.branch_prefix"):
+			field = "config.branch_prefix"
 		}
 		return []ValidationIssue{{
 			Field:       field,
 			Message:     err.Error(),
-			Remediation: "set config.board to the board directory and config.git_events to \"true\" or \"false\"",
+			Remediation: "set config.board to the board directory, config.git_events to \"true\" or \"false\", and config.branch_prefix to something a git branch name can start with",
 		}}
 	}
 

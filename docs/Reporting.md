@@ -568,6 +568,7 @@ directives:
       statuses: To Do, In Progress    # optional, default every status
       queue_label: agent          # optional; enables the queued field
       queue_status: To Do         # optional, default To Do
+      branch_prefix: agent/       # optional; starts branch names docent picks
     state:
       poll: { interval: 5m, on_load: true }
 ```
@@ -596,6 +597,8 @@ Tasks carrying `queue_label` in `queue_status` also get:
 | `file` | Absolute path of the task's Markdown file. |
 | `plan` | The task's Implementation Plan text. |
 | header fields | Each `Key: value` line at the top of the plan, before the first other line, as a lower-cased field (spaces and dashes become `_`). A plan starting `Repo: my-org/my-repo` and `Branch: fix-login` sets `repo` and `branch`, which is what `workdir: worktree` uses to pick the checkout. Headers never replace the fields above. |
+| `branch` (picked) | When the plan has no `Branch:` header, docent picks one: `branch_prefix` followed by the task title in lower case with dashes between words (cut to about 48 characters), or by the task ID if the title has no letters or digits. It depends only on the task, so a retry continues the same branch. If a branch with that name already exists on the remote, docent checks it out, so write `Branch:` when the name must be unique. Change the title and the next run starts a new branch. |
+| `branch_elected` | `true` when docent picked `branch`; unset when the plan named it. |
 | `plan_valid` | `false` when a header can't be used, otherwise `true`. Today that means a `Branch:` value git would refuse as a branch name, such as one with a note after it (`Branch: fix-login (existing PR)`). The bad `branch` field is dropped and `queued` is `false`, so no agent starts on the task. |
 | `plan_error` | Why `plan_valid` is `false`, such as ``Branch header: branch name "fix-login (existing PR)" contains ' '``. Empty otherwise. |
 

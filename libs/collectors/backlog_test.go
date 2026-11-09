@@ -225,6 +225,50 @@ func TestBacklogCollector_InvalidBranchHeader(t *testing.T) {
 	}
 }
 
+// A brief without a Branch: header gets a branch elected from its title, and
+// stays queued; one with a header keeps it.
+func TestBacklogCollector_ElectsMissingBranch(t *testing.T) {
+	fake := newFakeBacklog()
+	fake.out["backlog task view TASK-1 --json"] = `{"task":{"id":"TASK-1","implementationPlan":"Repo: my-org/my-repo\n\nDo it."}}`
+	it := collectBacklog(t, fake, map[string]string{"board": t.TempDir(), "queue_label": "agent"})["TASK-1"]
+	if it.Fields["branch"] != "queued-task" || it.Fields["branch_elected"] != "true" {
+		t.Fatalf("branch=%q branch_elected=%q", it.Fields["branch"], it.Fields["branch_elected"])
+	}
+	if it.Fields["queued"] != "true" || it.Fields["plan_valid"] != "true" {
+		t.Errorf("queued=%q plan_valid=%q, want both true", it.Fields["queued"], it.Fields["plan_valid"])
+	}
+
+	// A configured prefix starts the elected name
+	fake = newFakeBacklog()
+	fake.out["backlog task view TASK-1 --json"] = `{"task":{"id":"TASK-1","implementationPlan":"Repo: my-org/my-repo\n\nDo it."}}`
+	cfg := map[string]string{"board": t.TempDir(), "queue_label": "agent", "branch_prefix": "agent/"}
+	if got := collectBacklog(t, fake, cfg)["TASK-1"].Fields["branch"]; got != "agent/queued-task" {
+		t.Errorf("prefixed branch = %q", got)
+	}
+
+	// A header's own branch is used as written, prefix or not
+	named := collectBacklog(t, newFakeBacklog(), cfg)["TASK-1"]
+	if named.Fields["branch"] != "my-branch" || named.Fields["branch_elected"] != "" {
+		t.Errorf("branch=%q branch_elected=%q", named.Fields["branch"], named.Fields["branch_elected"])
+	}
+}
+
+func TestElectBranch(t *testing.T) {
+	cases := []struct{ prefix, title, id, want string }{
+		{"", "Fix the login timeout", "TASK-7", "fix-the-login-timeout"},
+		{"", "  Café: über -- résumé!! ", "TASK-7", "caf-ber-r-sum"},
+		{"", "Raise the login timeout to thirty seconds and cover it with a test", "TASK-7", "raise-the-login-timeout-to-thirty-seconds-and"},
+		{"", "日本語", "TASK-7", "task-7"},
+		{"", "", "", ""},
+		{"agent/", "Fix it", "TASK-7", "agent/fix-it"},
+	}
+	for _, tc := range cases {
+		if got := electBranch(tc.prefix, tc.title, tc.id); got != tc.want {
+			t.Errorf("electBranch(%q, %q, %q) = %q, want %q", tc.prefix, tc.title, tc.id, got, tc.want)
+		}
+	}
+}
+
 func TestParsePlanHeaders(t *testing.T) {
 	got := parsePlanHeaders("Repo: my-org/my-repo\nWork Dir:  services/api/  \n# Steps\nBranch: late")
 	if len(got) != 2 || got["repo"] != "my-org/my-repo" || got["work_dir"] != "services/api/" {
@@ -292,6 +336,12 @@ func TestBacklogCollector_ValidateDirective(t *testing.T) {
 	// An existing board and a command on PATH pass
 	issues = c.ValidateDirective(ctx, backlogDirective(map[string]string{"board": t.TempDir(), "command": "sh"}), nil)
 	if len(issues) != 0 {
+		t.Fatalf("got %+v", issues)
+	}
+
+	// A branch prefix no branch name could start with is reported
+	issues = c.ValidateDirective(ctx, backlogDirective(map[string]string{"board": t.TempDir(), "branch_prefix": "my agent/"}), nil)
+	if len(issues) != 1 || issues[0].Field != "config.branch_prefix" {
 		t.Fatalf("got %+v", issues)
 	}
 }
