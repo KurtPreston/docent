@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
+	"github.com/KurtPreston/docent/libs/worktree"
 )
 
 // BacklogCommand is one command the backlog collector runs: the backlog CLI
@@ -70,6 +71,7 @@ type backlogConfig struct {
 var backlogReservedFields = map[string]bool{
 	"id": true, "status": true, "labels": true, "priority": true, "project": true,
 	"due_date": true, "file": true, "ready": true, "queued": true, "plan": true,
+	"plan_valid": true, "plan_error": true,
 }
 
 // backlogHeaderLine matches a `Key: value` line at the top of a plan.
@@ -287,6 +289,7 @@ func backlogItem(directiveID string, cfg backlogConfig, task backlogTask) Status
 				fields[k] = v
 			}
 		}
+		checkPlanHeaders(fields)
 	}
 
 	// A task listing is state, not activity, so ObservedAt stays unset
@@ -299,6 +302,24 @@ func backlogItem(directiveID string, cfg backlogConfig, task backlogTask) Status
 		StableID:    fmt.Sprintf("task:%s:%s", directiveID, task.ID),
 		Fields:      fields,
 		IsSelf:      true,
+	}
+}
+
+// checkPlanHeaders records whether a plan's headers can be acted on. A branch
+// git would refuse to create is dropped, reported in plan_error, and holds the
+// task out of the queue, so the mistake shows on the task rather than as an
+// agent run that fails before it starts.
+func checkPlanHeaders(fields map[string]string) {
+	fields["plan_valid"] = "true"
+	branch, ok := fields["branch"]
+	if !ok {
+		return
+	}
+	if err := worktree.CheckBranchName(branch); err != nil {
+		delete(fields, "branch")
+		fields["plan_valid"] = "false"
+		fields["plan_error"] = "Branch header: " + err.Error()
+		fields["queued"] = "false"
 	}
 }
 

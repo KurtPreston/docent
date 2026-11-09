@@ -196,6 +196,35 @@ func TestBacklogCollector_PlanHeaders(t *testing.T) {
 	}
 }
 
+// A Branch header git would refuse holds the task out of the queue and says why,
+// instead of starting an agent whose worktree can never be created.
+func TestBacklogCollector_InvalidBranchHeader(t *testing.T) {
+	fake := newFakeBacklog()
+	fake.out["backlog task view TASK-1 --json"] = `{"task":{"id":"TASK-1",` +
+		`"implementationPlan":"Repo: my-org/my-repo\nBranch: fix-login (existing PR branch)\n\nDo it."}}`
+	items := collectBacklog(t, fake, map[string]string{"board": t.TempDir(), "queue_label": "agent"})
+
+	it := items["TASK-1"]
+	if it.Fields["queued"] != "false" || it.Fields["plan_valid"] != "false" {
+		t.Fatalf("queued=%q plan_valid=%q, want both false", it.Fields["queued"], it.Fields["plan_valid"])
+	}
+	if _, ok := it.Fields["branch"]; ok {
+		t.Errorf("an invalid branch must not reach automations: %q", it.Fields["branch"])
+	}
+	if want := `Branch header: branch name "fix-login (existing PR branch)" contains ' '`; it.Fields["plan_error"] != want {
+		t.Errorf("plan_error = %q, want %q", it.Fields["plan_error"], want)
+	}
+	if it.Fields["repo"] != "my-org/my-repo" {
+		t.Errorf("other headers should still be read: %v", it.Fields)
+	}
+
+	// A valid brief is marked so, with no error
+	ok := collectBacklog(t, newFakeBacklog(), map[string]string{"board": t.TempDir(), "queue_label": "agent"})["TASK-1"]
+	if ok.Fields["plan_valid"] != "true" || ok.Fields["plan_error"] != "" || ok.Fields["queued"] != "true" {
+		t.Errorf("valid plan: plan_valid=%q plan_error=%q queued=%q", ok.Fields["plan_valid"], ok.Fields["plan_error"], ok.Fields["queued"])
+	}
+}
+
 func TestParsePlanHeaders(t *testing.T) {
 	got := parsePlanHeaders("Repo: my-org/my-repo\nWork Dir:  services/api/  \n# Steps\nBranch: late")
 	if len(got) != 2 || got["repo"] != "my-org/my-repo" || got["work_dir"] != "services/api/" {

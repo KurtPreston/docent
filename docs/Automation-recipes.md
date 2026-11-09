@@ -725,7 +725,10 @@ A task is queued when it has the `agent` label, is in To Do, and Backlog.md repo
 it as ready (`isReady`). Its Implementation Plan is the agent's brief, and it
 must start with `Repo:` and `Branch:` lines naming the repository and the
 branch to work on. Docent reads those lines to pick the checkout, the same way
-it does for a pull request:
+it does for a pull request. `Branch:` holds only the branch name; put notes
+about it, such as "this is an existing pull request's branch", in the body.
+When the branch already exists on the remote, docent checks it out rather than
+creating a new one:
 
 ```markdown
 Repo: my-org/my-repo
@@ -819,5 +822,27 @@ Some things to know:
   nothing claims it and it stays queued. The job shows the error on the
   Automations page. Add the lines, then remove and re-add the `agent` label
   (or restart `docentd`) to queue it again.
+- **A `Branch:` that isn't a valid branch name keeps the task out of the
+  queue.** The task gets `plan_valid: "false"` and the reason in `plan_error`,
+  so nothing starts. To hear about it, add a rule like this, then fix the line
+  and the task queues itself on the next poll:
+
+  ```yaml
+  - id: backlog-bad-brief
+    name: Flag queued tasks whose brief can't be used
+    enabled: true
+    trigger:
+      type: transition
+      source: backlog
+      kind: task
+      include_existing: true
+      when:
+        field: plan_valid
+        to: "false"
+    actions:
+      - type: shell
+        command: ~/.config/docent/notify.sh
+        args: ["{{.Title}}: {{index .Fields \"plan_error\"}}"]
+  ```
 - **One board, one machine.** Run the rule on a single `docentd`. Claiming and
   syncing first narrows the race between two machines but doesn't close it.
