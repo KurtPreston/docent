@@ -134,6 +134,8 @@ func serveFakeHub(dir string, args []string) int {
 		return st.files(joined)
 	case strings.Contains(joined, "-F number="):
 		return st.detail(args)
+	case strings.Contains(joined, "-F k0="):
+		return st.detailBatch(args)
 	case strings.Contains(joined, "q=is:pr is:open"):
 		return st.search(args)
 	}
@@ -272,6 +274,34 @@ func (st hubState) authored(login string) int {
 // detail answers a PR detail lookup.
 func (st hubState) detail(args []string) int {
 	n, _ := strconv.Atoi(flagValue(args, "number"))
+	pr := st.detailNode(n)
+	if pr == nil {
+		fmt.Fprintln(os.Stderr, "fakehub: no PR", n)
+		return 1
+	}
+	b, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": pr}}})
+	fmt.Print(string(b))
+	return 0
+}
+
+// detailBatch answers a batched detail query, one alias per -F kN= number.
+func (st hubState) detailBatch(args []string) int {
+	data := map[string]any{}
+	for i := 0; ; i++ {
+		v := flagValue(args, fmt.Sprintf("k%d", i))
+		if v == "" {
+			break
+		}
+		n, _ := strconv.Atoi(v)
+		data[fmt.Sprintf("p%d", i)] = map[string]any{"pullRequest": st.detailNode(n)}
+	}
+	b, _ := json.Marshal(map[string]any{"data": data})
+	fmt.Print(string(b))
+	return 0
+}
+
+// detailNode renders PR n as the detail query returns it, or nil if unknown.
+func (st hubState) detailNode(n int) map[string]any {
 	for _, p := range st.PRs {
 		if p.Number != n {
 			continue
@@ -280,18 +310,15 @@ func (st hubState) detail(args []string) int {
 		if p.Closed {
 			state = "CLOSED"
 		}
-		b, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+		return map[string]any{
 			"state": state, "isDraft": false, "mergeable": "MERGEABLE", "reviewDecision": "",
 			"updatedAt": p.Updated.Format(time.RFC3339), "headRefName": "fix", "headRefOid": p.Head, "baseRefName": p.Base,
 			"author":        map[string]string{"login": p.Author, "__typename": "User"},
 			"commits":       map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{"state": "SUCCESS"}}}}},
 			"reviewThreads": map[string]any{"nodes": []any{}}, "reviews": map[string]any{"nodes": []any{}}, "timelineItems": map[string]any{"nodes": []any{}},
-		}}}})
-		fmt.Print(string(b))
-		return 0
+		}
 	}
-	fmt.Fprintln(os.Stderr, "fakehub: no PR", n)
-	return 1
+	return nil
 }
 
 // files answers a REST listing of a PR's changed files.

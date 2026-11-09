@@ -127,6 +127,18 @@ func countMatching(calls []string, substrs ...string) int {
 	return n
 }
 
+// countDetailLookups counts PRs whose detail was asked for, alone or in a batch.
+func countDetailLookups(calls []string) int {
+	n := 0
+	for _, c := range calls {
+		n += strings.Count(c, "-F number=")
+		for i := 0; strings.Contains(c, fmt.Sprintf("-F k%d=", i)); i++ {
+			n++
+		}
+	}
+	return n
+}
+
 func TestWatchCachePollsMatchFullScans(t *testing.T) {
 	prs := hubPRs(8, func(i int) bool { return i != 2 && i != 6 })
 	// PRs 3 and 4 change more files than a search node shows
@@ -156,8 +168,11 @@ func TestWatchCachePollsMatchFullScans(t *testing.T) {
 	if n := countMatching(calls, "sort:updated-desc") - countMatching(calls, "updated:>="); n != 0 {
 		t.Fatalf("unchanged poll ran %d full scans: %v", n, calls)
 	}
-	if n := countMatching(calls, "-F number="); n != len(hubTruth(hub)) {
+	if n := countDetailLookups(calls); n != len(hubTruth(hub)) {
 		t.Fatalf("want a detail lookup per watched PR (%d), got %d", len(hubTruth(hub)), n)
+	}
+	if n := countMatching(calls, "-F number="); n != 0 {
+		t.Fatalf("want watched PRs looked up in one batch, got %d single lookups: %v", n, calls)
 	}
 
 	// A new PR, a push that brings a PR in, a retarget, and a close

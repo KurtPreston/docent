@@ -1,0 +1,24 @@
+# Every per-PR field docent needs about an open PR. prDetailQuery wraps it for
+# one PR; prDetailBatchQuery repeats it under an alias per PR.
+fragment prDetail on PullRequest {
+  state isDraft mergeable reviewDecision updatedAt headRefName headRefOid baseRefName
+  author{ login __typename }
+  commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
+  reviewThreads(first:50){
+    nodes{
+      id isResolved isOutdated path line
+      comments(first:50){ nodes{ author{login} body url createdAt } }
+    }
+  }
+  reviews(last:30){ nodes{ state createdAt submittedAt body author{login __typename} } }
+  timelineItems(last:30, itemTypes:[ISSUE_COMMENT,PULL_REQUEST_REVIEW,PULL_REQUEST_COMMIT,HEAD_REF_FORCE_PUSHED_EVENT,READY_FOR_REVIEW_EVENT]){
+    nodes{
+      __typename
+      ... on IssueComment{ createdAt body author{login __typename} }
+      ... on PullRequestReview{ createdAt submittedAt state author{login __typename} }
+      ... on PullRequestCommit{ commit{ committedDate } }
+      ... on HeadRefForcePushedEvent{ createdAt }
+      ... on ReadyForReviewEvent{ createdAt }
+    }
+  }
+}
