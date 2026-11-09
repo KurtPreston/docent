@@ -784,7 +784,8 @@ one agent at a time, holding the rest as `queued` jobs on the Automations page:
         STEP 2, WORK: follow the task's Implementation Plan below. Use the
         project's own build, lint, and test commands. Commit to {{.Branch}},
         push it, and open a draft pull request with `gh pr create --draft`.
-        Never push to the default branch or force-push.
+        Never push to the default branch or force-push. Don't wait for CI
+        to finish after pushing; the task waits on it in Waiting instead.
 
         Implementation Plan:
         {{index .Fields "plan"}}
@@ -820,6 +821,9 @@ Some things to know:
 - **Claiming is what stops repeats.** Cooldowns and queued jobs live in memory,
   so after a restart `include_existing` fires again for every task that is
   still queued. A task the agent claimed is In Progress, so it isn't.
+- **A run killed at its [time limit](Automations.md#time-limit) never reaches
+  STEP 3**, so its task stays In Progress. Tell the agent not to wait on CI,
+  and give the action a `timeout` if real work takes longer than 30 minutes.
 - **A task without `Repo:` fails before the agent starts**, so nothing claims
   it and it stays queued. The job shows the error on the Automations page. Add
   the line, then remove and re-add the `agent` label (or restart `docentd`) to

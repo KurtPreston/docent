@@ -136,7 +136,10 @@ type Action struct {
 	// the choice to the provider CLI's own configuration.
 	Model  string            `yaml:"model,omitempty" json:"model,omitempty"`
 	Prompt string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
-	Post    map[string]string `yaml:"post,omitempty" json:"post,omitempty"`
+	Post   map[string]string `yaml:"post,omitempty" json:"post,omitempty"`
+	// Timeout bounds an agent-inline run, agent and post-steps together, as a
+	// duration string (e.g. "1h"). Empty means the 30-minute default.
+	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 
 	// report
 	Mode    string `yaml:"mode,omitempty" json:"mode,omitempty"`       // execution mode id

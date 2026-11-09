@@ -140,7 +140,7 @@ Optional gates evaluated after the trigger matches, before any action runs:
 | `slack-post` | Post a Slack message | `channel`, `body` (required). Uses the first enabled `slack` directive. |
 | `report` | Generate and deliver an execution-mode report | `mode` (an [execution mode](Reporting.md#modes) id, or the special `goal-alignment`), `days`, `deliver` (`file` default / `slack` / `webhook`), `out_path`, and the optional prompt controls `prompt` / `context` (see [Report delivery](#report-delivery)). |
 | `agent` | Start a hosted agent session in a provisioned workdir | `provider` (`cursor` / `claude`), `model` (optional, see [Pinning a model](#pinning-a-model)), `workdir` (`worktree` default, or `open_path`), `base_ref` (branch point for a brand-new branch), `prompt` (required). Streams to the cockpit and ignores `post` — see [`agent` vs `agent-inline`](#agent-vs-agent-inline). |
-| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, including `model`, plus `post` (see below). `provider` may also be `copilot` (run with `--allow-all --no-ask-user`). The agent's final output is passed to later actions as `.AgentOutput`. |
+| `agent-inline` | Run an agent to completion, then run `post`, all unattended | Same fields as `agent`, including `model`, plus `post` (see below) and `timeout` (see [Time limit](#time-limit)). `provider` may also be `copilot` (run with `--allow-all --no-ask-user`). The agent's final output is passed to later actions as `.AgentOutput`. |
 | `open` | Open a path in the editor via the configured [open trigger](Dashboard.md#open-trigger--live-window-polling-cursor--wsm--none) | An optional templated `cwd`. Only available when `open_trigger` is configured. |
 
 An action's failure doesn't stop the chain: every action in a rule runs even
@@ -168,6 +168,29 @@ CLI uses whatever model its own settings on that machine last saved, which an
 interactive session can change at any time. Pin it for unattended agents whose
 judgment matters, such as reviewers. The value is used as written, not
 templated, and must be a name the chosen provider's CLI accepts.
+
+### Time limit
+
+An `agent-inline` run, the agent and its `post` steps together, is killed
+after 30 minutes. Set `timeout` to change that for one action, as a duration
+such as `90m` or `2h`:
+
+```yaml
+- type: agent-inline
+  provider: copilot
+  timeout: 1h
+  prompt: ...
+```
+
+A killed run fails with `agent <provider> timed out after <limit>`, and
+whatever the agent had printed so far still reaches later actions as
+`.AgentOutput`. Anything the agent meant to do at the end, such as recording
+its result, never happens, so a later `shell` action that checks
+`DOCENT_ACTION_ERROR` is a good place to clean up.
+
+Before raising the limit, check what the agent spends its time on. Waiting for
+CI to finish is usually better left to whatever watches the pull request than
+to an agent holding a run slot.
 
 ### Where an agent runs
 
@@ -373,7 +396,7 @@ hosting sessions in `docentd` worth doing.
 - **Manual Run bypasses cooldown** and works on disabled rules — don't be surprised if a "disabled" rule still fires when you click Run.
 - **No hot reload** — edits to `automations:` in `config.yaml` take effect on the next `docentd` restart.
 - **Queued jobs don't survive a restart** — jobs waiting on `max_concurrent` are in memory. A `transition` rule with `include_existing: true` picks their entities up again on the next start.
-- **Each action gets its own time budget** — a `shell` action times out after 5 minutes, an `agent-inline` run after 30, and any other action after 15, counted from when that action starts rather than from the start of the job.
+- **Each action gets its own time budget** — a `shell` action times out after 5 minutes, an `agent-inline` run after 30 (or its [`timeout`](#time-limit)), and any other action after 15, counted from when that action starts rather than from the start of the job.
 - **Action chains keep going after a failure** — a later action still runs (and can see `.ActionError` / `DOCENT_ACTION_ERROR`), but the job is recorded as failed overall.
 - **`agent` actions ignore `post:` steps** — they start a session, which is interactive by nature; see [`agent` vs `agent-inline`](#agent-vs-agent-inline) above.
 - **Kind aliases** — e.g. a rule with `kind: pr` also matches the concrete entity kind `pr_review_status`/`pr_activity`; `ticket`/`issue`/`issue_activity` are similarly interchangeable.

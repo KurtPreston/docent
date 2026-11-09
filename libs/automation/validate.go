@@ -153,6 +153,7 @@ func validateAction(path string, a Action) []string {
 		if wd != "" && wd != "worktree" && wd != "open_path" {
 			problems = append(problems, fmt.Sprintf("%s.workdir %q must be worktree or open_path", path, wd))
 		}
+		problems = append(problems, validateActionTimeout(path, a)...)
 	case "report":
 		if strings.TrimSpace(a.Mode) == "" {
 			problems = append(problems, path+".mode is required for report actions")
@@ -165,6 +166,22 @@ func validateAction(path string, a Action) []string {
 		problems = append(problems, fmt.Sprintf("%s.type %q is unknown", path, typ))
 	}
 	return problems
+}
+
+// validateActionTimeout checks an agent action's timeout. Only agent-inline
+// honors one; a hosted agent session's turns are bounded by the daemon-wide
+// turn timeout instead, so the field is rejected there rather than ignored.
+func validateActionTimeout(path string, a Action) []string {
+	if strings.TrimSpace(a.Timeout) == "" {
+		return nil
+	}
+	if strings.TrimSpace(a.Type) != "agent-inline" {
+		return []string{path + ".timeout is only supported on agent-inline actions"}
+	}
+	if d, err := ParseDuration(a.Timeout); err != nil || d <= 0 {
+		return []string{fmt.Sprintf("%s.timeout %q is not a positive duration", path, a.Timeout)}
+	}
+	return nil
 }
 
 func timeOfDayOK(s string) bool {

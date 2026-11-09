@@ -173,6 +173,7 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         },
+        "timeout": { "type": "string", "description": "How long an agent-inline run may take, agent and post-steps together (e.g. 1h). Defaults to 30m." },
         "mode": { "type": "string" },
         "deliver": { "type": "string", "enum": ["file", "slack", "webhook"] },
         "out_path": { "type": "string" },
