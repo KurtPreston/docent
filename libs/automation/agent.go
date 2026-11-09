@@ -13,13 +13,27 @@ import (
 	"github.com/KurtPreston/docent/libs/worktree"
 )
 
-const agentTimeout = 30 * time.Minute
+// defaultAgentTimeout bounds an agent-inline run, agent and post-steps
+// together, when its action sets no timeout.
+const defaultAgentTimeout = 30 * time.Minute
+
+// agentRunTimeout returns how long one run of action may take: its timeout
+// field when set, else defaultAgentTimeout. ValidateRules rejects a value
+// that doesn't parse, so falling back to the default here is only a guard.
+func agentRunTimeout(action Action) time.Duration {
+	if d, err := ParseDuration(action.Timeout); err == nil && d > 0 {
+		return d
+	}
+	return defaultAgentTimeout
+}
 
 // worktreeAcquireTimeout bounds how long an agent action waits for a busy
-// worktree lock (see worktreelock.go) before giving up. Sized to comfortably
-// outlast one full run of whatever job is currently holding the lock (at
-// most agentTimeout for the agent itself, plus room for post-steps).
-const worktreeAcquireTimeout = 2 * agentTimeout
+// worktree lock (see worktreelock.go) before giving up. A waiter can't see
+// the holder's budget, so it allows twice the longer of its own and the
+// default: enough to outlast one full run of a typical holder.
+func worktreeAcquireTimeout(runTimeout time.Duration) time.Duration {
+	return 2 * max(runTimeout, defaultAgentTimeout)
+}
 
 // AgentRunner runs a write-capable coding agent in a provisioned workdir,
 // then optionally runs post-steps (validate / commit / push).
@@ -80,7 +94,8 @@ func (r AgentRunner) RunWithOutput(ctx context.Context, action Action, ev Event)
 	// than a scratch directory. Wait on a budget detached from the
 	// incoming ctx so time spent blocked here isn't deducted from the run.
 	lockKey := worktreeLockKey(mode, actx.Repo, actx.Branch, actx.OpenPath)
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), worktreeAcquireTimeout)
+	timeout := agentRunTimeout(action)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), worktreeAcquireTimeout(timeout))
 	release, err := worktreeLocks.acquire(waitCtx, lockKey)
 	cancelWait()
 	if err != nil {
@@ -92,7 +107,7 @@ func (r AgentRunner) RunWithOutput(ctx context.Context, action Action, ev Event)
 	// inheriting whatever remains of the caller's deadline (which may have
 	// been set at dispatch time and already partly spent waiting for the
 	// lock above).
-	runCtx, cancel := context.WithTimeout(context.Background(), agentTimeout)
+	runCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// The worktree outlives the run. In docent's own tree that is what lets a
@@ -123,7 +138,7 @@ func (r AgentRunner) RunWithOutput(ctx context.Context, action Action, ev Event)
 	if err != nil {
 		return "", err
 	}
-	out, err := runAgent(runCtx, agentProcess{Provider: provider, Dir: wd.Path, Name: cmdName, Args: args})
+	out, err := runAgent(runCtx, agentProcess{Provider: provider, Dir: wd.Path, Name: cmdName, Args: args, Timeout: timeout})
 	if err != nil {
 		return out, err
 	}
@@ -180,12 +195,15 @@ type agentProcess struct {
 	Dir      string
 	Name     string
 	Args     []string
+	// Timeout is the run's whole budget, which ctx already enforces; it is
+	// kept here so a timeout error can say what the limit was.
+	Timeout time.Duration
 }
 
-// runAgent runs p and returns the agent's stdout: its final answer for
-// providers run in text/silent mode.
+// runAgent runs p until it exits or ctx ends, and returns the agent's
+// stdout: its final answer for providers run in text/silent mode.
 func runAgent(ctx context.Context, p agentProcess) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, agentTimeout)
+	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	provider := p.Provider
 
@@ -199,7 +217,7 @@ func runAgent(ctx context.Context, p agentProcess) (string, error) {
 	if err := cmd.Run(); err != nil {
 		out := strings.TrimSpace(combined.String())
 		if cctx.Err() == context.DeadlineExceeded {
-			return stdout.String(), fmt.Errorf("agent %s timed out", provider)
+			return stdout.String(), fmt.Errorf("agent %s timed out after %s (raise the action's timeout to allow longer runs)", provider, p.Timeout)
 		}
 		if out != "" {
 			return stdout.String(), fmt.Errorf("agent %s: %w\n%s", provider, err, out)
