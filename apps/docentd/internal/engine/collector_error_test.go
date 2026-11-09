@@ -55,6 +55,48 @@ func TestCollectorErrorAlertsOncePerOutage(t *testing.T) {
 	}
 }
 
+// TestCollectorErrorRateLimitAlertsWhenItPersists checks that a rate-limit
+// failure that clears by the next poll stays quiet, while one that persists
+// alerts once.
+func TestCollectorErrorRateLimitAlertsWhenItPersists(t *testing.T) {
+	e := newTestEngine(t)
+	f := &fakeCollector{}
+	e.reg.Register("fake", f)
+	d := userdata.Directive{ID: "gh", Name: "GitHub", Collector: "fake", Enabled: true}
+	u := e.newUnit(d, collectors.ModeEvents, nil, time.Now())
+
+	// Record each collector_error the rule receives
+	var mu sync.Mutex
+	var got []string
+	e.automations = automation.NewDispatcher([]automation.Rule{{
+		ID: "notify", Enabled: true,
+		Trigger: automation.Trigger{Type: "signal", Kind: []string{"collector_error"}},
+		Actions: []automation.Action{{Type: "shell", Command: "true"}},
+	}})
+	e.automations.Registry.Register("shell", automation.RunnerFunc(func(_ context.Context, _ automation.Action, ev automation.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, ev.Signal.Summary)
+		return nil
+	}))
+
+	// A blip that recovers, then a limit that lasts three polls
+	limited := errors.New("HTTP 403: You have exceeded a secondary rate limit")
+	for _, err := range []error{limited, nil, limited, limited, limited} {
+		f.eventsErr = err
+		e.collectUnit(context.Background(), u)
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Expect a single alert, for the limit that persisted
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != limited.Error() {
+		t.Fatalf("alerts = %q, want one rate-limit alert", got)
+	}
+}
+
 // blockingCollector stands in for a collector whose searches outlast the unit's
 // deadline: it waits for the context to end and fails the way a killed
 // subprocess does.

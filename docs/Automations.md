@@ -100,7 +100,9 @@ failing, such as after its credentials expire, docentd offers rules one
 name, `summary` the error. Fields are `directive_id`, `mode`, and `error`. It
 fires once per outage, not on every failed poll, and again only after the
 directive recovers and fails anew. A failure on the first collect after a
-restart counts too. See the [recipe](Automation-recipes.md#get-notified-when-a-collector-needs-attention).
+restart counts too. A rate limit, such as GitHub's secondary limit on bursts
+of searches, usually clears by the next poll, so it fires only when the next
+collect fails too. See the [recipe](Automation-recipes.md#get-notified-when-a-collector-needs-attention).
 
 **A collect that outlasts its deadline is a failure too.** Each scheduled
 collect of a unit gets 60 seconds by default. One that runs out of time

@@ -233,6 +233,7 @@ type unit struct {
 	signals   []model.Signal
 	lastRun   time.Time
 	lastErr   string
+	alerted   bool // a collector_error went out for the current outage
 	nextDue   time.Time
 	watermark time.Time
 }
@@ -905,6 +906,7 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	prevEntities := e.entitySnapshots[snapKey]
 	seeded := e.automationSeeded[snapKey]
 	prevErr := u.lastErr
+	prevAlerted := u.alerted
 	e.mu.Unlock()
 
 	// Before a state unit's first collect, recover the snapshot the last run saved
@@ -921,9 +923,15 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 		err = fmt.Errorf("collection did not finish within %s (raise poll.timeout): %w", time.Since(now).Round(time.Second), err)
 	}
 	// Report the start of an outage, but not a shutdown or caller cancellation
-	if err != nil && prevErr == "" && !errors.Is(ctx.Err(), context.Canceled) {
-		log.Printf("docentd: collector %s/%s failing: %v", u.key.Directive, u.mode, err)
-		e.alertCollectorError(ctx, u, err, now)
+	alert := false
+	if err != nil && !errors.Is(ctx.Err(), context.Canceled) {
+		alert = shouldAlertCollectorError(err, prevErr, prevAlerted)
+		if prevErr == "" {
+			log.Printf("docentd: collector %s/%s failing: %v", u.key.Directive, u.mode, err)
+		}
+		if alert {
+			e.alertCollectorError(ctx, u, err, now)
+		}
 	}
 
 	var newSignals []model.Signal
@@ -933,8 +941,10 @@ func (e *Engine) collectUnit(ctx context.Context, u *unit) {
 	u.lastRun = now
 	if err != nil {
 		u.lastErr = err.Error()
+		u.alerted = u.alerted || alert
 	} else {
 		u.lastErr = ""
+		u.alerted = false
 		if u.mode == collectors.ModeState {
 			u.signals = signals
 			// State units: fire signal rules for newly appearing StableIDs,
