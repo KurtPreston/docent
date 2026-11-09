@@ -16,6 +16,8 @@ import (
 // with the first rule whose pattern is a substring of them. A rule can create a
 // marker file when it starts and wait (up to five seconds) for another marker
 // before answering, which lets a test prove two calls overlap without timing.
+// An exclusive rule holds a lock while it answers and logs any call that finds
+// the lock taken, so a test can prove such calls never overlap.
 const fakeGHScript = `#!/bin/sh
 args="$*"
 printf '%s\n' "$args" | head -n 1 >> "$FAKEGH_DIR/calls.log"
@@ -30,6 +32,10 @@ for r in "$FAKEGH_DIR"/rules/*; do
           n=$((n+1)); [ $n -gt 100 ] && { echo "fakegh: timed out waiting for $w" >&2; exit 98; }
           sleep 0.05
         done
+      fi
+      if [ -f "$r/exclusive" ]; then
+        mkdir "$FAKEGH_DIR/inflight" 2>/dev/null || echo "$args" >> "$FAKEGH_DIR/overlaps"
+        sleep 0.2; rmdir "$FAKEGH_DIR/inflight" 2>/dev/null
       fi
       cat "$r/out"
       exit "$(cat "$r/exit")"
@@ -50,11 +56,12 @@ type fakeGH struct {
 // ghRule is one canned reply. Pattern is matched as a substring of the joined
 // arguments; rules are tried in the order they were added.
 type ghRule struct {
-	Pattern string
-	Out     string
-	Exit    int
-	Touch   string
-	WaitFor string
+	Pattern   string
+	Out       string
+	Exit      int
+	Touch     string
+	WaitFor   string
+	Exclusive bool
 }
 
 // newFakeGH installs the fake `gh` ahead of the real one on PATH.
@@ -84,6 +91,9 @@ func (f *fakeGH) on(r ghRule) {
 	if r.WaitFor != "" {
 		files["waitfor"] = r.WaitFor
 	}
+	if r.Exclusive {
+		files["exclusive"] = ""
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		f.t.Fatal(err)
 	}
@@ -98,6 +108,19 @@ func (f *fakeGH) on(r ghRule) {
 func (f *fakeGH) calls() []string {
 	f.t.Helper()
 	b, err := os.ReadFile(filepath.Join(f.dir, "calls.log"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+}
+
+// overlaps returns the exclusive calls that started while another was running.
+func (f *fakeGH) overlaps() []string {
+	f.t.Helper()
+	b, err := os.ReadFile(filepath.Join(f.dir, "overlaps"))
 	if os.IsNotExist(err) {
 		return nil
 	}

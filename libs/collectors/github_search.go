@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/KurtPreston/docent/libs/config/userdata"
 )
@@ -21,6 +22,8 @@ func (c GitHubCollector) listOpenPRs(ctx context.Context, env []string, directiv
 
 // runPRSearch executes a prepared `gh search prs` invocation and parses its rows.
 func (c GitHubCollector) runPRSearch(ctx context.Context, env []string, directive userdata.Directive, opts *CollectOpts, args []string) ([]ghSearchActivityRow, error) {
+	release := acquireSearchGate(ctx)
+	defer release()
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
@@ -35,4 +38,26 @@ func (c GitHubCollector) runPRSearch(ctx context.Context, env []string, directiv
 		return nil, err
 	}
 	return rows, nil
+}
+
+// searchGateKey marks the context value holding a collect's search gate.
+type searchGateKey struct{}
+
+// withSearchGate returns a context whose plain `gh search prs` calls run one
+// at a time. GitHub's secondary rate limit trips on bursts of concurrent
+// searches, so a collect sends them in turn; GraphQL watch scans don't go
+// through runPRSearch and keep running alongside.
+func withSearchGate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, searchGateKey{}, &sync.Mutex{})
+}
+
+// acquireSearchGate waits for the context's search gate, if it has one, and
+// returns the function that releases it.
+func acquireSearchGate(ctx context.Context) func() {
+	gate, ok := ctx.Value(searchGateKey{}).(*sync.Mutex)
+	if !ok {
+		return func() {}
+	}
+	gate.Lock()
+	return gate.Unlock
 }

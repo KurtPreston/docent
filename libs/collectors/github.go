@@ -186,9 +186,11 @@ func (c GitHubCollector) ghContext(directive userdata.Directive, opts *CollectOp
 // See buildPRReviewSpecs.
 func (c GitHubCollector) CollectState(ctx context.Context, directive userdata.Directive, opts *CollectOpts) ([]StatusItem, error) {
 	user, host, env := c.ghContext(directive, opts)
+	ctx = withSearchGate(ctx)
 
 	// The recently-closed lookups are independent of the open-PR ones, so run
 	// them alongside rather than after the open-PR searches and detail fetches.
+	// Their plain searches still take turns with the open-PR ones at the gate.
 	var closed []StatusItem
 	var closedErr error
 	closedDone := make(chan struct{})
