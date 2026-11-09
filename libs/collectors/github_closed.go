@@ -76,39 +76,69 @@ func (c GitHubCollector) collectClosedPRs(ctx context.Context, env []string, dir
 
 	type closedDetail struct {
 		headBranch string
-		merged     bool
+		state      string // GitHub's answer, or empty when the lookup failed
 	}
 	details := make([]closedDetail, len(rows))
-	// One round trip per PR, concurrent for the same reason the open-PR path is:
-	// the calls are independent and dominated by latency.
+
+	// Reuse what an earlier collect learned about PRs that haven't closed anew
+	cachePath := closedCachePath(opts, watchViewer{host, user, directive.ID})
+	cache, err := loadClosedCache(cachePath)
+	if err != nil {
+		loggerFor(opts, directive.ID).Note("github: ignoring closed-PR cache %s: %v", cachePath, err)
+	}
+	var misses []int
+	for i, r := range rows {
+		if e, ok := cache.lookup(r.row); ok {
+			details[i] = closedDetail{headBranch: e.HeadBranch, state: e.State}
+		} else {
+			misses = append(misses, i)
+		}
+	}
+
+	// One round trip per uncached PR, concurrent for the same reason the
+	// open-PR path is: the calls are independent and dominated by latency.
 	work := make(chan int)
 	var wg sync.WaitGroup
-	for i := 0; i < prDetailWorkers && i < len(rows); i++ {
+	for i := 0; i < prDetailWorkers && i < len(misses); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for idx := range work {
 				headBranch, state := c.fetchPRClosedDetail(ctx, env, rows[idx].row.URL, directive, opts)
-				if state == "" {
-					// The lookup failed, so trust the search. GitHub Enterprise
-					// reports "merged" there even though the documented --state
-					// values are only open/closed, which makes this a decent
-					// fallback but a poor primary source.
-					state = rows[idx].row.State
-				}
-				details[idx] = closedDetail{headBranch: headBranch, merged: strings.EqualFold(state, "merged")}
+				details[idx] = closedDetail{headBranch: headBranch, state: state}
 			}
 		}()
 	}
-	for i := range rows {
+	for _, i := range misses {
 		work <- i
 	}
 	close(work)
 	wg.Wait()
 
+	// Keep the final lookups for PRs still in the list, which drops the rest
+	next := newClosedCache()
+	for i, r := range rows {
+		if closedAt := strings.TrimSpace(r.row.ClosedAt); closedAt != "" && isTerminalPRState(details[i].state) {
+			next.PRs[r.row.URL] = closedCacheEntry{ClosedAt: closedAt, HeadBranch: details[i].headBranch, State: details[i].state}
+		}
+	}
+	if cachePath != "" {
+		if err := next.save(cachePath); err != nil {
+			loggerFor(opts, directive.ID).Note("github: could not save closed-PR cache %s: %v", cachePath, err)
+		}
+	}
+
 	items := make([]StatusItem, 0, len(rows))
 	for i, r := range rows {
-		items = append(items, closedPRItem(directive, user, host, now, r.row, r.spec, details[i].headBranch, details[i].merged))
+		state := details[i].state
+		if state == "" {
+			// The lookup failed, so trust the search. GitHub Enterprise
+			// reports "merged" there even though the documented --state
+			// values are only open/closed, which makes this a decent
+			// fallback but a poor primary source.
+			state = r.row.State
+		}
+		items = append(items, closedPRItem(directive, user, host, now, r.row, r.spec, details[i].headBranch, strings.EqualFold(state, "merged")))
 	}
 	return items, nil
 }

@@ -111,7 +111,13 @@ func loadWatchCache(path string) (*watchCache, error) {
 // each leave a complete scan behind; the last one wins.
 func (c *watchCache) save(path string) error {
 	c.Version = watchCacheVersion
-	b, err := json.Marshal(c)
+	return writeJSONAtomic(path, c)
+}
+
+// writeJSONAtomic writes v as JSON to a temporary file beside path, then
+// renames it over path, so a reader never sees half a file.
+func writeJSONAtomic(path string, v any) error {
+	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
