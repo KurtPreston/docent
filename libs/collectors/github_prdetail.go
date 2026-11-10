@@ -32,6 +32,9 @@ type prDetail struct {
 	Mergeable string
 	IsDraft   bool
 	Threads   []ReviewThread
+	// ResolvedThreads fingerprints which threads are resolved (see
+	// resolvedThreadsKey), or is empty when the threads could not be read.
+	ResolvedThreads string
 	// Status is the six-bucket classification and who-acted-last verdict. Its
 	// Bucket is empty when the timeline could not be read, which is the signal
 	// that classification is unavailable rather than "awaiting review".
@@ -184,6 +187,7 @@ func buildPRDetail(pr ghPRDetail, viewer string) prDetail {
 		UpdatedAt:      parseGitHubTime(pr.UpdatedAt),
 	}
 	d.Threads = filterUnresolvedThreads(pr.ReviewThreads.Nodes, viewer)
+	d.ResolvedThreads = resolvedThreadsKey(pr.ReviewThreads.Nodes)
 
 	in := prstatus.PR{
 		Author:         pr.Author.actor(),
@@ -262,7 +266,11 @@ func parseGitHubTime(s string) time.Time {
 // exposes the timeline the classification needs.
 func (c GitHubCollector) fetchPRDetailFallback(ctx context.Context, env []string, prURL, viewer string, directive userdata.Directive, opts *CollectOpts) prDetail {
 	d := c.fetchPRStatus(ctx, env, prURL, directive, opts)
-	d.Threads = c.fetchPRUnresolvedThreads(ctx, env, prURL, viewer, directive, opts)
+	nodes, ok := c.fetchPRReviewThreads(ctx, env, prURL, directive, opts)
+	d.Threads = filterUnresolvedThreads(nodes, viewer)
+	if ok {
+		d.ResolvedThreads = resolvedThreadsKey(nodes)
+	}
 	return d
 }
 
