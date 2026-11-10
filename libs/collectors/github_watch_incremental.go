@@ -166,7 +166,7 @@ func (c GitHubCollector) searchWatchUpdates(ctx context.Context, run ghRun, args
 	cmd := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
 	out, err := runAndLogExecContext(ctx, "gh", cmd, "", run.env, run.opts, run.directive.ID)
 	if err != nil {
-		return watchScan{}, fmt.Errorf("gh api graphql (search %q): %w", q, err)
+		return watchScan{}, watchSearchError(q, err)
 	}
 	scan, err := parseWatchSearchPages(out)
 	if err != nil {
@@ -206,7 +206,7 @@ func (c GitHubCollector) fetchWatchSlice(ctx context.Context, run ghRun, args []
 		}
 		out, err := runAndLogExecContext(ctx, "gh", cmd, "", run.env, run.opts, run.directive.ID)
 		if err != nil {
-			return watchSlice{}, fmt.Errorf("gh api graphql (search %q): %w", q, err)
+			return watchSlice{}, watchSearchError(q, err)
 		}
 		p, err := parseWatchSearchPage(out)
 		if err != nil {

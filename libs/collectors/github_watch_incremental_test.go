@@ -232,6 +232,9 @@ func TestWatchCacheReportsFailedSliceAndKeepsCursor(t *testing.T) {
 	if len(errs) != 1 || !strings.Contains(errs[0].Title, `watch "api" reconciliation failed`) || errs[0].Severity != "warning" {
 		t.Fatalf("want one reconciliation warning, got %+v", errs)
 	}
+	if !strings.Contains(errs[0].Summary, "fakehub: slice search failed") {
+		t.Fatalf("want GitHub's stderr in the reconciliation warning, got %q", errs[0].Summary)
+	}
 	if !reflect.DeepEqual(withoutErrors(warm), withoutErrors(cold)) {
 		t.Fatalf("watched rows differ:\ncached %s\n  full %s", describe(warm), describe(cold))
 	}
