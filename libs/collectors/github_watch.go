@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -161,6 +162,17 @@ func (c GitHubCollector) listPRReviewSpecs(ctx context.Context, run ghRun, specs
 //go:embed github_watch_search.graphql
 var watchSearchQuery string
 
+// watchSearchError preserves GitHub's diagnostic alongside the process error.
+func watchSearchError(query string, err error) error {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if stderr := strings.TrimSpace(string(exit.Stderr)); stderr != "" {
+			return fmt.Errorf("gh api graphql (search %q): %w: %s", query, err, stderr)
+		}
+	}
+	return fmt.Errorf("gh api graphql (search %q): %w", query, err)
+}
+
 // watchSearchPage is one page of watchSearchQuery's reply.
 type watchSearchPage struct {
 	Data struct {
@@ -239,7 +251,7 @@ func (c GitHubCollector) scanWatchFull(ctx context.Context, run ghRun, job watch
 	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
 	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
 	if err != nil {
-		return nil, fmt.Errorf("gh api graphql (search %q): %w", q, err)
+		return nil, watchSearchError(q, err)
 	}
 	scan, err := parseWatchSearchPages(out)
 	if err != nil {
