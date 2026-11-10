@@ -14,6 +14,12 @@ const proxied = ["/api", "/health"];
 export default defineConfig({
   plugins: [react()],
   base: "/",
+  resolve: {
+    // Monaco's vendored sanitizer bypasses npm overrides; use our patched dependency.
+    alias: [
+      { find: "./dompurify/dompurify.js", replacement: "dompurify" },
+    ],
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
