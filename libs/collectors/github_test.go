@@ -450,6 +450,30 @@ func TestReviewThreadsResponseFiltersNoise(t *testing.T) {
 	}
 }
 
+func TestResolvedThreadsKeyTracksResolution(t *testing.T) {
+	thread := func(id string, resolved bool) ghReviewThread {
+		return ghReviewThread{ID: id, IsResolved: resolved}
+	}
+	before := resolvedThreadsKey([]ghReviewThread{thread("a", false), thread("b", true)})
+
+	// One thread resolved as another opens holds the unresolved count but must change the key
+	swapped := resolvedThreadsKey([]ghReviewThread{thread("a", true), thread("b", true), thread("c", false)})
+	if swapped == before {
+		t.Errorf("resolving a thread while another opens left the key at %q", before)
+	}
+
+	// A new unresolved thread alone, or a different order, leaves the key alone
+	added := resolvedThreadsKey([]ghReviewThread{thread("c", false), thread("b", true), thread("a", false)})
+	if added != before {
+		t.Errorf("a new unresolved thread changed the key: %q -> %q", before, added)
+	}
+
+	// No resolved threads reads as "none", never the empty unread value
+	if got := resolvedThreadsKey(nil); got != "none" {
+		t.Errorf("no resolved threads: got %q, want none", got)
+	}
+}
+
 // The count can hold steady while the threads awaiting me change; the latest
 // timestamp still rises, which is what lets a transition rule catch it.
 func TestLatestThreadAwaitingMeRisesWhenCountHolds(t *testing.T) {

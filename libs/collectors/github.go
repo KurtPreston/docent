@@ -3,6 +3,8 @@ package collectors
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -652,6 +654,8 @@ func buildPRReviewSpecs(scope Scope, user string, extra []userdata.PRQuery, foll
 // pr_author, assignees, checks (passing|failing|pending|none|unknown),
 // review_decision, mergeable (mergeable|conflicting|unknown), and ready ("true"
 // only when the PR is the user's own, not a draft, and checks are passing/none).
+// Candidate and own PRs also carry unresolved (a thread count) and
+// resolved_threads (a key that changes when any thread is resolved or reopened).
 // See resolvePRDetail for which searches resolve how much.
 func (c GitHubCollector) collectPRReviewStatus(ctx context.Context, env []string, directive userdata.Directive, user, host string, opts *CollectOpts) ([]StatusItem, error) {
 	now := opts.windowEnd(c.Clock)
@@ -832,6 +836,11 @@ func prReviewItem(directive userdata.Directive, user, host string, now time.Time
 		// on me" signal, which review_decision alone misses: a reviewer can
 		// leave blocking questions without ever setting CHANGES_REQUESTED.
 		fields["unresolved"] = strconv.Itoa(len(detail.Threads))
+		// Changes whenever any thread is resolved or reopened. Omitted when the
+		// threads could not be read.
+		if detail.ResolvedThreads != "" {
+			fields["resolved_threads"] = detail.ResolvedThreads
+		}
 		// The six-bucket classification and whose court the ball is in. Omitted
 		// rather than defaulted when the timeline could not be read, so a
 		// consumer can tell "not classified" from "awaiting review".
@@ -1065,15 +1074,16 @@ query($owner:String!,$name:String!,$number:Int!){
   }
 }`
 
-// fetchPRUnresolvedThreads returns the PR's unresolved review threads.
+// fetchPRReviewThreads returns the PR's review threads, and whether they could
+// be read.
 //
 // Failure is non-fatal and yields no threads: unresolved comments are one
 // attention signal among several, and a PR whose threads cannot be read should
 // still surface for its checks and review decision.
-func (c GitHubCollector) fetchPRUnresolvedThreads(ctx context.Context, env []string, prURL, viewer string, directive userdata.Directive, opts *CollectOpts) []ReviewThread {
+func (c GitHubCollector) fetchPRReviewThreads(ctx context.Context, env []string, prURL string, directive userdata.Directive, opts *CollectOpts) ([]ghReviewThread, bool) {
 	owner, name, number, ok := parsePRURL(prURL)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	args := []string{
 		"api", "graphql",
@@ -1086,13 +1096,36 @@ func (c GitHubCollector) fetchPRUnresolvedThreads(ctx context.Context, env []str
 	cmd.Env = env
 	out, err := runAndLogExec(cmd, opts, directive.ID)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var resp ghReviewThreadsResponse
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil
+		return nil, false
 	}
-	return filterUnresolvedThreads(resp.Data.Repository.PullRequest.ReviewThreads.Nodes, viewer)
+	return resp.Data.Repository.PullRequest.ReviewThreads.Nodes, true
+}
+
+// resolvedThreadsKey fingerprints which of a PR's threads are resolved, so a
+// transition rule can fire whenever any thread is resolved or reopened. A count
+// can't do this: one thread resolved as another opens leaves it unchanged. New
+// unresolved threads don't change the key. It reads "none" when no thread is
+// resolved, keeping it distinct from the empty value of an unread PR.
+func resolvedThreadsKey(nodes []ghReviewThread) string {
+	// Collect resolved thread IDs in a stable order
+	var ids []string
+	for _, node := range nodes {
+		if node.IsResolved {
+			ids = append(ids, node.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return "none"
+	}
+	sort.Strings(ids)
+
+	// Hash them, since a PR can hold dozens of long node IDs
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // filterUnresolvedThreads reduces review-thread nodes to the threads that are
