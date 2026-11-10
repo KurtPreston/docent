@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/KurtPreston/docent/internal/testenv"
 )
 
 // fakeHub is a stateful fake GitHub for watch-scan tests. The test binary
@@ -56,7 +58,7 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv("FAKEHUB_DIR"); dir != "" {
 		os.Exit(serveFakeHub(dir, os.Args[1:]))
 	}
-	os.Exit(m.Run())
+	os.Exit(testenv.Run(m))
 }
 
 // newFakeHub installs the test binary as `gh` ahead of the real one on PATH.
