@@ -20,7 +20,18 @@ func TestAgentRunnerCopilot(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	stub := filepath.Join(dir, "copilot")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\necho 'final answer'\necho 'noise' >&2\n"
+	// Stream progress notes, a tool-only turn, and a subagent's reply around
+	// the final answer, the way copilot's JSONL output does
+	events := []string{
+		`{"type":"user.message","data":{"content":"do the thing"}}`,
+		`{"type":"assistant.message","data":{"content":"I'll check the logs first."}}`,
+		`{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"bash"}]}}`,
+		`{"type":"assistant.message","data":{"content":"final answer"}}`,
+		`{"type":"assistant.message","data":{"content":"subagent aside","parentToolCallId":"t1"}}`,
+		`{"type":"result","exitCode":0}`,
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\ncat <<'EOF'\n" +
+		strings.Join(events, "\n") + "\nEOF\necho 'noise' >&2\n"
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +49,7 @@ func TestAgentRunnerCopilot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(out) != "final answer" {
-		t.Fatalf("output = %q, want stdout only", out)
+		t.Fatalf("output = %q, want only the final assistant message", out)
 	}
 	b, err := os.ReadFile(argsFile)
 	if err != nil {
@@ -48,7 +59,7 @@ func TestAgentRunnerCopilot(t *testing.T) {
 	if args[len(args)-2] != "-p" || args[len(args)-1] != "do the thing" {
 		t.Fatalf("args = %q", args)
 	}
-	for _, want := range []string{"--allow-all", "--no-ask-user", "--silent"} {
+	for _, want := range []string{"--allow-all", "--no-ask-user", "--output-format\njson"} {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("args missing %s: %q", want, args)
 		}
