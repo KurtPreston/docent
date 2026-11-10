@@ -17,12 +17,12 @@ func TestAgentCommandModel(t *testing.T) {
 		// Unset model keeps the original arguments exactly
 		{"cursor", "", "cursor-agent", []string{"-p", "--output-format=text", "--trust", "--force", "P"}},
 		{"claude", "", "claude", []string{"--print", "--output-format=text", "--permission-mode", "acceptEdits", "P"}},
-		{"copilot", "", "copilot", []string{"--allow-all", "--no-ask-user", "--silent", "--no-color", "-p", "P"}},
+		{"copilot", "", "copilot", []string{"--allow-all", "--no-ask-user", "--output-format", "json", "--no-color", "-p", "P"}},
 
 		// A pinned model goes in as --model, ahead of the prompt
 		{"cursor", "m1", "cursor-agent", []string{"-p", "--output-format=text", "--trust", "--force", "--model", "m1", "P"}},
 		{"claude", "m1", "claude", []string{"--print", "--output-format=text", "--permission-mode", "acceptEdits", "--model", "m1", "P"}},
-		{"Copilot", "m1", "copilot", []string{"--allow-all", "--no-ask-user", "--silent", "--no-color", "--model", "m1", "-p", "P"}},
+		{"Copilot", "m1", "copilot", []string{"--allow-all", "--no-ask-user", "--output-format", "json", "--no-color", "--model", "m1", "-p", "P"}},
 	}
 	for _, c := range cases {
 		name, args, err := r.agentCommand(c.provider, c.model, "P")

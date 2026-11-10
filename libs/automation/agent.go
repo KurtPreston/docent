@@ -172,9 +172,9 @@ func (r AgentRunner) agentCommand(provider, model, prompt string) (string, []str
 			cmdName = "copilot"
 		}
 		// Write mode, unattended: every tool/path/URL is allowed and ask_user is
-		// disabled since nobody is there to answer. --silent leaves only the
-		// agent's response on stdout.
-		args = []string{"--allow-all", "--no-ask-user", "--silent", "--no-color"}
+		// disabled since nobody is there to answer. Text mode prints every
+		// assistant message, so read JSONL and keep only the final one.
+		args = []string{"--allow-all", "--no-ask-user", "--output-format", "json", "--no-color"}
 	default:
 		return "", nil, fmt.Errorf("agent: unknown provider %q", provider)
 	}
@@ -200,8 +200,9 @@ type agentProcess struct {
 	Timeout time.Duration
 }
 
-// runAgent runs p until it exits or ctx ends, and returns the agent's
-// stdout: its final answer for providers run in text/silent mode.
+// runAgent runs p until it exits or ctx ends, and returns the agent's final
+// answer: stdout for providers run in text mode, or the last assistant
+// message from copilot's JSONL stream.
 func runAgent(ctx context.Context, p agentProcess) (string, error) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -211,20 +212,31 @@ func runAgent(ctx context.Context, p agentProcess) (string, error) {
 	cmd.Dir = p.Dir
 	configureProcGroup(cmd)
 	cmd.WaitDelay = 10 * time.Second
-	var combined, stdout bytes.Buffer
+	var combined, stdout, stderr bytes.Buffer
 	cmd.Stdout = io.MultiWriter(&combined, &stdout)
-	cmd.Stderr = &combined
-	if err := cmd.Run(); err != nil {
-		out := strings.TrimSpace(combined.String())
-		if cctx.Err() == context.DeadlineExceeded {
-			return stdout.String(), fmt.Errorf("agent %s timed out after %s (raise the action's timeout to allow longer runs)", provider, p.Timeout)
-		}
-		if out != "" {
-			return stdout.String(), fmt.Errorf("agent %s: %w\n%s", provider, err, out)
-		}
-		return stdout.String(), fmt.Errorf("agent %s: %w", provider, err)
+	cmd.Stderr = io.MultiWriter(&combined, &stderr)
+	runErr := cmd.Run()
+
+	// Reduce copilot's event stream to its final answer, and describe a
+	// failure with that answer and stderr rather than the raw stream
+	out, detail := stdout.String(), combined.String()
+	if strings.EqualFold(provider, "copilot") {
+		out = finalCopilotMessage(out)
+		detail = strings.TrimSpace(stderr.String()) + "\n" + out
 	}
-	return stdout.String(), nil
+	if runErr == nil {
+		return out, nil
+	}
+
+	// Report a timeout or a failed exit, keeping whatever the agent said
+	detail = strings.TrimSpace(detail)
+	if cctx.Err() == context.DeadlineExceeded {
+		return out, fmt.Errorf("agent %s timed out after %s (raise the action's timeout to allow longer runs)", provider, p.Timeout)
+	}
+	if detail != "" {
+		return out, fmt.Errorf("agent %s: %w\n%s", provider, runErr, detail)
+	}
+	return out, fmt.Errorf("agent %s: %w", provider, runErr)
 }
 
 func (r AgentRunner) runPost(ctx context.Context, action Action, actx Context, cwd string) error {
