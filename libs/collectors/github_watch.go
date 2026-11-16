@@ -258,8 +258,8 @@ func (c GitHubCollector) scanWatchFull(ctx context.Context, run ghRun, job watch
 		return nil, fmt.Errorf("parse search %q: %w", q, err)
 	}
 
-	// A cached query catches up on what the cap left out over later runs, so
-	// only an uncached one reports the shortfall now
+	// A cached query catches up on what the cap left out over later polls,
+	// and reports a slice that fails, so only an uncached one reports this
 	name := watchName(spec)
 	truncated := scan.matched > scan.returned
 	if truncated && job.path == "" {
@@ -285,9 +285,6 @@ func (c GitHubCollector) scanWatchFull(ctx context.Context, run ghRun, job watch
 		cache.ScannedAt = job.started.UTC()
 		cache.Truncated = truncated
 		cache.Covered = !truncated
-		if truncated {
-			cache.TruncatedAt = job.started.UTC()
-		}
 		for i, n := range scan.nodes {
 			cache.PRs[n.URL] = n.cacheEntry(verdicts[i])
 		}

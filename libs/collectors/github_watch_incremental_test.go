@@ -277,33 +277,6 @@ func TestWatchCacheCoversTruncatedScan(t *testing.T) {
 	}
 }
 
-func TestWatchCacheReportsStalledCatchUp(t *testing.T) {
-	hub := newFakeHub(t, hubState{PRs: hubPRs(10, nil), Cap: 4, PageSize: 2, Shown: 2})
-	cache := t.TempDir()
-	at := func(m int) time.Time { return hubT0.Add(time.Duration(m) * time.Minute) }
-	pollHub(t, hub, at(0), cache)
-
-	// Slices that keep failing stop the lap; within the grace only the
-	// reconciliation failure is reported
-	hub.State.FailSlices = true
-	warm, _ := pollHub(t, hub, at(15), cache)
-	if errs := collectorErrors(warm); len(errs) != 1 || !strings.Contains(errs[0].Title, "reconciliation failed") {
-		t.Fatalf("within the grace: want only the reconciliation warning, got %+v", errs)
-	}
-
-	// Past the grace the unchecked PRs are reported too
-	warm, _ = pollHub(t, hub, at(15).Add(watchCatchUpGrace), cache)
-	var truncated []StatusItem
-	for _, e := range collectorErrors(warm) {
-		if strings.Contains(e.Title, `watch "api" scan truncated`) {
-			truncated = append(truncated, e)
-		}
-	}
-	if len(truncated) != 1 || truncated[0].Severity != "warning" {
-		t.Fatalf("past the grace: want the truncation reported, got %+v", collectorErrors(warm))
-	}
-}
-
 func TestWatchCacheSettlesRecentUpdatesNextPoll(t *testing.T) {
 	hub := newFakeHub(t, hubState{PRs: hubPRs(6, nil), PageSize: 1, Shown: 2})
 	cache := t.TempDir()
