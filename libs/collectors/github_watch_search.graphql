@@ -5,7 +5,7 @@
 # commit and base branch let a later scan reuse a PR's path membership while
 # neither has moved.
 query($q: String!, $endCursor: String) {
-  search(query: $q, type: ISSUE, first: 50, after: $endCursor) {
+  search(query: $q, type: ISSUE, first: 100, after: $endCursor) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes {

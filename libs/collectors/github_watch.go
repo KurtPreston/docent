@@ -248,14 +248,18 @@ func (c GitHubCollector) listOpenPRsTouching(ctx context.Context, run ghRun, spe
 func (c GitHubCollector) scanWatchFull(ctx context.Context, run ghRun, job watchScanJob) ([]ghSearchActivityRow, error) {
 	spec := job.spec
 	q := watchSearchQ(spec.args)
-	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
-	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
-	if err != nil {
-		return nil, watchSearchError(q, err)
+
+	// A query that leaves dates and order to docent can be searched in
+	// windows past the result cap; one that sets its own is searched once
+	var scan watchScan
+	var err error
+	if watchCacheable(spec.args) {
+		scan, err = c.searchWatchWindows(ctx, run, spec.args)
+	} else {
+		scan, err = c.searchWatchPages(ctx, run, q)
 	}
-	scan, err := parseWatchSearchPages(out)
 	if err != nil {
-		return nil, fmt.Errorf("parse search %q: %w", q, err)
+		return nil, err
 	}
 
 	name := watchName(spec)
@@ -280,14 +284,85 @@ func (c GitHubCollector) scanWatchFull(ctx context.Context, run ghRun, job watch
 	if job.path != "" {
 		cache := newWatchCache(q, spec.paths)
 		cache.ScannedAt = job.started.UTC()
-		cache.Truncated = scan.matched > scan.returned
-		cache.Covered = !cache.Truncated
 		for i, n := range scan.nodes {
 			cache.PRs[n.URL] = n.cacheEntry(verdicts[i])
 		}
 		run.watch.hold(ctx, run, &watchScanState{job: job, cache: cache})
 	}
 	return rows, nil
+}
+
+// searchWatchPages runs one watch search, reading every page it returns.
+func (c GitHubCollector) searchWatchPages(ctx context.Context, run ghRun, q string) (watchScan, error) {
+	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
+	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
+	if err != nil {
+		return watchScan{}, watchSearchError(q, err)
+	}
+	scan, err := parseWatchSearchPages(out)
+	if err != nil {
+		return watchScan{}, fmt.Errorf("parse search %q: %w", q, err)
+	}
+	return scan, nil
+}
+
+// searchWatchWindows lists every open PR a watch query matches, past GitHub
+// search's 1000-result cap. It searches newest created first, and each time
+// the cap cuts a search short, searches again from the oldest creation time
+// it reached. PRs come back most recently updated first, as a single search
+// sorted that way would list them.
+func (c GitHubCollector) searchWatchWindows(ctx context.Context, run ghRun, args []string) (watchScan, error) {
+	var all watchScan
+	seen := map[string]bool{}
+	var upper time.Time
+	for {
+		// Search the next window, newest created first
+		q := "is:pr is:open " + strings.Join(args, " ")
+		if !upper.IsZero() {
+			q += " created:<=" + upper.UTC().Format(time.RFC3339)
+		}
+		q += " sort:created-desc"
+		w, err := c.searchWatchPages(ctx, run, q)
+		if err != nil {
+			return watchScan{}, err
+		}
+
+		// Keep the PRs no earlier window returned, noting how far back it reached
+		var last time.Time
+		added := 0
+		for _, n := range w.nodes {
+			last = parseGitHubTime(n.CreatedAt)
+			if !seen[n.URL] {
+				seen[n.URL] = true
+				all.nodes = append(all.nodes, n)
+				added++
+			}
+		}
+		if w.returned >= w.matched {
+			break
+		}
+		if added == 0 || last.IsZero() {
+			return watchScan{}, fmt.Errorf("search %q stopped at the result cap without reaching older PRs", q)
+		}
+
+		// Resume at the oldest creation time reached, stepping past a second
+		// the window didn't get beyond
+		if last.Equal(upper) {
+			last = last.Add(-time.Second)
+		}
+		upper = last
+	}
+
+	// Order as an updated-desc search would, settling ties by URL
+	sort.SliceStable(all.nodes, func(i, j int) bool {
+		ti, tj := parseGitHubTime(all.nodes[i].UpdatedAt), parseGitHubTime(all.nodes[j].UpdatedAt)
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return all.nodes[i].URL < all.nodes[j].URL
+	})
+	all.matched, all.returned = len(all.nodes), len(all.nodes)
+	return all, nil
 }
 
 // watchName names a watch query the way the config does, falling back to its

@@ -19,8 +19,7 @@ import (
 //   - The reconciliation slice walks the query's PRs by creation date, a few
 //     pages per run, resuming where the last run stopped. It finds what the
 //     update search can't: PRs that left the query without anything updating
-//     them (a deleted repository, lost access) and, after a truncated full
-//     scan, PRs beyond GitHub's 1000-result cap. Every matching PR is checked
+//     them (a deleted repository, lost access). Every matching PR is checked
 //     once per lap.
 //
 // A PR known only from the cache still gets its detail looked up like any
@@ -140,11 +139,6 @@ func (c GitHubCollector) scanWatchIncremental(ctx context.Context, run ghRun, jo
 	// Drop what the slice showed is gone, and move it along
 	if sliceErr == nil {
 		cache.reconcile(slice, seen)
-	}
-	if cache.Truncated && !cache.Covered {
-		run.gaps.add(fmt.Sprintf("watch %q scan truncated", name), fmt.Sprintf(
-			"search %q matches more open PRs than GitHub search returns at once; the ones it left out are still being checked against the watched paths, a few pages per run",
-			watchSearchQ(spec.args)), "warning")
 	}
 
 	// Hold the cache until detail lookups settle the PRs no search returned
@@ -285,7 +279,7 @@ func (c *watchCache) refresh(fresh []watchSearchNode, paths []string, listFiles 
 
 // reconcile evicts cached PRs created within the slice's span that no search
 // returned this run, since they no longer match the query, then moves the
-// cursor on. Completing a lap means every matching PR has been seen.
+// cursor on, starting a new lap at the newest once it reaches the oldest.
 func (c *watchCache) reconcile(s watchSlice, seen map[string]bool) {
 	for url, e := range c.PRs {
 		created := parseGitHubTime(e.Row.CreatedAt)
@@ -300,7 +294,7 @@ func (c *watchCache) reconcile(s watchSlice, seen map[string]bool) {
 
 	// Resume below the slice; step past a second the slice didn't get beyond
 	if s.reachedEnd {
-		c.Cursor, c.Covered = "", true
+		c.Cursor = ""
 		return
 	}
 	next := s.last

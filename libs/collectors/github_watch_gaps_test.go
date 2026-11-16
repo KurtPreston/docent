@@ -40,14 +40,16 @@ func collectorErrors(items []StatusItem) []StatusItem {
 	return out
 }
 
-// TestWatchScanReportsTruncation checks that a watch search GitHub cut short
-// at its result cap still returns the PRs it found, plus a warning saying how
-// many went unchecked.
+// TestWatchScanReportsTruncation checks that a watch query that sets its own
+// sort, and so can't be searched in windows past GitHub's result cap, still
+// returns the PRs it found, plus a warning saying how many went unchecked.
 func TestWatchScanReportsTruncation(t *testing.T) {
 	watched := fixturePR{Number: 7, Author: "teammate", Paths: []string{"services/api/main.go"}}
 	gapFakeGH(t, withIssueCount(watchPageJSON(t, watched), 1200))
 
-	items, err := GitHubCollector{Clock: time.Now}.CollectState(context.Background(), watchDirective(), stateOpts())
+	d := watchDirective()
+	d.PRQueries[0].Qualifiers += " sort:created-asc"
+	items, err := GitHubCollector{Clock: time.Now}.CollectState(context.Background(), d, stateOpts())
 	if err != nil {
 		t.Fatalf("CollectState: %v", err)
 	}

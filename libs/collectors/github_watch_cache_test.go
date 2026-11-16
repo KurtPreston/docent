@@ -14,7 +14,6 @@ func TestWatchCacheRoundTrip(t *testing.T) {
 	c := newWatchCache("is:pr is:open repo:my-org/my-repo", []string{"services/api"})
 	c.ScannedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	c.Cursor = "2025-12-01T00:00:00Z"
-	c.Truncated = true
 	c.PRs["u"] = watchCacheEntry{
 		Row:        ghSearchActivityRow{URL: "u", Title: "t", UpdatedAt: "2026-01-02T00:00:00Z"},
 		HeadRefOid: "abc", BaseRefName: "main", Touches: true,
@@ -91,7 +90,7 @@ func TestCollectStateSavesWatchScan(t *testing.T) {
 	elsewhere := fixturePR{Number: 2, Author: "teammate", Paths: []string{"docs/readme.md"}}
 	large := fixturePR{Number: 3, Author: "teammate", Paths: []string{"docs/a.md"}, TotalFiles: 400}
 	gh := newFakeGH(t)
-	gh.on(ghRule{Pattern: "is:pr is:open repo:my-org/my-repo", Out: withIssueCount(watchPageJSON(t, small, elsewhere, large), 1500)})
+	gh.on(ghRule{Pattern: "is:pr is:open repo:my-org/my-repo", Out: watchPageJSON(t, small, elsewhere, large)})
 	gh.on(ghRule{Pattern: "pulls/3/files", Exit: 1})
 	gh.on(ghRule{Pattern: "--state", Out: "[]"})
 	gh.on(ghRule{Pattern: "--review-requested my-user", Out: "[]"})
@@ -116,7 +115,7 @@ func TestCollectStateSavesWatchScan(t *testing.T) {
 	if err != nil || c == nil {
 		t.Fatalf("load cache: %v, %v", c, err)
 	}
-	if !c.ScannedAt.Equal(scannedAt) || !c.Truncated || c.Covered {
+	if !c.ScannedAt.Equal(scannedAt) {
 		t.Fatalf("scan metadata: %+v", c)
 	}
 	want := map[string]watchCacheEntry{

@@ -360,12 +360,16 @@ that ask `my-org/api-owners` for review.
   first 100 files. A larger PR with no match there has its full file list
   fetched. Keep the qualifiers narrow — at least a `repo:` — since every
   open PR they match is paged through. GitHub search stops at 1000 results,
-  so the search asks for the most recently updated PRs first (unless the
-  qualifiers set their own `sort:`), and anything past the cap is the
-  stalest. A scan that leaves PRs unchecked says so with a
+  so when a search is cut short the scan searches again, newest created
+  first, starting from the oldest creation time it reached, until it has
+  every match. Queries that set their own `sort:`, `updated:`, or `created:`
+  can't be searched this way: they ask for the most recently updated PRs
+  first (unless they set their own `sort:`), and anything past the cap is
+  left unchecked. A scan that leaves PRs unchecked says so with a
   `collector_error` row alongside the PRs it did find: a `warning` when
-  search matched more PRs than it returned, giving both counts, and an
-  `error` naming each larger PR whose full file list couldn't be fetched.
+  such a query matched more PRs than search returned, giving both counts,
+  and an `error` naming each larger PR whose full file list couldn't be
+  fetched.
   Those PRs are left out rather than guessed at. Each row's title is stable
   for its query, so a rule on `collector_error` fires when the gap first
   appears, not on every poll. In a busy repository the first scan can take
@@ -379,8 +383,7 @@ that ask `my-org/api-owners` for review.
   reuse verdicts whose head and base are unchanged. A failed or undecided file
   lookup is retried rather than cached. Each collect also re-checks a slice of
   older PRs, newest first, to drop ones that left the query without an update;
-  a full lap ends when the slice reaches the oldest match, which also clears
-  the truncation warning once every match has been checked. A slice that
+  a full lap ends when the slice reaches the oldest match. A slice that
   fails adds a `watch "…" reconciliation failed` warning. The cache is
   replaced by a full scan when it is more than 24 hours old, unreadable, or
   when the update search itself is truncated. Queries that set their own
