@@ -238,43 +238,30 @@ func TestWatchCacheReportsFailedSliceAndKeepsCursor(t *testing.T) {
 	if !reflect.DeepEqual(withoutErrors(warm), withoutErrors(cold)) {
 		t.Fatalf("watched rows differ:\ncached %s\n  full %s", describe(warm), describe(cold))
 	}
-	if after := readOnlyCache(t, cache); after.Cursor != before.Cursor || after.Covered != before.Covered {
+	if after := readOnlyCache(t, cache); after.Cursor != before.Cursor {
 		t.Fatalf("failed slice moved the cursor from %q to %q", before.Cursor, after.Cursor)
 	}
 }
 
-func TestWatchCacheCoversTruncatedScan(t *testing.T) {
+func TestWatchScanPagesPastSearchCap(t *testing.T) {
 	hub := newFakeHub(t, hubState{PRs: hubPRs(10, nil), Cap: 4, PageSize: 2, Shown: 2})
 	cache := t.TempDir()
 	at := func(m int) time.Time { return hubT0.Add(time.Duration(m) * time.Minute) }
 
-	// The cold scan sees only the cap, and stays quiet since it will catch up
-	warm, _ := pollHub(t, hub, at(0), cache)
-	if got := watchedNumbers(warm); len(got) != 4 {
-		t.Fatalf("cold scan watched %v, want the 4 under the cap", got)
+	// The first scan searches window after window until it has every PR
+	warm, calls := pollHub(t, hub, at(0), cache)
+	if got, want := watchedNumbers(warm), hubTruth(hub); !reflect.DeepEqual(got, want) {
+		t.Fatalf("first scan watched %v, want %v", got, want)
 	}
 	if errs := collectorErrors(warm); len(errs) != 0 {
-		t.Fatalf("cold scan: want no warning while catching up, got %+v", errs)
+		t.Fatalf("want no warning, got %+v", errs)
+	}
+	if n := countMatching(calls, "created:<="); n < 2 {
+		t.Fatalf("want the scan to resume past the cap, got %d resumed searches in %v", n, calls)
 	}
 
-	// Each poll's slice finds more, which the cap also limits, without a
-	// warning, until a lap completes
-	polls := 0
-	for !readOnlyCache(t, cache).Covered {
-		if polls++; polls > 10 {
-			t.Fatalf("no full lap after %d polls: %v", polls-1, watchedNumbers(warm))
-		}
-		warm, _ = pollHub(t, hub, at(15*polls), cache)
-		if errs := collectorErrors(warm); len(errs) != 0 {
-			t.Fatalf("poll %d: want no warning while catching up, got %+v", polls, errs)
-		}
-	}
-	if polls < 2 {
-		t.Fatalf("coverage claimed after %d poll(s), before a slice could reach every PR", polls)
-	}
-	if got, want := watchedNumbers(warm), hubTruth(hub); !reflect.DeepEqual(got, want) {
-		t.Fatalf("after a full lap: watched %v, want %v", got, want)
-	}
+	// Later polls keep matching a full scan
+	checkPoll(t, hub, at(15), cache)
 }
 
 func TestWatchCacheSettlesRecentUpdatesNextPoll(t *testing.T) {

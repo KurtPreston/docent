@@ -39,11 +39,6 @@ type watchCache struct {
 	// Cursor is the creation time the next reconciliation slice starts at,
 	// working back from the newest PRs. Empty starts again at the newest.
 	Cursor string `json:"cursor,omitempty"`
-	// Truncated is set when the scan that seeded the cache hit GitHub's
-	// 1000-result cap; Covered once reconciliation has since reached the
-	// oldest matching PR, so every PR has been checked at least once.
-	Truncated bool `json:"truncated,omitempty"`
-	Covered   bool `json:"covered,omitempty"`
 	// PRs holds every open PR the query matched, keyed by URL.
 	PRs map[string]watchCacheEntry `json:"prs"`
 }

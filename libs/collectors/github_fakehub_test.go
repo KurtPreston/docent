@@ -35,7 +35,8 @@ type hubState struct {
 	PageSize int
 	// Shown is how many changed paths a search node includes.
 	Shown int
-	// FailSlices fails every search sorted by creation date.
+	// FailSlices fails every reconciliation slice: a search sorted by
+	// creation date and paged by hand rather than with --paginate.
 	FailSlices bool
 }
 
@@ -186,7 +187,7 @@ func (st hubState) search(args []string) int {
 			order = "created"
 		}
 	}
-	if order == "created" && st.FailSlices {
+	if order == "created" && st.FailSlices && !contains(args, "--paginate") {
 		fmt.Fprintln(os.Stderr, "fakehub: slice search failed")
 		return 1
 	}
