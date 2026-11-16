@@ -248,32 +248,59 @@ func TestWatchCacheCoversTruncatedScan(t *testing.T) {
 	cache := t.TempDir()
 	at := func(m int) time.Time { return hubT0.Add(time.Duration(m) * time.Minute) }
 
-	// The cold scan sees only the cap, and says so
+	// The cold scan sees only the cap, and stays quiet since it will catch up
 	warm, _ := pollHub(t, hub, at(0), cache)
 	if got := watchedNumbers(warm); len(got) != 4 {
 		t.Fatalf("cold scan watched %v, want the 4 under the cap", got)
 	}
-	if errs := collectorErrors(warm); len(errs) != 1 || !strings.Contains(errs[0].Title, "scan truncated") {
-		t.Fatalf("want the truncation reported, got %+v", errs)
+	if errs := collectorErrors(warm); len(errs) != 0 {
+		t.Fatalf("cold scan: want no warning while catching up, got %+v", errs)
 	}
 
-	// Each poll's slice finds more, which the cap also limits, and the
-	// warning stays until a lap completes
+	// Each poll's slice finds more, which the cap also limits, without a
+	// warning, until a lap completes
 	polls := 0
-	for len(collectorErrors(warm)) > 0 {
+	for !readOnlyCache(t, cache).Covered {
 		if polls++; polls > 10 {
 			t.Fatalf("no full lap after %d polls: %v", polls-1, watchedNumbers(warm))
 		}
 		warm, _ = pollHub(t, hub, at(15*polls), cache)
+		if errs := collectorErrors(warm); len(errs) != 0 {
+			t.Fatalf("poll %d: want no warning while catching up, got %+v", polls, errs)
+		}
 	}
 	if polls < 2 {
 		t.Fatalf("coverage claimed after %d poll(s), before a slice could reach every PR", polls)
 	}
-	if errs := collectorErrors(warm); len(errs) != 0 {
-		t.Fatalf("after a full lap: want no warning, got %+v", errs)
-	}
 	if got, want := watchedNumbers(warm), hubTruth(hub); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a full lap: watched %v, want %v", got, want)
+	}
+}
+
+func TestWatchCacheReportsStalledCatchUp(t *testing.T) {
+	hub := newFakeHub(t, hubState{PRs: hubPRs(10, nil), Cap: 4, PageSize: 2, Shown: 2})
+	cache := t.TempDir()
+	at := func(m int) time.Time { return hubT0.Add(time.Duration(m) * time.Minute) }
+	pollHub(t, hub, at(0), cache)
+
+	// Slices that keep failing stop the lap; within the grace only the
+	// reconciliation failure is reported
+	hub.State.FailSlices = true
+	warm, _ := pollHub(t, hub, at(15), cache)
+	if errs := collectorErrors(warm); len(errs) != 1 || !strings.Contains(errs[0].Title, "reconciliation failed") {
+		t.Fatalf("within the grace: want only the reconciliation warning, got %+v", errs)
+	}
+
+	// Past the grace the unchecked PRs are reported too
+	warm, _ = pollHub(t, hub, at(15).Add(watchCatchUpGrace), cache)
+	var truncated []StatusItem
+	for _, e := range collectorErrors(warm) {
+		if strings.Contains(e.Title, `watch "api" scan truncated`) {
+			truncated = append(truncated, e)
+		}
+	}
+	if len(truncated) != 1 || truncated[0].Severity != "warning" {
+		t.Fatalf("past the grace: want the truncation reported, got %+v", collectorErrors(warm))
 	}
 }
 

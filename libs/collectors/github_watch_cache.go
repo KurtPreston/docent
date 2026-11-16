@@ -44,6 +44,10 @@ type watchCache struct {
 	// oldest matching PR, so every PR has been checked at least once.
 	Truncated bool `json:"truncated,omitempty"`
 	Covered   bool `json:"covered,omitempty"`
+	// TruncatedAt is when the truncated scan that seeded the cache started,
+	// so reconciliation that is still catching up can be told from one that
+	// has stalled.
+	TruncatedAt time.Time `json:"truncated_at,omitempty"`
 	// PRs holds every open PR the query matched, keyed by URL.
 	PRs map[string]watchCacheEntry `json:"prs"`
 }

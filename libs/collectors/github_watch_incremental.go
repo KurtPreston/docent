@@ -41,6 +41,9 @@ const (
 	watchIndexGrace = 5 * time.Minute
 	// watchSlicePages bounds each run's reconciliation slice, in search pages.
 	watchSlicePages = 3
+	// watchCatchUpGrace is how long reconciliation may take to check every PR
+	// a truncated scan left out before the gap is reported.
+	watchCatchUpGrace = 6 * time.Hour
 )
 
 // watchScanJob is one watch query being scanned.
@@ -141,10 +144,17 @@ func (c GitHubCollector) scanWatchIncremental(ctx context.Context, run ghRun, jo
 	if sliceErr == nil {
 		cache.reconcile(slice, seen)
 	}
+	// Catching up is expected after a truncated scan; report it only once it
+	// has run long enough to look stalled
 	if cache.Truncated && !cache.Covered {
-		run.gaps.add(fmt.Sprintf("watch %q scan truncated", name), fmt.Sprintf(
-			"search %q matches more open PRs than GitHub search returns at once; the ones it left out are still being checked against the watched paths, a few pages per run",
-			watchSearchQ(spec.args)), "warning")
+		if cache.TruncatedAt.IsZero() {
+			cache.TruncatedAt = job.started.UTC()
+		}
+		if job.started.Sub(cache.TruncatedAt) > watchCatchUpGrace {
+			run.gaps.add(fmt.Sprintf("watch %q scan truncated", name), fmt.Sprintf(
+				"search %q matches more open PRs than GitHub search returns at once, and checking the rest against the watched paths has taken more than %s; the oldest may still be unchecked",
+				watchSearchQ(spec.args), watchCatchUpGrace), "warning")
+		}
 	}
 
 	// Hold the cache until detail lookups settle the PRs no search returned

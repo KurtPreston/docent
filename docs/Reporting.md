@@ -364,8 +364,11 @@ that ask `my-org/api-owners` for review.
   qualifiers set their own `sort:`), and anything past the cap is the
   stalest. A scan that leaves PRs unchecked says so with a
   `collector_error` row alongside the PRs it did find: a `warning` when
-  search matched more PRs than it returned, giving both counts, and an
-  `error` naming each larger PR whose full file list couldn't be fetched.
+  search matched more PRs than it returned, and an `error` naming each
+  larger PR whose full file list couldn't be fetched. A cached query
+  (below) catches up on PRs past the cap by itself, so its warning waits
+  until that has taken more than 6 hours; an uncached one warns at once,
+  giving both counts.
   Those PRs are left out rather than guessed at. Each row's title is stable
   for its query, so a rule on `collector_error` fires when the gap first
   appears, not on every poll. In a busy repository the first scan can take
@@ -380,7 +383,7 @@ that ask `my-org/api-owners` for review.
   lookup is retried rather than cached. Each collect also re-checks a slice of
   older PRs, newest first, to drop ones that left the query without an update;
   a full lap ends when the slice reaches the oldest match, which also clears
-  the truncation warning once every match has been checked. A slice that
+  any truncation warning once every match has been checked. A slice that
   fails adds a `watch "…" reconciliation failed` warning. The cache is
   replaced by a full scan when it is more than 24 hours old, unreadable, or
   when the update search itself is truncated. Queries that set their own
