@@ -1,6 +1,6 @@
 # Lists open PRs matching a watch query's qualifiers, with the paths each one
 # changes, so the collector can filter by path without a call per PR. The
-# caller prepends "is:pr is:open" to $q and pages with --paginate. issueCount
+# caller prepends "is:pr is:open" to $q and pages by hand with $endCursor. issueCount
 # tells the caller when GitHub's 1000-result cap cut the scan short. The head
 # commit and base branch let a later scan reuse a PR's path membership while
 # neither has moved.

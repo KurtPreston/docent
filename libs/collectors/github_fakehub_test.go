@@ -35,9 +35,11 @@ type hubState struct {
 	PageSize int
 	// Shown is how many changed paths a search node includes.
 	Shown int
-	// FailSlices fails every reconciliation slice: a search sorted by
-	// creation date and paged by hand rather than with --paginate.
+	// FailSlices fails every search sorted by creation date, as the
+	// reconciliation slices and a full scan's windows are.
 	FailSlices bool
+	// Flaky, when set, answers every Flaky-th search call with an HTTP 502.
+	Flaky int
 }
 
 // hubPR is one PR. Unmatched means it no longer matches the watch query's
@@ -59,6 +61,8 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv("FAKEHUB_DIR"); dir != "" {
 		os.Exit(serveFakeHub(dir, os.Args[1:]))
 	}
+	// Retry transient gh failures at once rather than after real delays
+	ghRetryBackoff = []time.Duration{0, 0}
 	os.Exit(testenv.Run(m))
 }
 
@@ -140,7 +144,7 @@ func serveFakeHub(dir string, args []string) int {
 	case strings.Contains(joined, "-F k0="):
 		return st.detailBatch(args)
 	case strings.Contains(joined, "q=is:pr is:open"):
-		return st.search(args)
+		return st.search(dir, args)
 	}
 	fmt.Fprintln(os.Stderr, "fakehub: no route for:", joined)
 	return 97
@@ -174,7 +178,7 @@ func flagValue(args []string, name string) string {
 
 // search evaluates a watch search: open, still matching, within any date
 // range, in the requested order, capped and paged.
-func (st hubState) search(args []string) int {
+func (st hubState) search(dir string, args []string) int {
 	var updatedFrom, createdTo time.Time
 	order := "updated"
 	for _, tok := range strings.Fields(flagValue(args, "q")) {
@@ -187,8 +191,12 @@ func (st hubState) search(args []string) int {
 			order = "created"
 		}
 	}
-	if order == "created" && st.FailSlices && !contains(args, "--paginate") {
+	if order == "created" && st.FailSlices {
 		fmt.Fprintln(os.Stderr, "fakehub: slice search failed")
+		return 1
+	}
+	if st.Flaky > 0 && searchCalls(dir)%st.Flaky == 0 {
+		fmt.Fprintln(os.Stderr, "gh: HTTP 502")
 		return 1
 	}
 
@@ -215,16 +223,17 @@ func (st hubState) search(args []string) int {
 		hits = hits[:st.Cap]
 	}
 
-	// Write one page, or every page when paginating
+	// Write the page after the cursor
 	start, _ := strconv.Atoi(flagValue(args, "endCursor"))
-	for {
-		end := min(start+st.PageSize, len(hits))
-		fmt.Print(st.page(hits[start:end], matched, end < len(hits), end))
-		if end >= len(hits) || !contains(args, "--paginate") {
-			return 0
-		}
-		start = end
-	}
+	end := min(start+st.PageSize, len(hits))
+	fmt.Print(st.page(hits[start:end], matched, end < len(hits), end))
+	return 0
+}
+
+// searchCalls counts the search calls logged so far, this one included.
+func searchCalls(dir string) int {
+	b, _ := os.ReadFile(filepath.Join(dir, "calls.log"))
+	return strings.Count(string(b), "q=is:pr is:open")
 }
 
 // page renders one search page.

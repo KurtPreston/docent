@@ -40,6 +40,10 @@ const (
 	watchIndexGrace = 5 * time.Minute
 	// watchSlicePages bounds each run's reconciliation slice, in search pages.
 	watchSlicePages = 3
+	// watchSliceFailuresToReport is how many polls in a row a reconciliation
+	// slice must fail before it's reported. A single failure costs nothing,
+	// since the next poll retries the same slice.
+	watchSliceFailuresToReport = 2
 )
 
 // watchScanJob is one watch query being scanned.
@@ -120,10 +124,16 @@ func (c GitHubCollector) scanWatchIncremental(ctx context.Context, run ghRun, jo
 				fresh = append(fresh, n)
 			}
 		}
+		cache.SliceFailures = 0
 	} else {
-		run.gaps.add(fmt.Sprintf("watch %q reconciliation failed", name), fmt.Sprintf(
-			"could not check part of %q against the cached watched set, so PRs that left it without an update may still be listed: %v",
-			watchSearchQ(spec.args), sliceErr), "warning")
+		// The next poll retries the same slice, so report only a failure
+		// that outlasts it
+		cache.SliceFailures++
+		if cache.SliceFailures >= watchSliceFailuresToReport {
+			run.gaps.add(fmt.Sprintf("watch %q reconciliation failed", name), fmt.Sprintf(
+				"could not check part of %q against the cached watched set on %d polls in a row, so PRs that left it without an update may still be listed: %v",
+				watchSearchQ(spec.args), cache.SliceFailures, sliceErr), "warning")
+		}
 	}
 
 	// Recompute membership where the head or base moved, or was never known
@@ -157,16 +167,7 @@ func (c GitHubCollector) scanWatchIncremental(ctx context.Context, run ghRun, jo
 // updated at or after since.
 func (c GitHubCollector) searchWatchUpdates(ctx context.Context, run ghRun, args []string, since time.Time) (watchScan, error) {
 	q := fmt.Sprintf("is:pr is:open %s updated:>=%s sort:updated-desc", strings.Join(args, " "), since.UTC().Format(time.RFC3339))
-	cmd := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
-	out, err := runAndLogExecContext(ctx, "gh", cmd, "", run.env, run.opts, run.directive.ID)
-	if err != nil {
-		return watchScan{}, watchSearchError(q, err)
-	}
-	scan, err := parseWatchSearchPages(out)
-	if err != nil {
-		return watchScan{}, fmt.Errorf("parse search %q: %w", q, err)
-	}
-	return scan, nil
+	return c.searchWatchPages(ctx, run, q)
 }
 
 // watchSlice is one run's stretch of the reconciliation walk.
@@ -194,17 +195,9 @@ func (c GitHubCollector) fetchWatchSlice(ctx context.Context, run ghRun, args []
 	after := ""
 	returned := 0
 	for page := 0; page < watchSlicePages; page++ {
-		cmd := []string{"api", "graphql", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
-		if after != "" {
-			cmd = append(cmd, "-f", "endCursor="+after)
-		}
-		out, err := runAndLogExecContext(ctx, "gh", cmd, "", run.env, run.opts, run.directive.ID)
+		p, err := c.fetchWatchPage(ctx, run, q, after)
 		if err != nil {
-			return watchSlice{}, watchSearchError(q, err)
-		}
-		p, err := parseWatchSearchPage(out)
-		if err != nil {
-			return watchSlice{}, fmt.Errorf("parse search %q: %w", q, err)
+			return watchSlice{}, err
 		}
 
 		// Keep the PRs, noting how far back they reach

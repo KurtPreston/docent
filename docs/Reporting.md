@@ -358,7 +358,9 @@ that ask `my-org/api-owners` for review.
   `services/api-gateway/`). GitHub search cannot filter by path, so these
   queries run as one paginated GraphQL search that also returns each PR's
   first 100 files. A larger PR with no match there has its full file list
-  fetched. Keep the qualifiers narrow — at least a `repo:` — since every
+  fetched. Each search page and file listing that fails the way an
+  overloaded GitHub does, with a 5xx status or a reply cut off mid-body, is
+  retried twice after a short pause before the collect gives up. Keep the qualifiers narrow — at least a `repo:` — since every
   open PR they match is paged through. GitHub search stops at 1000 results,
   so when a search is cut short the scan searches again, newest created
   first, starting from the oldest creation time it reached, until it has
@@ -384,7 +386,10 @@ that ask `my-org/api-owners` for review.
   lookup is retried rather than cached. Each collect also re-checks a slice of
   older PRs, newest first, to drop ones that left the query without an update;
   a full lap ends when the slice reaches the oldest match. A slice that
-  fails adds a `watch "…" reconciliation failed` warning. The cache is
+  fails is retried on the next collect without moving the lap forward; only
+  when it fails on two collects in a row does it add a `watch "…"
+  reconciliation failed` warning, and a slice that succeeds starts the count
+  again. The cache is
   replaced by a full scan when it is more than 24 hours old, unreadable, or
   when the update search itself is truncated. Queries that set their own
   `sort:`, `updated:`, or `created:` always scan in full. Deleting the
