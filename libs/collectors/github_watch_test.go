@@ -132,22 +132,25 @@ func TestTouchesWatchPaths(t *testing.T) {
 	}
 }
 
-func TestParseWatchSearchPages(t *testing.T) {
-	// --paginate writes one JSON document per page back to back.
-	out := []byte(`{"data":{"search":{"issueCount":5,"pageInfo":{"hasNextPage":true},"nodes":[
+func TestWatchScanAddsPages(t *testing.T) {
+	pages := []string{`{"data":{"search":{"issueCount":5,"pageInfo":{"hasNextPage":true},"nodes":[
 	  {"title":"Add endpoint","url":"https://github.com/o/r/pull/1","isDraft":false,
 	   "createdAt":"2026-05-01T00:00:00Z","updatedAt":"2026-05-02T00:00:00Z",
 	   "author":{"login":"renovate","__typename":"Bot"},
 	   "assignees":{"nodes":[{"login":"bob"}]},
 	   "repository":{"nameWithOwner":"o/r"},
 	   "files":{"totalCount":2,"nodes":[{"path":"services/api/a.go"},{"path":"go.mod"}]}},
-	  {}]}}}
-	{"data":{"search":{"issueCount":4,"pageInfo":{"hasNextPage":false},"nodes":[
+	  {}]}}}`,
+		`{"data":{"search":{"issueCount":4,"pageInfo":{"hasNextPage":false},"nodes":[
 	  {"title":"Docs","url":"https://github.com/o/r/pull/2","author":{"login":"carol","__typename":"User"},
-	   "repository":{"nameWithOwner":"o/r"},"files":{"totalCount":1,"nodes":[{"path":"docs/x.md"}]}}]}}}`)
-	scan, err := parseWatchSearchPages(out)
-	if err != nil {
-		t.Fatal(err)
+	   "repository":{"nameWithOwner":"o/r"},"files":{"totalCount":1,"nodes":[{"path":"docs/x.md"}]}}]}}}`}
+	var scan watchScan
+	for _, out := range pages {
+		p, err := parseWatchSearchPage([]byte(out))
+		if err != nil {
+			t.Fatal(err)
+		}
+		scan.addPage(p)
 	}
 	nodes := scan.nodes
 	if scan.matched != 5 || scan.returned != 3 {
@@ -169,7 +172,7 @@ func TestParseWatchSearchPages(t *testing.T) {
 	if fmt.Sprint(nodes[0].filePaths()) != "[services/api/a.go go.mod]" {
 		t.Errorf("paths = %v", nodes[0].filePaths())
 	}
-	if _, err := parseWatchSearchPages([]byte(`{"data":`)); err == nil {
+	if _, err := parseWatchSearchPage([]byte(`{"data":`)); err == nil {
 		t.Error("expected truncated output to fail")
 	}
 }
@@ -235,5 +238,21 @@ func TestFilterTouchingListsOnlyLargeMisses(t *testing.T) {
 	}
 	if strings.Join(failed, ",") != "u/6: HTTP 502" {
 		t.Fatalf("failed = %v", failed)
+	}
+}
+
+func TestIsTransient(t *testing.T) {
+	// Server failures and cut-off replies pass; client errors and others don't
+	for msg, want := range map[string]bool{
+		"gh: HTTP 502":                  true,
+		"HTTP 503: Service Unavailable": true,
+		"unexpected end of JSON input":  true,
+		"gh: HTTP 404":                  false,
+		"HTTP 422: Validation Failed":   false,
+		"fakehub: slice search failed":  false,
+	} {
+		if got := IsTransient(errors.New(msg)); got != want {
+			t.Errorf("IsTransient(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }

@@ -39,6 +39,9 @@ type watchCache struct {
 	// Cursor is the creation time the next reconciliation slice starts at,
 	// working back from the newest PRs. Empty starts again at the newest.
 	Cursor string `json:"cursor,omitempty"`
+	// SliceFailures counts the polls in a row whose reconciliation slice
+	// failed, so a failure is reported only once it persists.
+	SliceFailures int `json:"slice_failures,omitempty"`
 	// PRs holds every open PR the query matched, keyed by URL.
 	PRs map[string]watchCacheEntry `json:"prs"`
 }

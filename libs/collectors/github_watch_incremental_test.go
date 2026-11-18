@@ -224,22 +224,58 @@ func TestWatchCacheReportsFailedSliceAndKeepsCursor(t *testing.T) {
 	checkPoll(t, hub, at(15), cache)
 	before := readOnlyCache(t, cache)
 
-	// A failed slice is a warning; the rest of the poll still matches
+	// One failed slice isn't reported, since the next poll retries it; the
+	// rest of the poll still matches a full scan
+	cold, _ := pollHub(t, hub, at(30), "")
 	hub.State.FailSlices = true
 	warm, _ := pollHub(t, hub, at(30), cache)
-	cold, _ := pollHub(t, hub, at(30), "")
-	errs := collectorErrors(warm)
-	if len(errs) != 1 || !strings.Contains(errs[0].Title, `watch "api" reconciliation failed`) || errs[0].Severity != "warning" {
-		t.Fatalf("want one reconciliation warning, got %+v", errs)
-	}
-	if !strings.Contains(errs[0].Summary, "fakehub: slice search failed") {
-		t.Fatalf("want GitHub's stderr in the reconciliation warning, got %q", errs[0].Summary)
+	if errs := collectorErrors(warm); len(errs) != 0 {
+		t.Fatalf("want a single failed slice kept quiet, got %+v", errs)
 	}
 	if !reflect.DeepEqual(withoutErrors(warm), withoutErrors(cold)) {
 		t.Fatalf("watched rows differ:\ncached %s\n  full %s", describe(warm), describe(cold))
 	}
 	if after := readOnlyCache(t, cache); after.Cursor != before.Cursor {
 		t.Fatalf("failed slice moved the cursor from %q to %q", before.Cursor, after.Cursor)
+	}
+
+	// A second failure in a row is a warning carrying GitHub's stderr
+	warm, _ = pollHub(t, hub, at(45), cache)
+	errs := collectorErrors(warm)
+	if len(errs) != 1 || !strings.Contains(errs[0].Title, `watch "api" reconciliation failed`) || errs[0].Severity != "warning" {
+		t.Fatalf("want one reconciliation warning, got %+v", errs)
+	}
+	if !strings.Contains(errs[0].Summary, "fakehub: slice search failed") || !strings.Contains(errs[0].Summary, "on 2 polls in a row") {
+		t.Fatalf("want GitHub's stderr and the run of failures in the warning, got %q", errs[0].Summary)
+	}
+
+	// Once a slice succeeds, the next failure starts the count again
+	hub.State.FailSlices = false
+	checkPoll(t, hub, at(60), cache)
+	hub.State.FailSlices = true
+	if warm, _ := pollHub(t, hub, at(75), cache); len(collectorErrors(warm)) != 0 {
+		t.Fatalf("want the count reset after a good slice, got %+v", collectorErrors(warm))
+	}
+}
+
+func TestWatchScanRetriesFlakySearchPages(t *testing.T) {
+	// Every other search call fails with a 502, across windows and pages
+	hub := newFakeHub(t, hubState{PRs: hubPRs(10, nil), Cap: 4, PageSize: 2, Shown: 2, Flaky: 2})
+	cache := t.TempDir()
+	at := func(m int) time.Time { return hubT0.Add(time.Duration(m) * time.Minute) }
+
+	// Both the full scan and a later cached poll retry each failed page
+	for _, m := range []int{0, 15} {
+		warm, calls := pollHub(t, hub, at(m), cache)
+		if got, want := watchedNumbers(warm), hubTruth(hub); !reflect.DeepEqual(got, want) {
+			t.Fatalf("at %d: watched %v, want %v", m, got, want)
+		}
+		if errs := collectorErrors(warm); len(errs) != 0 {
+			t.Fatalf("at %d: want retries to hide the 502s, got %+v", m, errs)
+		}
+		if n := countMatching(calls, "q=is:pr is:open"); n < 4 {
+			t.Fatalf("at %d: want several searches, got %d in %v", m, n, calls)
+		}
 	}
 }
 

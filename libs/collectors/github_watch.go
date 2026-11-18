@@ -322,7 +322,12 @@ func (c GitHubCollector) listPRFiles(ctx context.Context, run ghRun, prURL strin
 	}
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/files", owner, name, strconv.Itoa(number))
 	args := []string{"api", endpoint, "--paginate", "--jq", ".[].filename"}
-	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
+	var out []byte
+	err := retryGH(ctx, run, func() error {
+		var err error
+		out, err = runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
+		return err
+	})
 	if err != nil {
 		loggerFor(run.opts, run.directive.ID).Note("github: could not list files of %s: %v", prURL, err)
 		return nil, err

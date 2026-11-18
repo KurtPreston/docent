@@ -1,14 +1,13 @@
 package collectors
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -78,18 +77,86 @@ type watchSearchNode struct {
 	} `json:"files"`
 }
 
-// searchWatchPages runs one watch search, reading every page it returns.
+// searchWatchPages runs one watch search, reading every page it returns. It
+// pages by hand rather than with `gh --paginate`, so a page GitHub fails to
+// serve is retried on its own instead of restarting the whole search.
 func (c GitHubCollector) searchWatchPages(ctx context.Context, run ghRun, q string) (watchScan, error) {
-	args := []string{"api", "graphql", "--paginate", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
-	out, err := runAndLogExecContext(ctx, "gh", args, "", run.env, run.opts, run.directive.ID)
-	if err != nil {
-		return watchScan{}, watchSearchError(q, err)
+	var scan watchScan
+	after := ""
+	for {
+		p, err := c.fetchWatchPage(ctx, run, q, after)
+		if err != nil {
+			return watchScan{}, err
+		}
+		scan.addPage(p)
+		if !p.Data.Search.PageInfo.HasNextPage {
+			return scan, nil
+		}
+		after = p.Data.Search.PageInfo.EndCursor
 	}
-	scan, err := parseWatchSearchPages(out)
-	if err != nil {
-		return watchScan{}, fmt.Errorf("parse search %q: %w", q, err)
+}
+
+// fetchWatchPage reads one page of a watch search, starting after the cursor
+// after, or at the start when it's empty. A page that fails the way an
+// overloaded GitHub does is tried again before the failure counts.
+func (c GitHubCollector) fetchWatchPage(ctx context.Context, run ghRun, q, after string) (watchSearchPage, error) {
+	cmd := []string{"api", "graphql", "-f", "q=" + q, "-f", "query=" + watchSearchQuery}
+	if after != "" {
+		cmd = append(cmd, "-f", "endCursor="+after)
 	}
-	return scan, nil
+	var page watchSearchPage
+	err := retryGH(ctx, run, func() error {
+		out, err := runAndLogExecContext(ctx, "gh", cmd, "", run.env, run.opts, run.directive.ID)
+		if err != nil {
+			return watchSearchError(q, err)
+		}
+		if page, err = parseWatchSearchPage(out); err != nil {
+			return fmt.Errorf("parse search %q: %w", q, err)
+		}
+		return nil
+	})
+	return page, err
+}
+
+// ghRetryBackoff is how long to wait before each retry of a gh call that hit a
+// passing GitHub failure. GitHub's search API answers a few percent of pages
+// with a 5xx or a reply cut off mid-body, and a long scan reads dozens of
+// pages, so without retries one bad page would fail the whole collection.
+var ghRetryBackoff = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// retryGH runs attempt, retrying it after each backoff while it fails in a way
+// IsTransient recognizes. It returns the last attempt's error.
+func retryGH(ctx context.Context, run ghRun, attempt func() error) error {
+	for i := 0; ; i++ {
+		err := attempt()
+		if err == nil || i >= len(ghRetryBackoff) || !IsTransient(err) || ctx.Err() != nil {
+			return err
+		}
+		loggerFor(run.opts, run.directive.ID).Note("github: retrying after %v", err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(ghRetryBackoff[i]):
+		}
+	}
+}
+
+// transientPattern matches the failures a server or network usually gets past
+// within seconds: a 5xx status, or a reply cut off before its JSON ended.
+var transientPattern = regexp.MustCompile(`(?i)\bHTTP 5\d\d\b|unexpected end of JSON input|unexpected EOF|connection reset by peer|i/o timeout`)
+
+// IsTransient reports whether err looks like a passing server or network
+// failure that retrying, or the next collection, is likely to get past.
+func IsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		msg += " " + string(exit.Stderr)
+	}
+	return transientPattern.MatchString(msg)
 }
 
 // searchWatchWindows lists every open PR a watch query matches, past GitHub
@@ -151,30 +218,16 @@ func (c GitHubCollector) searchWatchWindows(ctx context.Context, run ghRun, args
 	return all, nil
 }
 
-// parseWatchSearchPages decodes `gh api graphql --paginate` output, which is one
-// JSON document per page written back to back.
-func parseWatchSearchPages(out []byte) (watchScan, error) {
-	dec := json.NewDecoder(bytes.NewReader(out))
-	var scan watchScan
-	for {
-		var page watchSearchPage
-		err := dec.Decode(&page)
-		if errors.Is(err, io.EOF) {
-			return scan, nil
-		}
-		if err != nil {
-			return watchScan{}, err
-		}
+// addPage adds one search page to the scan.
+func (s *watchScan) addPage(page watchSearchPage) {
+	// Every page reports the total; keep the largest in case it moved
+	s.matched = max(s.matched, page.Data.Search.IssueCount)
+	s.returned += len(page.Data.Search.Nodes)
 
-		// Every page reports the total; keep the largest in case it moved
-		scan.matched = max(scan.matched, page.Data.Search.IssueCount)
-		scan.returned += len(page.Data.Search.Nodes)
-
-		// Search can return non-PR nodes as empty objects; skip them.
-		for _, n := range page.Data.Search.Nodes {
-			if n.URL != "" {
-				scan.nodes = append(scan.nodes, n)
-			}
+	// Search can return non-PR nodes as empty objects; skip them.
+	for _, n := range page.Data.Search.Nodes {
+		if n.URL != "" {
+			s.nodes = append(s.nodes, n)
 		}
 	}
 }
