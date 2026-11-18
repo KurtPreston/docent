@@ -31,8 +31,9 @@ func (e *Engine) AutomationJobs(limit int) []automation.Job {
 
 // shouldAlertCollectorError decides whether a failed collect starts an outage
 // worth reporting. Most errors alert on the first failure. A rate limit, such
-// as GitHub's secondary limit on bursts of searches, usually clears by the next
-// poll, so it alerts only when the following collect fails too. Either way an
+// as GitHub's secondary limit on bursts of searches, or a passing server
+// failure, such as a 5xx or a reply cut off mid-body, usually clears by the
+// next poll, so it alerts only when the following collect fails too. Either way an
 // outage alerts at most once, until the unit recovers.
 func shouldAlertCollectorError(err error, prevErr string, prevAlerted bool) bool {
 	if prevAlerted {
@@ -41,11 +42,12 @@ func shouldAlertCollectorError(err error, prevErr string, prevAlerted bool) bool
 	return prevErr != "" || !isTransientCollectError(err)
 }
 
-// isTransientCollectError reports whether err is a rate limit that a later
-// poll is likely to get past without anyone stepping in.
+// isTransientCollectError reports whether err is a rate limit or passing
+// server failure that a later poll is likely to get past without anyone
+// stepping in.
 func isTransientCollectError(err error) bool {
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "rate limit")
+	return strings.Contains(msg, "rate limit") || collectors.IsTransient(err)
 }
 
 // alertCollectorError offers automations a collector_error signal when a unit

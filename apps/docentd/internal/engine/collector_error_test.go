@@ -55,10 +55,20 @@ func TestCollectorErrorAlertsOncePerOutage(t *testing.T) {
 	}
 }
 
-// TestCollectorErrorRateLimitAlertsWhenItPersists checks that a rate-limit
-// failure that clears by the next poll stays quiet, while one that persists
-// alerts once.
-func TestCollectorErrorRateLimitAlertsWhenItPersists(t *testing.T) {
+// TestCollectorErrorTransientAlertsWhenItPersists checks that a rate limit or
+// passing GitHub server failure that clears by the next poll stays quiet, while
+// one that persists alerts once.
+func TestCollectorErrorTransientAlertsWhenItPersists(t *testing.T) {
+	for _, msg := range []string{
+		"HTTP 403: You have exceeded a secondary rate limit",
+		"gh api graphql: exit status 1: gh: HTTP 502",
+		"gh api graphql: exit status 1: unexpected end of JSON input",
+	} {
+		t.Run(msg, func(t *testing.T) { checkTransientAlertsWhenItPersists(t, errors.New(msg)) })
+	}
+}
+
+func checkTransientAlertsWhenItPersists(t *testing.T, limited error) {
 	e := newTestEngine(t)
 	f := &fakeCollector{}
 	e.reg.Register("fake", f)
@@ -80,8 +90,7 @@ func TestCollectorErrorRateLimitAlertsWhenItPersists(t *testing.T) {
 		return nil
 	}))
 
-	// A blip that recovers, then a limit that lasts three polls
-	limited := errors.New("HTTP 403: You have exceeded a secondary rate limit")
+	// A blip that recovers, then a failure that lasts three polls
 	for _, err := range []error{limited, nil, limited, limited, limited} {
 		f.eventsErr = err
 		e.collectUnit(context.Background(), u)
@@ -93,7 +102,7 @@ func TestCollectorErrorRateLimitAlertsWhenItPersists(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(got) != 1 || got[0] != limited.Error() {
-		t.Fatalf("alerts = %q, want one rate-limit alert", got)
+		t.Fatalf("alerts = %q, want one alert", got)
 	}
 }
 
